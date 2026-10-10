@@ -21,12 +21,14 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use crate::config::ProviderConfig;
-use crate::provider::{AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent};
+use crate::provider::{
+    AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent,
+};
 
 pub struct Provider {
     cfg: ProviderConfig,

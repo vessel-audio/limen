@@ -16,7 +16,11 @@ mod notify;
 mod provider;
 
 #[derive(Parser)]
-#[command(name = "voice-input", version, about = "Wayland voice input: mic -> ASR -> type into focused window")]
+#[command(
+    name = "voice-input",
+    version,
+    about = "Wayland voice input: mic -> ASR -> type into focused window"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -54,12 +58,12 @@ async fn main() -> anyhow::Result<()> {
             daemon::run(paths, cfg).await
         }
         Command::Toggle => {
-            let reply = ipc::send(&paths, ipc::Request::Toggle).await?;
+            let reply = ipc::send(&paths, "toggle").await?;
             println!("{reply}");
             Ok(())
         }
         Command::Status => {
-            let reply = ipc::send(&paths, ipc::Request::Status).await?;
+            let reply = ipc::send(&paths, "status").await?;
             println!("{reply}");
             Ok(())
         }

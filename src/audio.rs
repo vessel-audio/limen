@@ -22,10 +22,14 @@ impl Capture {
     pub fn start(device: Option<&str>) -> Result<Self> {
         let mut cmd = Command::new("pw-record");
         cmd.args([
-            "--container", "raw",
-            "--format", "s16",
-            "--rate", "16000",
-            "--channels", "1",
+            "--container",
+            "raw",
+            "--format",
+            "s16",
+            "--rate",
+            "16000",
+            "--channels",
+            "1",
         ])
         .arg("-")
         .stdout(Stdio::piped())

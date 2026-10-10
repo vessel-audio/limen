@@ -157,7 +157,9 @@ impl Config {
 
 /// Atomic write: temp file + rename, so a crash never leaves a truncated config.
 fn write_default(path: &Path) -> Result<()> {
-    let dir = path.parent().context("config path has no parent directory")?;
+    let dir = path
+        .parent()
+        .context("config path has no parent directory")?;
     fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, DEFAULT_CONFIG)?;

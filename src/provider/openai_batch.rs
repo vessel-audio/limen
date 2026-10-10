@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::config::ProviderConfig;
-use crate::provider::{AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent};
+use crate::provider::{
+    AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent,
+};
 
 pub struct Provider {
     cfg: ProviderConfig,
@@ -98,7 +100,10 @@ impl AudioSink for Sink {
             req = req.bearer_auth(key);
         }
         let outcome = match req.send().await {
-            Ok(resp) if resp.status().is_success() => match resp.json::<TranscriptionResponse>().await {
+            Ok(resp) if resp.status().is_success() => match resp
+                .json::<TranscriptionResponse>()
+                .await
+            {
                 Ok(body) => TranscriptEvent::Stable(body.text),
                 Err(e) => TranscriptEvent::Failed(anyhow::Error::new(e).context("parse response")),
             },
@@ -107,7 +112,9 @@ impl AudioSink for Sink {
                 resp.status(),
                 resp.text().await.unwrap_or_default()
             )),
-            Err(e) => TranscriptEvent::Failed(anyhow::Error::new(e).context("transcription request")),
+            Err(e) => {
+                TranscriptEvent::Failed(anyhow::Error::new(e).context("transcription request"))
+            }
         };
         // Best-effort delivery; a dead receiver means the caller went away.
         let is_ok = !matches!(outcome, TranscriptEvent::Failed(_));
