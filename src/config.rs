@@ -130,6 +130,10 @@ impl Config {
         if self.provider.url.is_empty() {
             bail!("provider.url must not be empty");
         }
+        // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
+        if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
+            bail!("audio.chunk_ms must be in 1..=1000");
+        }
         match self.provider.kind {
             ProviderKind::OpenaiRealtime if !self.provider.url.starts_with("ws") => {
                 bail!("openai-realtime url must start with ws:// or wss://")

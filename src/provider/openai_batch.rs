@@ -110,7 +110,12 @@ impl AudioSink for Sink {
             Err(e) => TranscriptEvent::Failed(anyhow::Error::new(e).context("transcription request")),
         };
         // Best-effort delivery; a dead receiver means the caller went away.
+        let is_ok = !matches!(outcome, TranscriptEvent::Failed(_));
         let _ = self.events.send(outcome).await;
+        if is_ok {
+            // The trait promises Completed once the stable tail is delivered.
+            let _ = self.events.send(TranscriptEvent::Completed).await;
+        }
         Ok(())
     }
 }

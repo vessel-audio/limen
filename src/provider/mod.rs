@@ -88,7 +88,7 @@ pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
 
     let started = Instant::now();
     let chunk_ms = cfg.audio.chunk_ms;
-    let sender = tokio::spawn(async move {
+    let mut sender = tokio::spawn(async move {
         let chunk = (16_000 * chunk_ms / 1000) as usize;
         for frame in pcm.chunks(chunk) {
             sink.send_audio(frame).await?;
@@ -97,20 +97,37 @@ pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
         sink.finalize().await
     });
 
-    while let Some(ev) = events.next_event().await {
-        let at = started.elapsed();
-        match &ev {
-            TranscriptEvent::Provisional(t) => println!("[{at:>7.1?}] provisional: {t}"),
-            TranscriptEvent::Stable(t) => println!("[{at:>7.1?}] STABLE: {t}"),
-            TranscriptEvent::Completed => println!("[{at:>7.1?}] completed"),
-            TranscriptEvent::Failed(e) => println!("[{at:>7.1?}] FAILED: {e:#}"),
+    let result = loop {
+        match events.next_event().await {
+            Some(ev) => {
+                let at = started.elapsed();
+                match &ev {
+                    TranscriptEvent::Provisional(t) => println!("[{at:>7.1?}] provisional: {t}"),
+                    TranscriptEvent::Stable(t) => println!("[{at:>7.1?}] STABLE: {t}"),
+                    TranscriptEvent::Completed => println!("[{at:>7.1?}] completed"),
+                    TranscriptEvent::Failed(e) => println!("[{at:>7.1?}] FAILED: {e:#}"),
+                }
+                match ev {
+                    // A failure is terminal: stop feeding audio and report it
+                    // instead of letting the sender sleep through the rest of
+                    // the wav and exiting Ok.
+                    TranscriptEvent::Failed(e) => {
+                        sender.abort();
+                        break Err(e.context("provider reported failure"));
+                    }
+                    TranscriptEvent::Completed => break Ok(()),
+                    _ => {}
+                }
+            }
+            // The provider ended the session on its own.
+            None => break Ok(()),
         }
-        if matches!(ev, TranscriptEvent::Completed | TranscriptEvent::Failed(_)) {
-            break;
-        }
+    };
+    match sender.await {
+        Ok(send_result) => send_result.and(result),
+        Err(join_err) if join_err.is_cancelled() => result,
+        Err(join_err) => Err(join_err.into()),
     }
-    sender.await??;
-    Ok(())
 }
 
 /// Read a wav as 16kHz mono s16le. Resampling belongs to the daemon's audio
