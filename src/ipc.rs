@@ -68,7 +68,10 @@ async fn handle_conn_inner(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) ->
         "status" => Command::Status(reply_tx),
         other => bail!("unknown request {other:?}"),
     };
-    cmd_tx.send(cmd).await.context("daemon busy")?;
+    tokio::time::timeout(CONN_TIMEOUT, cmd_tx.send(cmd))
+        .await
+        .context("daemon command queue full")?
+        .context("daemon not accepting commands")?;
     let reply = tokio::time::timeout(CONN_TIMEOUT, reply_rx)
         .await
         .context("reply timeout")?

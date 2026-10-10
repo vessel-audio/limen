@@ -57,7 +57,12 @@ impl Active {
     async fn reap_capture(&mut self) {
         if let Some(handle) = self.capture.take() {
             handle.abort();
-            let _ = tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle).await;
+            // Dropping the handle after a timeout detaches the task, but the
+            // abort request still stands — pw-record dies either way. Warn so
+            // a slow death is visible in the log.
+            if tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle).await.is_err() {
+                tracing::warn!("capture task did not exit within the reap timeout");
+            }
         }
     }
 }
@@ -114,18 +119,28 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         }
                     },
                     State::Recording => {
-                        match finalize_session(&mut active, &mut pcm_rx).await {
-                            Ok(()) => {
+                        // Bound the whole stop path: the PCM drain and the
+                        // provider's finalize (an HTTP POST in batch mode)
+                        // must not hang the daemon either.
+                        let stop = finalize_session(&mut active, &mut pcm_rx);
+                        match tokio::time::timeout(FINALIZE_TIMEOUT, stop).await {
+                            Ok(Ok(())) => {
                                 state = State::Finalizing;
                                 finalize_deadline =
                                     Some(Box::pin(tokio::time::sleep(FINALIZE_TIMEOUT)));
                                 state.label().to_string()
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 teardown(&mut active, &mut pcm_rx).await;
                                 state = State::Idle;
                                 notify("voice-input error", &format!("{e:#}"));
                                 format!("error: {e:#}")
+                            }
+                            Err(_) => {
+                                teardown(&mut active, &mut pcm_rx).await;
+                                state = State::Idle;
+                                notify("voice-input error", "finalize timed out");
+                                "error: finalize timed out".to_string()
                             }
                         }
                     }
@@ -163,32 +178,40 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
             ev = async { active.as_mut().unwrap().events.next_event().await },
                     if matches!(state, State::Recording | State::Finalizing) && active.is_some() => {
-                let terminal = match ev {
+                // terminal: None means "session over"; String is a user-facing
+                // completion message (absent on error paths, which notify on
+                // their own).
+                let terminal: Option<Option<String>> = match ev {
                     Some(TranscriptEvent::Stable(text)) => {
-                        if inject_tx.send(text).await.is_err() {
-                            tracing::warn!("injector task died");
+                        // Never block the loop on a stuck injector: drop the
+                        // segment and say so, instead of stalling events/IPC.
+                        if let Err(e) = inject_tx.try_send(text) {
+                            tracing::warn!(error = %e, "inject queue full or dead");
+                            notify("voice-input error", "dropped text: injector is stuck");
                         }
-                        false
+                        None
                     }
                     Some(TranscriptEvent::Provisional(text)) => {
                         tracing::debug!(text, "provisional");
-                        false
+                        None
                     }
-                    Some(TranscriptEvent::Completed) => true,
+                    Some(TranscriptEvent::Completed) => Some(Some("dictation finished".into())),
                     Some(TranscriptEvent::Failed(e)) => {
                         notify("voice-input error", &format!("{e:#}"));
-                        true
+                        Some(None)
                     }
                     None => {
                         tracing::warn!("event stream ended without Completed");
-                        true
+                        Some(None)
                     }
                 };
-                if terminal {
+                if let Some(done_message) = terminal {
                     finalize_deadline = None;
                     teardown(&mut active, &mut pcm_rx).await;
                     state = State::Idle;
-                    notify("voice-input", "dictation finished");
+                    if let Some(msg) = done_message {
+                        notify("voice-input", &msg);
+                    }
                     if pending_restart {
                         pending_restart = false;
                         if let Err(e) = start_session(&cfg, &mut active, &mut pcm_rx).await {
