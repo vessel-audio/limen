@@ -40,7 +40,11 @@ chunk_ms = 100
 pub struct Paths {
     pub config_file: PathBuf,
     pub socket: PathBuf,
+    // Used once the daemon gets file logging / a cache; part of the XDG
+    // contract already, so resolve them eagerly.
+    #[allow(dead_code)]
     pub log_file: PathBuf,
+    #[allow(dead_code)]
     pub cache_dir: PathBuf,
 }
 

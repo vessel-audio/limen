@@ -7,7 +7,12 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod audio;
 mod config;
+mod daemon;
+mod inject;
+mod ipc;
+mod notify;
 mod provider;
 
 #[derive(Parser)]
@@ -44,9 +49,20 @@ async fn main() -> anyhow::Result<()> {
     let paths = config::Paths::discover()?;
 
     match cli.command {
-        Command::Daemon => anyhow::bail!("daemon loop: implementation step 4"),
-        Command::Toggle => anyhow::bail!("toggle over unix socket: step 4"),
-        Command::Status => anyhow::bail!("status query: step 4"),
+        Command::Daemon => {
+            let cfg = config::Config::load_or_create(&paths)?;
+            daemon::run(paths, cfg).await
+        }
+        Command::Toggle => {
+            let reply = ipc::send(&paths, ipc::Request::Toggle).await?;
+            println!("{reply}");
+            Ok(())
+        }
+        Command::Status => {
+            let reply = ipc::send(&paths, ipc::Request::Status).await?;
+            println!("{reply}");
+            Ok(())
+        }
         Command::Probe { wav } => {
             let cfg = config::Config::load_or_create(&paths)?;
             provider::probe(&cfg, &wav).await

@@ -88,7 +88,7 @@ pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
 
     let started = Instant::now();
     let chunk_ms = cfg.audio.chunk_ms;
-    let mut sender = tokio::spawn(async move {
+    let sender = tokio::spawn(async move {
         let chunk = (16_000 * chunk_ms / 1000) as usize;
         for frame in pcm.chunks(chunk) {
             sink.send_audio(frame).await?;
