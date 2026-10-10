@@ -25,7 +25,14 @@ pub enum Command {
 
 pub fn bind(paths: &Paths) -> Result<UnixListener> {
     if paths.socket.exists() {
-        // A leftover socket from a dead daemon; nobody can connect to it.
+        // Distinguish a live daemon (refuse to start a second one) from a
+        // stale socket file left by a crashed one (safe to replace).
+        if std::os::unix::net::UnixStream::connect(&paths.socket).is_ok() {
+            bail!(
+                "another voice-input daemon is already listening on {}",
+                paths.socket.display()
+            );
+        }
         std::fs::remove_file(&paths.socket)
             .with_context(|| format!("failed to remove stale socket {}", paths.socket.display()))?;
     }

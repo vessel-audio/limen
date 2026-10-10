@@ -22,6 +22,8 @@ use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEve
 
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bound on session start (WS connect + handshake + session.update).
+const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the capture task to die after abort.
 const CAPTURE_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -90,6 +92,9 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     // Fresh per session; the capture task fills it with 100ms PCM chunks.
     let mut pcm_rx: Option<mpsc::Receiver<Vec<i16>>> = None;
     let mut pending_restart = false;
+    // Set when a segment had to be dropped (stuck injector); the completion
+    // notification must not claim a clean finish.
+    let mut dropped_text = false;
     let mut finalize_deadline: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
     notify("voice-input", "daemon started");
@@ -107,17 +112,28 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     ipc::Command::Toggle(reply) => reply,
                 };
                 let answer = match state {
-                    State::Idle => match start_session(&cfg, &mut active, &mut pcm_rx).await {
-                        Ok(()) => {
-                            state = State::Recording;
-                            state.label().to_string()
+                    State::Idle => {
+                        // Bound the connect/handshake: a dead provider must
+                        // not wedge the daemon mid-toggle.
+                        let start = start_session(&cfg, &mut active, &mut pcm_rx);
+                        match tokio::time::timeout(START_TIMEOUT, start).await {
+                            Ok(Ok(())) => {
+                                dropped_text = false;
+                                state = State::Recording;
+                                state.label().to_string()
+                            }
+                            Ok(Err(e)) => {
+                                teardown(&mut active, &mut pcm_rx).await;
+                                notify("voice-input error", &format!("{e:#}"));
+                                format!("error: {e:#}")
+                            }
+                            Err(_) => {
+                                teardown(&mut active, &mut pcm_rx).await;
+                                notify("voice-input error", "provider connect timed out");
+                                "error: provider connect timed out".to_string()
+                            }
                         }
-                        Err(e) => {
-                            teardown(&mut active, &mut pcm_rx).await;
-                            notify("voice-input error", &format!("{e:#}"));
-                            format!("error: {e:#}")
-                        }
-                    },
+                    }
                     State::Recording => {
                         // Bound the whole stop path: the PCM drain and the
                         // provider's finalize (an HTTP POST in batch mode)
@@ -187,6 +203,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         // segment and say so, instead of stalling events/IPC.
                         if let Err(e) = inject_tx.try_send(text) {
                             tracing::warn!(error = %e, "inject queue full or dead");
+                            dropped_text = true;
                             notify("voice-input error", "dropped text: injector is stuck");
                         }
                         None
@@ -195,7 +212,13 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         tracing::debug!(text, "provisional");
                         None
                     }
-                    Some(TranscriptEvent::Completed) => Some(Some("dictation finished".into())),
+                    Some(TranscriptEvent::Completed) => Some(Some(
+                        if dropped_text {
+                            "dictation finished (some text was dropped)".to_string()
+                        } else {
+                            "dictation finished".to_string()
+                        },
+                    )),
                     Some(TranscriptEvent::Failed(e)) => {
                         notify("voice-input error", &format!("{e:#}"));
                         Some(None)
@@ -214,11 +237,19 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     }
                     if pending_restart {
                         pending_restart = false;
-                        if let Err(e) = start_session(&cfg, &mut active, &mut pcm_rx).await {
-                            notify("voice-input error", &format!("{e:#}"));
-                        } else {
-                            state = State::Recording;
-                            notify("voice-input", "listening…");
+                        let start = start_session(&cfg, &mut active, &mut pcm_rx);
+                        match tokio::time::timeout(START_TIMEOUT, start).await {
+                            Ok(Ok(())) => {
+                                dropped_text = false;
+                                state = State::Recording;
+                                notify("voice-input", "listening…");
+                            }
+                            Ok(Err(e)) => {
+                                notify("voice-input error", &format!("{e:#}"));
+                            }
+                            Err(_) => {
+                                notify("voice-input error", "provider connect timed out");
+                            }
                         }
                     }
                 }
