@@ -74,11 +74,13 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<ipc::Command>(8);
     ipc::spawn_accept_loop(listener, cmd_tx);
 
-    // Stable text is typed by a dedicated task: `wtype` can block on the
-    // compositor, and that must never stall the event loop.
+    // Stable text is typed by a dedicated task: a slow injector can block on
+    // the compositor/uinput, and that must never stall the event loop.
     let (inject_tx, mut inject_rx) = mpsc::channel::<String>(16);
+    let backend = crate::inject::autodetect(cfg.inject.backend);
+    tracing::info!(?backend, "inject backend");
     tokio::spawn(async move {
-        let mut injector = Injector::new();
+        let mut injector = Injector::new(backend);
         while let Some(text) = inject_rx.recv().await {
             if let Err(e) = injector.type_segment(&text).await {
                 tracing::warn!(error = %format!("{e:#}"), "inject failed");

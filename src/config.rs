@@ -33,6 +33,14 @@ language = "auto"
 # device = "default"
 # Length of one audio push (milliseconds)
 chunk_ms = 100
+
+[inject]
+# Text injection backend:
+#   "dotool": kernel virtual keyboard via /dev/uinput — works on GNOME,
+#             needs your user to have write access to /dev/uinput
+#   "wtype":  Wayland virtual-keyboard protocol — wlroots/KDE only,
+#             GNOME Mutter does NOT support it
+# backend = "dotool"   # default: auto-detect (dotool if uinput is writable)
 "#;
 
 /// All resolved XDG paths.
@@ -72,6 +80,8 @@ pub struct Config {
     pub provider: ProviderConfig,
     #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default)]
+    pub inject: InjectConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +124,11 @@ fn default_language() -> String {
 
 fn default_chunk_ms() -> u32 {
     100
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InjectConfig {
+    pub backend: Option<crate::inject::Backend>,
 }
 
 impl Config {
