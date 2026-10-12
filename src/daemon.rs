@@ -203,6 +203,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     Some(TranscriptEvent::Stable(text)) => {
                         // Never block the loop on a stuck injector: drop the
                         // segment and say so, instead of stalling events/IPC.
+                        tracing::info!(text, "stable");
                         if let Err(e) = inject_tx.try_send(text) {
                             tracing::warn!(error = %e, "inject queue full or dead");
                             dropped_text = true;
@@ -222,6 +223,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         },
                     )),
                     Some(TranscriptEvent::Failed(e)) => {
+                        tracing::warn!(error = %format!("{e:#}"), "provider failed");
                         notify("voice-input error", &format!("{e:#}"));
                         Some(None)
                     }
