@@ -84,6 +84,9 @@ api_key_env = "DEEPSEEK_API_KEY"
 timeout_ms = 5000
 ```
 
+Remote endpoints must use HTTPS. HTTP is allowed only for a loopback gateway,
+for example `http://127.0.0.1:3425/v1/chat/completions`.
+
 Only non-empty stable transcript segments are considered for correction, in
 order. If output is already queued, later segments skip the cloud request and
 stay original so API latency cannot cause a polishing backlog. Audio, provisional

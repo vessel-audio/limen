@@ -189,8 +189,23 @@ impl Config {
         }
         if self.polish.enabled {
             let polish_url = reqwest::Url::parse(&self.polish.url).context("invalid polish.url")?;
-            if polish_url.scheme() != "https" || polish_url.host_str().is_none() {
-                bail!("polish.url must be an absolute HTTPS URL");
+            let Some(polish_host) = polish_url.host_str() else {
+                bail!("polish.url must include a host");
+            };
+            match polish_url.scheme() {
+                "https" => {}
+                "http" => {
+                    let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
+                        || polish_host
+                            .trim_start_matches('[')
+                            .trim_end_matches(']')
+                            .parse::<std::net::IpAddr>()
+                            .is_ok_and(|address| address.is_loopback());
+                    if !is_loopback {
+                        bail!("polish.url must use HTTPS, or HTTP on a loopback address");
+                    }
+                }
+                _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
             }
             if !polish_url.username().is_empty() || polish_url.password().is_some() {
                 bail!("polish.url must not contain credentials");
@@ -259,13 +274,27 @@ mod tests {
     }
 
     #[test]
-    fn enabled_polish_requires_an_https_url_without_credentials() {
+    fn enabled_polish_requires_secure_transport_without_credentials() {
         let mut config = base_config();
         config.polish.enabled = true;
-        config.polish.url = "http://127.0.0.1:8000/chat/completions".to_string();
+        config.polish.url = "http://192.0.2.1:8000/chat/completions".to_string();
         assert!(config.validate().is_err());
         config.polish.url = "https://user:pw@api.deepseek.com/chat/completions".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn loopback_http_is_allowed_for_local_polishing() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        for url in [
+            "http://127.0.0.1:3425/v1/chat/completions",
+            "http://localhost:3425/v1/chat/completions",
+            "http://[::1]:3425/v1/chat/completions",
+        ] {
+            config.polish.url = url.to_string();
+            config.validate().unwrap();
+        }
     }
 
     #[test]
