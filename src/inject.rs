@@ -157,11 +157,13 @@ impl Injector {
 
     async fn fcitx_commit(&mut self, text: &str) -> Result<()> {
         if self.fcitx_connection.is_none() {
-            self.fcitx_connection = Some(
-                zbus::Connection::session()
-                    .await
-                    .context("failed to connect to the session D-Bus")?,
-            );
+            let connection =
+                match tokio::time::timeout(FCITX_COMMIT_TIMEOUT, zbus::Connection::session()).await
+                {
+                    Ok(result) => result.context("failed to connect to the session D-Bus")?,
+                    Err(_) => bail!("Fcitx connection setup timed out"),
+                };
+            self.fcitx_connection = Some(connection);
         }
 
         let connection = self.fcitx_connection.as_ref().unwrap();
