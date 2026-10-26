@@ -39,9 +39,9 @@ cargo build --release
    busctl --user introspect org.fcitx.Fcitx5 /org/freedesktop/Fcitx5/VoiceInput
    ```
    The introspection output must contain `CommitText`. On NixOS, run the
-   installer from a `pkgs.mkShell` containing `cmake`, `pkg-config`, `gcc`, and
-   the same `fcitx5` package version as the running daemon; rebuild after Fcitx
-   upgrades because the addon uses its C++ ABI.
+   installer from a `pkgs.mkShell` containing `cmake`, `pkg-config`, `gcc`,
+   `coreutils`, and the same `fcitx5` package version as the running daemon;
+   rebuild after Fcitx upgrades because the addon uses its C++ ABI.
 3. First run writes an annotated default config to
    `$XDG_CONFIG_HOME/voice-input/config.toml`; point `provider.url` at your server.
    `inject.backend` defaults to `fcitx5` and requires the addon from step 2.
