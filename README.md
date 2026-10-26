@@ -29,8 +29,10 @@ cargo build --release
    ```bash
    sgl-omni serve --model-path Qwen/Qwen3-ASR-0.6B --enable-realtime --port 8000
    ```
-2. Install the Fcitx5 addon and restart Fcitx5. The installer writes only to
-   `${XDG_DATA_HOME:-$HOME/.local/share}` and does not use sudo:
+2. Install the Fcitx5 addon and restart Fcitx5. Build artifacts default to
+   `${XDG_CACHE_HOME:-$HOME/.cache}/voice-input/fcitx5` (override with
+   `VOICE_INPUT_BUILD_DIR`); installation targets
+   `${XDG_DATA_HOME:-$HOME/.local/share}` and never uses sudo:
    ```bash
    contrib/fcitx5-voice-input/install-user.sh
    fcitx5 -d -r

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-project_dir=$(cd -- "$source_dir/../.." && pwd)
 data_home=${XDG_DATA_HOME:-"$HOME/.local/share"}
-build_dir="$project_dir/target/fcitx5-voice-input"
+cache_home=${XDG_CACHE_HOME:-"$HOME/.cache"}
+build_dir=${VOICE_INPUT_BUILD_DIR:-"$cache_home/voice-input/fcitx5"}
 
 cmake -S "$source_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
