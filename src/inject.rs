@@ -12,6 +12,7 @@
 //! box; sending it is always the human's decision.
 
 use std::borrow::Cow;
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -23,6 +24,7 @@ const FCITX_SERVICE: &str = "org.fcitx.Fcitx5";
 const FCITX_PATH: &str = "/org/freedesktop/Fcitx5/VoiceInput";
 const FCITX_INTERFACE: &str = "org.fcitx.Fcitx5.VoiceInput1";
 const FCITX_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
+const INJECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -55,12 +57,6 @@ impl Injector {
         }
     }
 
-    pub fn reset_connections(&mut self) {
-        self.dotool_stdin = None;
-        self.dotool_child = None;
-        self.fcitx_connection = None;
-    }
-
     pub async fn type_segment(&mut self, text: &str) -> Result<()> {
         let text = sanitize_control_characters(text);
         let text = text.trim();
@@ -81,10 +77,20 @@ impl Injector {
                 if !text.is_ascii() {
                     bail!("dotool only supports ASCII; configure the fcitx5 backend for Unicode");
                 }
-                if needs_space {
-                    self.dotool(&["key space"]).await?;
+                let outcome = tokio::time::timeout(INJECTION_TIMEOUT, async {
+                    if needs_space {
+                        self.dotool(&["key space"]).await?;
+                    }
+                    self.dotool(&[&format!("type {text}")]).await
+                })
+                .await;
+                match outcome {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        self.reset_dotool().await;
+                        bail!("dotool injection timed out");
+                    }
                 }
-                self.dotool(&[&format!("type {text}")]).await?;
             }
             Backend::Fcitx5 => {
                 let payload = if needs_space {
@@ -115,19 +121,29 @@ impl Injector {
             self.dotool_stdin = Some(child.stdin.take().context("dotool stdin")?);
             self.dotool_child = Some(child);
         }
-        let stdin = self.dotool_stdin.as_mut().unwrap();
-        for cmd in commands {
-            if let Err(e) = stdin.write_all(cmd.as_bytes()).await {
-                // The process died (uinput perms lost, killed, ...): drop it
-                // and fail this segment; the next one respawns.
-                self.dotool_stdin = None;
-                self.dotool_child = None;
-                return Err(e).context("dotool write failed (check /dev/uinput permissions)");
+        let outcome = async {
+            let stdin = self.dotool_stdin.as_mut().unwrap();
+            for cmd in commands {
+                stdin.write_all(cmd.as_bytes()).await?;
+                stdin.write_all(b"\n").await?;
             }
-            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
+            Ok::<(), anyhow::Error>(())
         }
-        stdin.flush().await?;
-        Ok(())
+        .await;
+        if outcome.is_err() {
+            self.reset_dotool().await;
+        }
+        outcome
+    }
+
+    async fn reset_dotool(&mut self) {
+        self.dotool_stdin = None;
+        if let Some(mut child) = self.dotool_child.take()
+            && let Err(error) = child.kill().await
+        {
+            tracing::warn!(%error, "failed to kill dotool");
+        }
     }
 
     async fn fcitx_commit(&mut self, text: &str) -> Result<()> {
@@ -188,16 +204,34 @@ fn is_latin(c: char) -> bool {
 }
 
 async fn wtype(text: &str) -> Result<()> {
-    let status = Command::new("wtype")
+    let child = Command::new("wtype")
         .arg("--")
         .arg(text)
-        .status()
-        .await
+        .kill_on_drop(true)
+        .spawn()
         .context("failed to spawn wtype (is it installed?)")?;
+    let status = wait_for_process(child, "wtype", INJECTION_TIMEOUT).await?;
     if !status.success() {
         bail!("wtype exited with {status}");
     }
     Ok(())
+}
+
+async fn wait_for_process(
+    mut child: Child,
+    program: &str,
+    timeout: Duration,
+) -> Result<ExitStatus> {
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(result) => Ok(result.with_context(|| format!("failed to wait for {program}"))?),
+        Err(_) => {
+            child
+                .kill()
+                .await
+                .with_context(|| format!("failed to kill timed-out {program}"))?;
+            bail!("{program} injection timed out")
+        }
+    }
 }
 
 /// Use Fcitx unless a legacy backend is explicitly configured.
@@ -207,7 +241,11 @@ pub fn autodetect(configured: Option<Backend>) -> Backend {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, Injector, autodetect, sanitize_control_characters};
+    use std::time::Duration;
+
+    use tokio::process::Command;
+
+    use super::{Backend, Injector, autodetect, sanitize_control_characters, wait_for_process};
 
     #[test]
     fn control_characters_become_spaces() {
@@ -234,8 +272,26 @@ mod tests {
     async fn dotool_rejects_unicode_before_starting_a_process() {
         let mut injector = Injector::new(Backend::Dotool);
         injector.last_was_latin = true;
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        injector.dotool_child = Some(child);
         let error = injector.type_segment("你好").await.unwrap_err();
         assert!(error.to_string().contains("Unicode"));
         assert!(injector.dotool_stdin.is_none());
+
+        let mut child = injector.dotool_child.take().unwrap();
+        let was_running = child.try_wait().unwrap().is_none();
+        child.kill().await.unwrap();
+        assert!(was_running);
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_and_reaps_the_child_process() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let process_id = child.id().unwrap();
+        let error = wait_for_process(child, "sleep", Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(!std::path::Path::new(&format!("/proc/{process_id}")).exists());
     }
 }

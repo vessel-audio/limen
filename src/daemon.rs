@@ -27,8 +27,6 @@ const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the capture task to die after abort.
 const CAPTURE_REAP_TIMEOUT: Duration = Duration::from_secs(2);
-/// Bound one output injection without blocking the daemon event loop.
-const INJECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -156,24 +154,14 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
         let mut injector = Injector::new(backend);
         while let Some(text) = inject_rx.recv().await {
             let text = polisher.polish(text).await;
-            let outcome =
-                tokio::time::timeout(INJECTION_TIMEOUT, injector.type_segment(&text)).await;
-            let injection_succeeded = match outcome {
-                Ok(Ok(())) => true,
-                Ok(Err(error)) => {
+            let injection_succeeded = match injector.type_segment(&text).await {
+                Ok(()) => true,
+                Err(error) => {
                     tracing::warn!(error = %format!("{error:#}"), "inject failed");
                     notify("voice-input error", &format!("type text: {error:#}"));
                     false
                 }
-                Err(_) => {
-                    tracing::warn!("inject timed out");
-                    notify("voice-input error", "type text: injection timed out");
-                    false
-                }
             };
-            if !injection_succeeded {
-                injector.reset_connections();
-            }
             if output_report_tx
                 .send(OutputReport {
                     injection_succeeded,
