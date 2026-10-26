@@ -42,6 +42,15 @@ chunk_ms = 100
 #   "wtype":  Wayland virtual-keyboard protocol — wlroots/KDE only,
 #             GNOME Mutter does NOT support it
 # backend = "fcitx5"   # default: direct Unicode commit through Fcitx5
+
+[polish]
+# Conservative cloud correction for stable transcripts only; audio and
+# provisional text are never uploaded.
+enabled = false
+url = "https://api.deepseek.com/chat/completions"
+model = "deepseek-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_ms = 5000
 "#;
 
 /// All resolved XDG paths.
@@ -83,6 +92,8 @@ pub struct Config {
     pub audio: AudioConfig,
     #[serde(default)]
     pub inject: InjectConfig,
+    #[serde(default)]
+    pub polish: PolishConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +143,28 @@ pub struct InjectConfig {
     pub backend: Option<crate::inject::Backend>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PolishConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub timeout_ms: u64,
+}
+
+impl Default for PolishConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: "https://api.deepseek.com/chat/completions".to_string(),
+            model: "deepseek-flash".to_string(),
+            api_key_env: "DEEPSEEK_API_KEY".to_string(),
+            timeout_ms: 5000,
+        }
+    }
+}
+
 impl Config {
     /// Load the config; write the annotated default first if none exists.
     pub fn load_or_create(paths: &Paths) -> Result<Self> {
@@ -153,6 +186,24 @@ impl Config {
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
+        }
+        if self.polish.enabled {
+            let polish_url = reqwest::Url::parse(&self.polish.url).context("invalid polish.url")?;
+            if polish_url.scheme() != "https" || polish_url.host_str().is_none() {
+                bail!("polish.url must be an absolute HTTPS URL");
+            }
+            if !polish_url.username().is_empty() || polish_url.password().is_some() {
+                bail!("polish.url must not contain credentials");
+            }
+            if self.polish.model.trim().is_empty() {
+                bail!("polish.model must not be empty when polishing is enabled");
+            }
+            if self.polish.api_key_env.trim().is_empty() {
+                bail!("polish.api_key_env must not be empty when polishing is enabled");
+            }
+            if !(100..=30_000).contains(&self.polish.timeout_ms) {
+                bail!("polish.timeout_ms must be in 100..=30000");
+            }
         }
         match self.provider.kind {
             ProviderKind::OpenaiRealtime if !self.provider.url.starts_with("ws") => {
@@ -182,4 +233,50 @@ fn write_default(path: &Path) -> Result<()> {
     fs::rename(&tmp, path)?;
     eprintln!("wrote default config: {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    fn base_config() -> Config {
+        toml::from_str(
+            r#"
+            [provider]
+            type = "openai-realtime"
+            url = "ws://127.0.0.1:8000/v1/realtime"
+            model = "test-model"
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn missing_polish_section_is_disabled_and_backward_compatible() {
+        let config = base_config();
+        assert!(!config.polish.enabled);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn enabled_polish_requires_an_https_url_without_credentials() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        config.polish.url = "http://127.0.0.1:8000/chat/completions".to_string();
+        assert!(config.validate().is_err());
+        config.polish.url = "https://user:pw@api.deepseek.com/chat/completions".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn enabled_polish_requires_a_bounded_timeout() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        config.polish.timeout_ms = 0;
+        assert!(config.validate().is_err());
+        config.polish.timeout_ms = 30_001;
+        assert!(config.validate().is_err());
+        config.polish.timeout_ms = 5000;
+        config.validate().unwrap();
+    }
 }

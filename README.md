@@ -1,8 +1,8 @@
 # voice-input
 
 System-wide voice input for Wayland: microphone audio streams to a pluggable
-ASR backend, and recognized text is typed into whatever input box has focus
-(Ghostty, Claude Code, any GUI app).
+ASR backend, and recognized text is committed to the focused Fcitx-compatible
+input context (Ghostty, Claude Code, GTK applications).
 
 ## Requirements
 
@@ -67,6 +67,33 @@ the tool never presses Enter for you.
 |---|---|---|
 | `openai-realtime` | WebSocket, sgl-omni realtime flavor | incremental, recommended |
 | `openai-batch` | `POST /v1/audio/transcriptions` | buffers a whole take; universal fallback |
+
+## Conservative DeepSeek polishing
+
+Polishing is disabled by default. Enable it explicitly and provide the API key
+in the daemon's environment, never in the config file:
+
+```toml
+[polish]
+enabled = true
+url = "https://api.deepseek.com/chat/completions"
+model = "deepseek-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_ms = 5000
+```
+
+Only non-empty stable transcript segments are uploaded, one request per segment,
+in order. Audio, provisional text, conversation history, and other segments are
+not sent. The prompt only permits conservative ASR correction; translation,
+expansion, summaries, answers, and instructions contained in the transcript are
+not allowed.
+
+A missing key produces one warning and no HTTP request. Missing keys, timeouts,
+HTTP or JSON errors, empty content, control characters, and non-`stop` finish
+reasons all select the original stable text. Every selected segment gets exactly
+one injection attempt; failures are never retried with alternate text because a
+timeout could otherwise duplicate text. `finalizing` includes correction and
+injection drain, not just the end of the ASR stream.
 
 ## Config
 

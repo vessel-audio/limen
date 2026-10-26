@@ -18,6 +18,7 @@ use crate::config::{Config, Paths};
 use crate::inject::Injector;
 use crate::ipc;
 use crate::notify::notify;
+use crate::polish::Polisher;
 use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
 /// Give up on a finalize after this long without a terminal event.
@@ -144,15 +145,17 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<ipc::Command>(8);
     ipc::spawn_accept_loop(listener, cmd_tx);
 
-    // Stable text is typed by a dedicated task: a slow injector can block on
-    // the compositor/uinput, but it must never stall the event loop.
+    // Stable text is corrected and typed by a dedicated task: slow network or
+    // injection work must never stall the event loop.
     let (inject_tx, mut inject_rx) = mpsc::channel::<String>(16);
     let (output_report_tx, mut output_report_rx) = mpsc::unbounded_channel::<OutputReport>();
     let backend = crate::inject::autodetect(cfg.inject.backend);
+    let polisher = Polisher::from_config(&cfg.polish)?;
     tracing::info!(?backend, "inject backend");
     tokio::spawn(async move {
         let mut injector = Injector::new(backend);
         while let Some(text) = inject_rx.recv().await {
+            let text = polisher.polish(text).await;
             let outcome =
                 tokio::time::timeout(INJECTION_TIMEOUT, injector.type_segment(&text)).await;
             let injection_succeeded = match outcome {

@@ -14,6 +14,7 @@ mod daemon;
 mod inject;
 mod ipc;
 mod notify;
+mod polish;
 mod provider;
 
 #[derive(Parser)]
