@@ -62,7 +62,10 @@ impl Active {
             // Dropping the handle after a timeout detaches the task, but the
             // abort request still stands — pw-record dies either way. Warn so
             // a slow death is visible in the log.
-            if tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle).await.is_err() {
+            if tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle)
+                .await
+                .is_err()
+            {
                 tracing::warn!("capture task did not exit within the reap timeout");
             }
         }
@@ -175,13 +178,13 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     if matches!(state, State::Recording) && pcm_rx.is_some() => {
                 match chunk {
                     Some(pcm) => {
-                        if let Some(a) = active.as_mut() {
-                            if let Err(e) = a.sink.send_audio(&pcm).await {
-                                tracing::warn!(error = %format!("{e:#}"), "send_audio failed");
-                                teardown(&mut active, &mut pcm_rx).await;
-                                state = State::Idle;
-                                notify("voice-input error", &format!("send audio: {e:#}"));
-                            }
+                        if let Some(a) = active.as_mut()
+                            && let Err(e) = a.sink.send_audio(&pcm).await
+                        {
+                            tracing::warn!(error = %format!("{e:#}"), "send_audio failed");
+                            teardown(&mut active, &mut pcm_rx).await;
+                            state = State::Idle;
+                            notify("voice-input error", &format!("send audio: {e:#}"));
                         }
                     }
                     // Capture ended on its own (device unplugged, pw-record died).

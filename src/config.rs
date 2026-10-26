@@ -36,11 +36,12 @@ chunk_ms = 100
 
 [inject]
 # Text injection backend:
+#   "fcitx5": direct Unicode commit through the voice-input Fcitx5 addon
 #   "dotool": kernel virtual keyboard via /dev/uinput — works on GNOME,
 #             needs your user to have write access to /dev/uinput
 #   "wtype":  Wayland virtual-keyboard protocol — wlroots/KDE only,
 #             GNOME Mutter does NOT support it
-# backend = "dotool"   # default: auto-detect (dotool if uinput is writable)
+# backend = "fcitx5"   # default: direct Unicode commit through Fcitx5
 "#;
 
 /// All resolved XDG paths.

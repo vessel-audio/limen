@@ -21,3 +21,4 @@ tokio-tungstenite = "0.30.0"
 toml = "0.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zbus = { version = "6.1.0", default-features = false, features = ["proxy", "tokio"] }

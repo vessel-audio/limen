@@ -49,8 +49,10 @@ impl Capture {
         let mut buf = vec![0u8; samples * 2];
         match stdout.read_exact(&mut buf).await {
             Ok(_) => Ok(Some(
-                buf.chunks_exact(2)
-                    .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                buf.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|bytes| i16::from_le_bytes(*bytes))
                     .collect(),
             )),
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
