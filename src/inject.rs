@@ -55,6 +55,12 @@ impl Injector {
         }
     }
 
+    pub fn reset_connections(&mut self) {
+        self.dotool_stdin = None;
+        self.dotool_child = None;
+        self.fcitx_connection = None;
+    }
+
     pub async fn type_segment(&mut self, text: &str) -> Result<()> {
         let text = sanitize_control_characters(text);
         let text = text.trim();

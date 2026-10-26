@@ -1,11 +1,11 @@
 //! The resident daemon: one `select!` loop owns the ASR sink, the event
 //! stream, and the state machine, so session state never crosses tasks.
-//! Injection runs in its own task so a slow `wtype` can never stall the loop.
+//! Injection runs in its own task so a slow injector can never stall the loop.
 //!
 //! State machine: Idle --toggle--> Recording --toggle--> Finalizing
-//! --(Completed / Failed / stream end / timeout)--> Idle.
+//! --(provider terminal + output queue drained)--> Idle.
 //! A toggle during Finalizing sets `pending_restart`: as soon as the stable
-//! tail lands, a fresh session starts. No reliance on socket message ordering.
+//! tail and queued output finish, a fresh session starts.
 
 use std::pin::Pin;
 use std::time::Duration;
@@ -26,6 +26,8 @@ const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the capture task to die after abort.
 const CAPTURE_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Bound one output injection without blocking the daemon event loop.
+const INJECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -41,6 +43,71 @@ impl State {
             State::Recording => "recording",
             State::Finalizing => "finalizing",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalOutcome {
+    Success,
+    Failure,
+}
+
+struct OutputReport {
+    injection_succeeded: bool,
+}
+
+#[derive(Default)]
+struct OutputTracker {
+    pending_segments: usize,
+    terminal_outcome: Option<TerminalOutcome>,
+    dropped_text: bool,
+    injection_failed: bool,
+}
+
+impl OutputTracker {
+    fn segment_enqueued(&mut self) {
+        self.pending_segments += 1;
+    }
+
+    fn segment_dropped(&mut self) {
+        self.dropped_text = true;
+    }
+
+    fn segment_finished(&mut self, injection_succeeded: bool) {
+        if self.pending_segments == 0 {
+            tracing::warn!("ignoring an output report with no pending segment");
+            return;
+        }
+        self.pending_segments -= 1;
+        if !injection_succeeded {
+            self.injection_failed = true;
+        }
+    }
+
+    fn mark_terminal(&mut self, outcome: TerminalOutcome) {
+        self.terminal_outcome = Some(outcome);
+    }
+
+    fn should_finish(&self) -> bool {
+        self.terminal_outcome.is_some() && self.pending_segments == 0
+    }
+
+    fn completion_message(&self) -> Option<String> {
+        if !self.should_finish() || self.terminal_outcome != Some(TerminalOutcome::Success) {
+            return None;
+        }
+        let message = if self.dropped_text {
+            "dictation finished (some text was dropped)"
+        } else if self.injection_failed {
+            "dictation finished (some text failed)"
+        } else {
+            "dictation finished"
+        };
+        Some(message.to_string())
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -78,16 +145,39 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     ipc::spawn_accept_loop(listener, cmd_tx);
 
     // Stable text is typed by a dedicated task: a slow injector can block on
-    // the compositor/uinput, and that must never stall the event loop.
+    // the compositor/uinput, but it must never stall the event loop.
     let (inject_tx, mut inject_rx) = mpsc::channel::<String>(16);
+    let (output_report_tx, mut output_report_rx) = mpsc::unbounded_channel::<OutputReport>();
     let backend = crate::inject::autodetect(cfg.inject.backend);
     tracing::info!(?backend, "inject backend");
     tokio::spawn(async move {
         let mut injector = Injector::new(backend);
         while let Some(text) = inject_rx.recv().await {
-            if let Err(e) = injector.type_segment(&text).await {
-                tracing::warn!(error = %format!("{e:#}"), "inject failed");
-                notify("voice-input error", &format!("type text: {e:#}"));
+            let outcome =
+                tokio::time::timeout(INJECTION_TIMEOUT, injector.type_segment(&text)).await;
+            let injection_succeeded = match outcome {
+                Ok(Ok(())) => true,
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %format!("{error:#}"), "inject failed");
+                    notify("voice-input error", &format!("type text: {error:#}"));
+                    false
+                }
+                Err(_) => {
+                    tracing::warn!("inject timed out");
+                    notify("voice-input error", "type text: injection timed out");
+                    false
+                }
+            };
+            if !injection_succeeded {
+                injector.reset_connections();
+            }
+            if output_report_tx
+                .send(OutputReport {
+                    injection_succeeded,
+                })
+                .is_err()
+            {
+                break;
             }
         }
     });
@@ -97,9 +187,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     // Fresh per session; the capture task fills it with 100ms PCM chunks.
     let mut pcm_rx: Option<mpsc::Receiver<Vec<i16>>> = None;
     let mut pending_restart = false;
-    // Set when a segment had to be dropped (stuck injector); the completion
-    // notification must not claim a clean finish.
-    let mut dropped_text = false;
+    let mut output_tracker = OutputTracker::default();
     let mut finalize_deadline: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
     notify("voice-input", "daemon started");
@@ -123,7 +211,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         let start = start_session(&cfg, &mut active, &mut pcm_rx);
                         match tokio::time::timeout(START_TIMEOUT, start).await {
                             Ok(Ok(())) => {
-                                dropped_text = false;
+                                output_tracker.reset();
                                 state = State::Recording;
                                 state.label().to_string()
                             }
@@ -153,14 +241,32 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                             }
                             Ok(Err(e)) => {
                                 teardown(&mut active, &mut pcm_rx).await;
-                                state = State::Idle;
+                                state = State::Finalizing;
+                                output_tracker.mark_terminal(TerminalOutcome::Failure);
                                 notify("voice-input error", &format!("{e:#}"));
+                                finish_session_if_drained(
+                                    &cfg,
+                                    &mut state,
+                                    &mut active,
+                                    &mut pcm_rx,
+                                    &mut pending_restart,
+                                    &mut output_tracker,
+                                ).await;
                                 format!("error: {e:#}")
                             }
                             Err(_) => {
                                 teardown(&mut active, &mut pcm_rx).await;
-                                state = State::Idle;
+                                state = State::Finalizing;
+                                output_tracker.mark_terminal(TerminalOutcome::Failure);
                                 notify("voice-input error", "finalize timed out");
+                                finish_session_if_drained(
+                                    &cfg,
+                                    &mut state,
+                                    &mut active,
+                                    &mut pcm_rx,
+                                    &mut pending_restart,
+                                    &mut output_tracker,
+                                ).await;
                                 "error: finalize timed out".to_string()
                             }
                         }
@@ -174,6 +280,23 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                 let _ = reply.send(answer);
             }
 
+            report = output_report_rx.recv() => {
+                match report {
+                    Some(report) => output_tracker.segment_finished(report.injection_succeeded),
+                    None => {
+                        anyhow::bail!("output worker stopped unexpectedly");
+                    }
+                }
+                finish_session_if_drained(
+                    &cfg,
+                    &mut state,
+                    &mut active,
+                    &mut pcm_rx,
+                    &mut pending_restart,
+                    &mut output_tracker,
+                ).await;
+            }
+
             chunk = async { pcm_rx.as_mut().unwrap().recv().await },
                     if matches!(state, State::Recording) && pcm_rx.is_some() => {
                 match chunk {
@@ -183,34 +306,52 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         {
                             tracing::warn!(error = %format!("{e:#}"), "send_audio failed");
                             teardown(&mut active, &mut pcm_rx).await;
-                            state = State::Idle;
+                            state = State::Finalizing;
+                            output_tracker.mark_terminal(TerminalOutcome::Failure);
                             notify("voice-input error", &format!("send audio: {e:#}"));
+                            finish_session_if_drained(
+                                &cfg,
+                                &mut state,
+                                &mut active,
+                                &mut pcm_rx,
+                                &mut pending_restart,
+                                &mut output_tracker,
+                            ).await;
                         }
                     }
                     // Capture ended on its own (device unplugged, pw-record died).
                     None => {
                         tracing::warn!("capture ended unexpectedly");
                         teardown(&mut active, &mut pcm_rx).await;
-                        state = State::Idle;
+                        state = State::Finalizing;
+                        output_tracker.mark_terminal(TerminalOutcome::Failure);
                         notify("voice-input error", "microphone capture ended");
+                        finish_session_if_drained(
+                            &cfg,
+                            &mut state,
+                            &mut active,
+                            &mut pcm_rx,
+                            &mut pending_restart,
+                            &mut output_tracker,
+                        ).await;
                     }
                 }
             }
 
             ev = async { active.as_mut().unwrap().events.next_event().await },
                     if matches!(state, State::Recording | State::Finalizing) && active.is_some() => {
-                // terminal: None means "session over"; String is a user-facing
-                // completion message (absent on error paths, which notify on
-                // their own).
-                let terminal: Option<Option<String>> = match ev {
+                let terminal_outcome = match ev {
                     Some(TranscriptEvent::Stable(text)) => {
                         // Never block the loop on a stuck injector: drop the
                         // segment and say so, instead of stalling events/IPC.
                         tracing::info!(text, "stable");
-                        if let Err(e) = inject_tx.try_send(text) {
-                            tracing::warn!(error = %e, "inject queue full or dead");
-                            dropped_text = true;
-                            notify("voice-input error", "dropped text: injector is stuck");
+                        match inject_tx.try_send(text) {
+                            Ok(()) => output_tracker.segment_enqueued(),
+                            Err(error) => {
+                                tracing::warn!(error = %error, "inject queue full or dead");
+                                output_tracker.segment_dropped();
+                                notify("voice-input error", "dropped text: injector is stuck");
+                            }
                         }
                         None
                     }
@@ -218,47 +359,30 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         tracing::debug!(text, "provisional");
                         None
                     }
-                    Some(TranscriptEvent::Completed) => Some(Some(
-                        if dropped_text {
-                            "dictation finished (some text was dropped)".to_string()
-                        } else {
-                            "dictation finished".to_string()
-                        },
-                    )),
+                    Some(TranscriptEvent::Completed) => Some(TerminalOutcome::Success),
                     Some(TranscriptEvent::Failed(e)) => {
                         tracing::warn!(error = %format!("{e:#}"), "provider failed");
                         notify("voice-input error", &format!("{e:#}"));
-                        Some(None)
+                        Some(TerminalOutcome::Failure)
                     }
                     None => {
                         tracing::warn!("event stream ended without Completed");
-                        Some(None)
+                        Some(TerminalOutcome::Failure)
                     }
                 };
-                if let Some(done_message) = terminal {
+                if let Some(outcome) = terminal_outcome {
                     finalize_deadline = None;
                     teardown(&mut active, &mut pcm_rx).await;
-                    state = State::Idle;
-                    if let Some(msg) = done_message {
-                        notify("voice-input", &msg);
-                    }
-                    if pending_restart {
-                        pending_restart = false;
-                        let start = start_session(&cfg, &mut active, &mut pcm_rx);
-                        match tokio::time::timeout(START_TIMEOUT, start).await {
-                            Ok(Ok(())) => {
-                                dropped_text = false;
-                                state = State::Recording;
-                                notify("voice-input", "listening…");
-                            }
-                            Ok(Err(e)) => {
-                                notify("voice-input error", &format!("{e:#}"));
-                            }
-                            Err(_) => {
-                                notify("voice-input error", "provider connect timed out");
-                            }
-                        }
-                    }
+                    state = State::Finalizing;
+                    output_tracker.mark_terminal(outcome);
+                    finish_session_if_drained(
+                        &cfg,
+                        &mut state,
+                        &mut active,
+                        &mut pcm_rx,
+                        &mut pending_restart,
+                        &mut output_tracker,
+                    ).await;
                 }
             }
 
@@ -267,17 +391,52 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                 tracing::warn!("finalize timed out");
                 finalize_deadline = None;
                 teardown(&mut active, &mut pcm_rx).await;
-                state = State::Idle;
+                state = State::Finalizing;
+                output_tracker.mark_terminal(TerminalOutcome::Failure);
                 notify("voice-input error", "provider did not finish in time");
-                if pending_restart {
-                    pending_restart = false;
-                    if let Err(e) = start_session(&cfg, &mut active, &mut pcm_rx).await {
-                        notify("voice-input error", &format!("{e:#}"));
-                    } else {
-                        state = State::Recording;
-                        notify("voice-input", "listening…");
-                    }
-                }
+                finish_session_if_drained(
+                    &cfg,
+                    &mut state,
+                    &mut active,
+                    &mut pcm_rx,
+                    &mut pending_restart,
+                    &mut output_tracker,
+                ).await;
+            }
+        }
+    }
+}
+
+async fn finish_session_if_drained(
+    cfg: &Config,
+    state: &mut State,
+    active: &mut Option<Active>,
+    pcm_rx: &mut Option<mpsc::Receiver<Vec<i16>>>,
+    pending_restart: &mut bool,
+    output_tracker: &mut OutputTracker,
+) {
+    if !output_tracker.should_finish() {
+        return;
+    }
+
+    *state = State::Idle;
+    if let Some(message) = output_tracker.completion_message() {
+        notify("voice-input", &message);
+    }
+    output_tracker.reset();
+    if *pending_restart {
+        *pending_restart = false;
+        let start = start_session(cfg, active, pcm_rx);
+        match tokio::time::timeout(START_TIMEOUT, start).await {
+            Ok(Ok(())) => {
+                *state = State::Recording;
+                notify("voice-input", "listening…");
+            }
+            Ok(Err(error)) => {
+                notify("voice-input error", &format!("{error:#}"));
+            }
+            Err(_) => {
+                notify("voice-input error", "provider connect timed out");
             }
         }
     }
@@ -363,5 +522,66 @@ async fn capture_loop(
             }
             None => return Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OutputTracker, TerminalOutcome};
+
+    #[test]
+    fn completion_waits_for_every_queued_segment() {
+        let mut tracker = OutputTracker::default();
+        tracker.segment_enqueued();
+        tracker.segment_enqueued();
+        tracker.mark_terminal(TerminalOutcome::Success);
+        assert!(!tracker.should_finish());
+        tracker.segment_finished(true);
+        assert!(!tracker.should_finish());
+        tracker.segment_finished(true);
+        assert!(tracker.should_finish());
+        assert_eq!(
+            tracker.completion_message().as_deref(),
+            Some("dictation finished")
+        );
+    }
+
+    #[test]
+    fn empty_output_queue_can_complete_immediately() {
+        let mut tracker = OutputTracker::default();
+        tracker.mark_terminal(TerminalOutcome::Success);
+        assert!(tracker.should_finish());
+    }
+
+    #[test]
+    fn dropped_and_failed_output_is_reported_distinctly() {
+        let mut dropped = OutputTracker::default();
+        dropped.segment_dropped();
+        dropped.mark_terminal(TerminalOutcome::Success);
+        assert_eq!(
+            dropped.completion_message().as_deref(),
+            Some("dictation finished (some text was dropped)")
+        );
+
+        let mut failed = OutputTracker::default();
+        failed.segment_enqueued();
+        failed.mark_terminal(TerminalOutcome::Success);
+        failed.segment_finished(false);
+        assert_eq!(
+            failed.completion_message().as_deref(),
+            Some("dictation finished (some text failed)")
+        );
+    }
+
+    #[test]
+    fn provider_failure_does_not_emit_success_or_skip_output_drain() {
+        let mut tracker = OutputTracker::default();
+        tracker.segment_enqueued();
+        tracker.mark_terminal(TerminalOutcome::Failure);
+        assert!(!tracker.should_finish());
+        assert_eq!(tracker.completion_message(), None);
+        tracker.segment_finished(true);
+        assert!(tracker.should_finish());
+        assert_eq!(tracker.completion_message(), None);
     }
 }
