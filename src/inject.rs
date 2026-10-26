@@ -57,6 +57,15 @@ impl Injector {
         }
     }
 
+    /// Return corrected text only when this backend can inject it.
+    pub fn compatible_text<'a>(&self, original: &'a str, corrected: &'a str) -> &'a str {
+        if self.backend == Backend::Dotool && !corrected.is_ascii() {
+            original
+        } else {
+            corrected
+        }
+    }
+
     pub async fn type_segment(&mut self, text: &str) -> Result<()> {
         let text = sanitize_control_characters(text);
         let text = text.trim();
@@ -266,6 +275,22 @@ mod tests {
     fn fcitx_is_the_default_backend() {
         assert_eq!(autodetect(None), Backend::Fcitx5);
         assert_eq!(autodetect(Some(Backend::Dotool)), Backend::Dotool);
+    }
+
+    #[test]
+    fn corrected_text_must_be_compatible_with_the_backend() {
+        let dotool = Injector::new(Backend::Dotool);
+        assert_eq!(
+            dotool.compatible_text("dont stop", "Don’t stop."),
+            "dont stop"
+        );
+        assert_eq!(dotool.compatible_text("original", "corrected"), "corrected");
+
+        let fcitx = Injector::new(Backend::Fcitx5);
+        assert_eq!(
+            fcitx.compatible_text("dont stop", "Don’t stop."),
+            "Don’t stop."
+        );
     }
 
     #[tokio::test]

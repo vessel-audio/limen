@@ -53,7 +53,15 @@ impl Polisher {
         }))
     }
 
-    pub async fn polish(&self, original: String) -> String {
+    /// Polish only when no original segments are waiting behind this one.
+    pub async fn polish_when_idle(&self, original: String, output_queue_is_empty: bool) -> String {
+        if !output_queue_is_empty {
+            return original;
+        }
+        self.polish(original).await
+    }
+
+    async fn polish(&self, original: String) -> String {
         if original.trim().is_empty() {
             return original;
         }
@@ -244,7 +252,7 @@ mod tests {
         let (url, server) = mock_server("200 OK", response, Duration::ZERO).await;
         let original = "原始 文本".to_string();
         let output = deepseek_polisher(polish_config(url, 1000))
-            .polish(original.clone())
+            .polish_when_idle(original.clone(), true)
             .await;
         assert_eq!(output, "你好，世界。");
 
@@ -336,6 +344,22 @@ mod tests {
             .await;
         assert_eq!(output, "原始文本");
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn backlog_returns_the_original_without_connecting() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let config = polish_config(format!("http://{address}/chat/completions"), 1000);
+        let output = deepseek_polisher(config)
+            .polish_when_idle("原文".to_string(), false)
+            .await;
+        assert_eq!(output, "原文");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

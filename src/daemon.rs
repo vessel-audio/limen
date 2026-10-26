@@ -153,7 +153,12 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     tokio::spawn(async move {
         let mut injector = Injector::new(backend);
         while let Some(text) = inject_rx.recv().await {
-            let text = polisher.polish(text).await;
+            let original = text;
+            // Cloud work is optional; queued originals take priority.
+            let corrected = polisher
+                .polish_when_idle(original.clone(), inject_rx.is_empty())
+                .await;
+            let text = injector.compatible_text(&original, &corrected).to_string();
             let injection_succeeded = match injector.type_segment(&text).await {
                 Ok(()) => true,
                 Err(error) => {
