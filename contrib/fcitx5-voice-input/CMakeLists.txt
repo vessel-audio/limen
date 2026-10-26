@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 project(voice_input_fcitx5 LANGUAGES CXX)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(FCITX5_CORE REQUIRED IMPORTED_TARGET Fcitx5Core)
-pkg_check_modules(FCITX5_UTILS REQUIRED IMPORTED_TARGET Fcitx5Utils)
-pkg_check_modules(FCITX5_MODULE REQUIRED IMPORTED_TARGET Fcitx5Module)
+pkg_check_modules(FCITX5_CORE REQUIRED IMPORTED_TARGET Fcitx5Core>=5.1.0)
+pkg_check_modules(FCITX5_UTILS REQUIRED IMPORTED_TARGET Fcitx5Utils>=5.1.0)
+pkg_check_modules(FCITX5_MODULE REQUIRED IMPORTED_TARGET Fcitx5Module>=5.1.0)
 
 add_library(voiceinputfcitx5 MODULE voiceinputfcitx5.cpp)
 target_compile_features(voiceinputfcitx5 PRIVATE cxx_std_20)
