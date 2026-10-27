@@ -119,20 +119,26 @@ struct Active {
     capture: Option<tokio::task::JoinHandle<()>>,
 }
 
+enum CaptureReap {
+    Reaped,
+    TimedOut,
+}
+
 impl Active {
     /// Abort the capture task and wait until pw-record is actually dead
     /// (kill_on_drop runs when the task's `Capture` is dropped).
-    async fn reap_capture(&mut self) {
-        if let Some(handle) = self.capture.take() {
-            handle.abort();
-            // Dropping the handle after a timeout detaches the task, but the
-            // abort request still stands — pw-record dies either way. Warn so
-            // a slow death is visible in the log.
-            if tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle)
-                .await
-                .is_err()
-            {
+    async fn reap_capture(&mut self) -> CaptureReap {
+        let Some(handle) = self.capture.take() else {
+            return CaptureReap::Reaped;
+        };
+        handle.abort();
+        match tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle).await {
+            Ok(_) => CaptureReap::Reaped,
+            Err(_) => {
+                // Dropping the handle detaches the task, but the abort request
+                // still stands. Do not submit audio that may still be appended.
                 tracing::warn!("capture task did not exit within the reap timeout");
+                CaptureReap::TimedOut
             }
         }
     }
@@ -224,20 +230,18 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         }
                     }
                     State::Recording => {
-                        // Bound the whole stop path: the PCM drain and the
-                        // provider's finalize (an HTTP POST in batch mode)
-                        // must not hang the daemon either.
+                        state = State::Finalizing;
+                        // Acknowledge the stop before doing any I/O. Recognition
+                        // and injection finish asynchronously after this reply.
+                        let _ = reply.send(state.label().to_string());
                         let stop = finalize_session(&mut active, &mut pcm_rx);
                         match tokio::time::timeout(FINALIZE_TIMEOUT, stop).await {
                             Ok(Ok(())) => {
-                                state = State::Finalizing;
                                 finalize_deadline =
                                     Some(Box::pin(tokio::time::sleep(FINALIZE_TIMEOUT)));
-                                state.label().to_string()
                             }
                             Ok(Err(e)) => {
                                 teardown(&mut active, &mut pcm_rx).await;
-                                state = State::Finalizing;
                                 output_tracker.mark_terminal(TerminalOutcome::Failure);
                                 notify("voice-input error", &format!("{e:#}"));
                                 finish_session_if_drained(
@@ -248,11 +252,9 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                                     &mut pending_restart,
                                     &mut output_tracker,
                                 ).await;
-                                format!("error: {e:#}")
                             }
                             Err(_) => {
                                 teardown(&mut active, &mut pcm_rx).await;
-                                state = State::Finalizing;
                                 output_tracker.mark_terminal(TerminalOutcome::Failure);
                                 notify("voice-input error", "finalize timed out");
                                 finish_session_if_drained(
@@ -263,9 +265,9 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                                     &mut pending_restart,
                                     &mut output_tracker,
                                 ).await;
-                                "error: finalize timed out".to_string()
                             }
                         }
+                        continue;
                     }
                     State::Finalizing => {
                         // Double-toggle = restart as soon as the tail lands.
@@ -480,7 +482,10 @@ async fn finalize_session(
     let Some(a) = active.as_mut() else {
         return Ok(());
     };
-    a.reap_capture().await;
+    match a.reap_capture().await {
+        CaptureReap::Reaped => {}
+        CaptureReap::TimedOut => anyhow::bail!("microphone capture did not stop"),
+    }
     if let Some(rx) = pcm_rx.as_mut() {
         while let Ok(pcm) = rx.try_recv() {
             a.sink.send_audio(&pcm).await?;
@@ -492,7 +497,7 @@ async fn finalize_session(
 /// Drop the session and the PCM channel.
 async fn teardown(active: &mut Option<Active>, pcm_rx: &mut Option<mpsc::Receiver<Vec<i16>>>) {
     if let Some(mut a) = active.take() {
-        a.reap_capture().await;
+        let _ = a.reap_capture().await;
     }
     pcm_rx.take();
 }
@@ -523,7 +528,80 @@ async fn capture_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputTracker, TerminalOutcome};
+    use std::sync::{Arc, Mutex};
+
+    use tokio::sync::mpsc;
+
+    use super::{Active, OutputTracker, TerminalOutcome, finalize_session};
+    use crate::provider::{AudioSink, BoxFuture, EventSource, TranscriptEvent};
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum SinkOperation {
+        Audio(Vec<i16>),
+        Finalized,
+    }
+
+    struct FakeSink {
+        operations: Arc<Mutex<Vec<SinkOperation>>>,
+    }
+
+    impl AudioSink for FakeSink {
+        fn send_audio<'a>(&'a mut self, pcm: &'a [i16]) -> BoxFuture<'a, anyhow::Result<()>> {
+            Box::pin(async move {
+                self.operations
+                    .lock()
+                    .unwrap()
+                    .push(SinkOperation::Audio(pcm.to_vec()));
+                Ok(())
+            })
+        }
+
+        fn finalize(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
+            Box::pin(async move {
+                self.operations
+                    .lock()
+                    .unwrap()
+                    .push(SinkOperation::Finalized);
+                Ok(())
+            })
+        }
+    }
+
+    struct PendingEvents;
+
+    impl EventSource for PendingEvents {
+        fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_drains_queued_audio_before_finalizing() {
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        let mut active = Some(Active {
+            sink: Box::new(FakeSink {
+                operations: Arc::clone(&operations),
+            }),
+            events: Box::new(PendingEvents),
+            capture: None,
+        });
+        let (tx, rx) = mpsc::channel(2);
+        tx.send(vec![1, 2]).await.unwrap();
+        tx.send(vec![3, 4]).await.unwrap();
+        drop(tx);
+        let mut pcm_rx = Some(rx);
+
+        finalize_session(&mut active, &mut pcm_rx).await.unwrap();
+
+        assert_eq!(
+            *operations.lock().unwrap(),
+            [
+                SinkOperation::Audio(vec![1, 2]),
+                SinkOperation::Audio(vec![3, 4]),
+                SinkOperation::Finalized,
+            ]
+        );
+    }
 
     #[test]
     fn completion_waits_for_every_queued_segment() {
