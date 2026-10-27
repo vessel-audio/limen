@@ -1,8 +1,7 @@
 //! voice-input: system-wide voice input for Wayland.
 //!
-//! Microphone audio -> pluggable ASR provider -> stable text committed into
-//! the focused input context through a configurable injector. See docs/plan.md
-//! (not tracked in git).
+//! Microphone audio is buffered for one take, transcribed after the stop
+//! shortcut, and committed as final text through the configured injector.
 
 use std::path::PathBuf;
 
@@ -36,7 +35,7 @@ enum Command {
     Toggle,
     /// Query daemon state
     Status,
-    /// Dev tool: stream a wav file to the provider and print the raw event flow
+    /// Dev tool: transcribe a wav file and print the final event flow
     Probe {
         /// Input wav, must be 16kHz mono s16le
         wav: PathBuf,

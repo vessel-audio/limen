@@ -16,13 +16,10 @@ use serde::{Deserialize, Serialize};
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# voice-input configuration
-# ASR backend (provider) section. Switching backends only touches this block.
+# ASR backend: one buffered take per HTTP transcription request.
 
 [provider]
-# "openai-realtime": WebSocket OpenAI Realtime protocol (sglang-omni /v1/realtime, OpenAI)
-# "openai-batch":    POST /v1/audio/transcriptions; buffers a whole take, universal fallback
-type = "openai-realtime"
-url = "ws://127.0.0.1:8000/v1/realtime"
+url = "http://127.0.0.1:8000/v1/audio/transcriptions"
 model = "Qwen/Qwen3-ASR-0.6B"
 language = "auto"
 # Read the API key from this environment variable; not needed for a local server
@@ -44,8 +41,8 @@ chunk_ms = 100
 # backend = "fcitx5"   # default: direct Unicode commit through Fcitx5
 
 [polish]
-# Conservative cloud correction for stable transcripts only; audio and
-# provisional text are never uploaded.
+# Conservative cloud correction for the final transcript of each take;
+# audio is never uploaded.
 enabled = false
 url = "https://api.deepseek.com/chat/completions"
 model = "deepseek-flash"
@@ -98,20 +95,11 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    #[serde(rename = "type")]
-    pub kind: ProviderKind,
     pub url: String,
     pub model: String,
     #[serde(default = "default_language")]
     pub language: String,
     pub api_key_env: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ProviderKind {
-    OpenaiRealtime,
-    OpenaiBatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,15 +208,10 @@ impl Config {
                 bail!("polish.timeout_ms must be in 100..=30000");
             }
         }
-        match self.provider.kind {
-            ProviderKind::OpenaiRealtime if !self.provider.url.starts_with("ws") => {
-                bail!("openai-realtime url must start with ws:// or wss://")
-            }
-            ProviderKind::OpenaiBatch if !self.provider.url.starts_with("http") => {
-                bail!("openai-batch url must start with http(s)://")
-            }
-            _ => Ok(()),
+        if !self.provider.url.starts_with("http") {
+            bail!("provider.url must start with http(s)://");
         }
+        Ok(())
     }
 
     pub fn api_key(&self) -> Option<String> {
@@ -258,12 +241,17 @@ mod tests {
         toml::from_str(
             r#"
             [provider]
-            type = "openai-realtime"
-            url = "ws://127.0.0.1:8000/v1/realtime"
+            url = "http://127.0.0.1:8000/v1/audio/transcriptions"
             model = "test-model"
             "#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn generated_default_config_is_valid() {
+        let config: Config = toml::from_str(super::DEFAULT_CONFIG).unwrap();
+        config.validate().unwrap();
     }
 
     #[test]

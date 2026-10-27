@@ -233,7 +233,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::{Provider, Source};
-    use crate::config::{ProviderConfig, ProviderKind};
+    use crate::config::ProviderConfig;
     use crate::provider::{AsrProvider, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -303,7 +303,6 @@ mod tests {
 
     fn provider(url: String) -> Provider {
         Provider::new(ProviderConfig {
-            kind: ProviderKind::OpenaiBatch,
             url,
             model: "test-model".to_string(),
             language: "auto".to_string(),

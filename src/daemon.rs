@@ -4,8 +4,8 @@
 //!
 //! State machine: Idle --toggle--> Recording --toggle--> Finalizing
 //! --(provider terminal + output queue drained)--> Idle.
-//! A toggle during Finalizing sets `pending_restart`: as soon as the stable
-//! tail and queued output finish, a fresh session starts.
+//! A toggle during Finalizing sets `pending_restart`: as soon as the final
+//! text and queued output finish, a fresh session starts.
 
 use std::pin::Pin;
 use std::time::Duration;
@@ -23,8 +23,6 @@ use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEve
 
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Bound on session start (WS connect + handshake + session.update).
-const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the capture task to die after abort.
 const CAPTURE_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -149,7 +147,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<ipc::Command>(8);
     ipc::spawn_accept_loop(listener, cmd_tx);
 
-    // Stable text is corrected and typed by a dedicated task: slow network or
+    // Final text is corrected and typed by a dedicated task: slow network or
     // injection work must never stall the event loop.
     let (inject_tx, mut inject_rx) = mpsc::channel::<String>(16);
     let (output_report_tx, mut output_report_rx) = mpsc::unbounded_channel::<OutputReport>();
@@ -208,24 +206,16 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                 };
                 let answer = match state {
                     State::Idle => {
-                        // Bound the connect/handshake: a dead provider must
-                        // not wedge the daemon mid-toggle.
-                        let start = start_session(&cfg, &mut active, &mut pcm_rx);
-                        match tokio::time::timeout(START_TIMEOUT, start).await {
-                            Ok(Ok(())) => {
+                        match start_session(&cfg, &mut active, &mut pcm_rx).await {
+                            Ok(()) => {
                                 output_tracker.reset();
                                 state = State::Recording;
                                 state.label().to_string()
                             }
-                            Ok(Err(e)) => {
+                            Err(e) => {
                                 teardown(&mut active, &mut pcm_rx).await;
                                 notify("voice-input error", &format!("{e:#}"));
                                 format!("error: {e:#}")
-                            }
-                            Err(_) => {
-                                teardown(&mut active, &mut pcm_rx).await;
-                                notify("voice-input error", "provider connect timed out");
-                                "error: provider connect timed out".to_string()
                             }
                         }
                     }
@@ -270,7 +260,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                         continue;
                     }
                     State::Finalizing => {
-                        // Double-toggle = restart as soon as the tail lands.
+                        // Double-toggle = restart after the final output lands.
                         pending_restart = true;
                         "finalizing (restart queued)".to_string()
                     }
@@ -337,12 +327,12 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
             }
 
             ev = async { active.as_mut().unwrap().events.next_event().await },
-                    if matches!(state, State::Recording | State::Finalizing) && active.is_some() => {
+                    if matches!(state, State::Finalizing) && active.is_some() => {
                 let terminal_outcome = match ev {
                     Some(TranscriptEvent::Stable(text)) => {
                         // Never block the loop on a stuck injector: drop the
-                        // segment and say so, instead of stalling events/IPC.
-                        tracing::info!(text, "stable");
+                        // final text and say so, instead of stalling events/IPC.
+                        tracing::info!(text, "final transcript");
                         match inject_tx.try_send(text) {
                             Ok(()) => output_tracker.segment_enqueued(),
                             Err(error) => {
@@ -351,10 +341,6 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                                 notify("voice-input error", "dropped text: injector is stuck");
                             }
                         }
-                        None
-                    }
-                    Some(TranscriptEvent::Provisional(text)) => {
-                        tracing::debug!(text, "provisional");
                         None
                     }
                     Some(TranscriptEvent::Completed) => Some(TerminalOutcome::Success),
@@ -424,17 +410,13 @@ async fn finish_session_if_drained(
     output_tracker.reset();
     if *pending_restart {
         *pending_restart = false;
-        let start = start_session(cfg, active, pcm_rx);
-        match tokio::time::timeout(START_TIMEOUT, start).await {
-            Ok(Ok(())) => {
+        match start_session(cfg, active, pcm_rx).await {
+            Ok(()) => {
                 *state = State::Recording;
                 notify("voice-input", "listening…");
             }
-            Ok(Err(error)) => {
+            Err(error) => {
                 notify("voice-input error", &format!("{error:#}"));
-            }
-            Err(_) => {
-                notify("voice-input error", "provider connect timed out");
             }
         }
     }
