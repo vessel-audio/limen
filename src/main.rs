@@ -10,11 +10,13 @@ use clap::{Parser, Subcommand};
 mod audio;
 mod config;
 mod daemon;
+mod dictation;
 mod input_method;
 mod ipc;
 mod notify;
 mod polish;
 mod provider;
+mod session;
 
 #[derive(Parser)]
 #[command(
