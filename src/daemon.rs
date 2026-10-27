@@ -1,6 +1,6 @@
 //! The resident daemon: one `select!` loop owns the ASR sink, the event
 //! stream, and the state machine, so session state never crosses tasks.
-//! Injection runs in its own task so a slow injector can never stall the loop.
+//! Text input runs in its own task so a slow input method cannot stall the loop.
 //!
 //! State machine: Idle --toggle--> Recording --toggle--> Finalizing
 //! --(provider terminal + output queue drained)--> Idle.
@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::audio::{Capture, SAMPLE_RATE};
 use crate::config::{Config, Paths};
-use crate::inject::Injector;
+use crate::input_method::InputMethod;
 use crate::ipc;
 use crate::notify::notify;
 use crate::polish::Polisher;
@@ -50,7 +50,7 @@ enum TerminalOutcome {
 }
 
 struct OutputReport {
-    injection_succeeded: bool,
+    input_succeeded: bool,
 }
 
 #[derive(Default)]
@@ -58,7 +58,7 @@ struct OutputTracker {
     pending_segments: usize,
     terminal_outcome: Option<TerminalOutcome>,
     dropped_text: bool,
-    injection_failed: bool,
+    input_failed: bool,
 }
 
 impl OutputTracker {
@@ -70,14 +70,14 @@ impl OutputTracker {
         self.dropped_text = true;
     }
 
-    fn segment_finished(&mut self, injection_succeeded: bool) {
+    fn segment_finished(&mut self, input_succeeded: bool) {
         if self.pending_segments == 0 {
             tracing::warn!("ignoring an output report with no pending segment");
             return;
         }
         self.pending_segments -= 1;
-        if !injection_succeeded {
-            self.injection_failed = true;
+        if !input_succeeded {
+            self.input_failed = true;
         }
     }
 
@@ -95,7 +95,7 @@ impl OutputTracker {
         }
         let message = if self.dropped_text {
             "dictation finished (some text was dropped)"
-        } else if self.injection_failed {
+        } else if self.input_failed {
             "dictation finished (some text failed)"
         } else {
             "dictation finished"
@@ -148,33 +148,33 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     ipc::spawn_accept_loop(listener, cmd_tx);
 
     // Final text is corrected and typed by a dedicated task: slow network or
-    // injection work must never stall the event loop.
-    let (inject_tx, mut inject_rx) = mpsc::channel::<String>(16);
+    // text input work must never stall the event loop.
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(16);
     let (output_report_tx, mut output_report_rx) = mpsc::unbounded_channel::<OutputReport>();
-    let backend = crate::inject::autodetect(cfg.inject.backend);
+    let backend = crate::input_method::default_backend(cfg.input_method.backend);
     let polisher = Polisher::from_config(&cfg.polish)?;
-    tracing::info!(?backend, "inject backend");
+    tracing::info!(?backend, "input method backend");
     tokio::spawn(async move {
-        let mut injector = Injector::new(backend);
-        while let Some(text) = inject_rx.recv().await {
+        let mut input_method = InputMethod::new(backend);
+        while let Some(text) = input_rx.recv().await {
             let original = text;
             // Cloud work is optional; queued originals take priority.
             let corrected = polisher
-                .polish_when_idle(original.clone(), inject_rx.is_empty())
+                .polish_when_idle(original.clone(), input_rx.is_empty())
                 .await;
-            let text = injector.compatible_text(&original, &corrected).to_string();
-            let injection_succeeded = match injector.type_segment(&text).await {
+            let text = input_method
+                .compatible_text(&original, &corrected)
+                .to_string();
+            let input_succeeded = match input_method.commit_text(&text).await {
                 Ok(()) => true,
                 Err(error) => {
-                    tracing::warn!(error = %format!("{error:#}"), "inject failed");
+                    tracing::warn!(error = %format!("{error:#}"), "text input failed");
                     notify("voice-input error", &format!("type text: {error:#}"));
                     false
                 }
             };
             if output_report_tx
-                .send(OutputReport {
-                    injection_succeeded,
-                })
+                .send(OutputReport { input_succeeded })
                 .is_err()
             {
                 break;
@@ -222,7 +222,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     State::Recording => {
                         state = State::Finalizing;
                         // Acknowledge the stop before doing any I/O. Recognition
-                        // and injection finish asynchronously after this reply.
+                        // and text input finish asynchronously after this reply.
                         let _ = reply.send(state.label().to_string());
                         let stop = finalize_session(&mut active, &mut pcm_rx);
                         match tokio::time::timeout(FINALIZE_TIMEOUT, stop).await {
@@ -270,7 +270,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
             report = output_report_rx.recv() => {
                 match report {
-                    Some(report) => output_tracker.segment_finished(report.injection_succeeded),
+                    Some(report) => output_tracker.segment_finished(report.input_succeeded),
                     None => {
                         anyhow::bail!("output worker stopped unexpectedly");
                     }
@@ -330,15 +330,15 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     if matches!(state, State::Finalizing) && active.is_some() => {
                 let terminal_outcome = match ev {
                     Some(TranscriptEvent::Stable(text)) => {
-                        // Never block the loop on a stuck injector: drop the
+                        // Never block the loop on a stuck input_method: drop the
                         // final text and say so, instead of stalling events/IPC.
                         tracing::info!(text, "final transcript");
-                        match inject_tx.try_send(text) {
+                        match input_tx.try_send(text) {
                             Ok(()) => output_tracker.segment_enqueued(),
                             Err(error) => {
-                                tracing::warn!(error = %error, "inject queue full or dead");
+                                tracing::warn!(error = %error, "text input queue full or dead");
                                 output_tracker.segment_dropped();
-                                notify("voice-input error", "dropped text: injector is stuck");
+                                notify("voice-input error", "dropped text: input_method is stuck");
                             }
                         }
                         None

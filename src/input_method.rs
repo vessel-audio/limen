@@ -1,4 +1,4 @@
-//! Text injection into the focused window.
+//! Commit text to the focused window through an input method backend.
 //!
 //! Backends:
 //! - `dotool`: types through a kernel-level virtual keyboard (/dev/uinput).
@@ -24,7 +24,7 @@ const FCITX_SERVICE: &str = "org.fcitx.Fcitx5";
 const FCITX_PATH: &str = "/org/freedesktop/Fcitx5/VoiceInput";
 const FCITX_INTERFACE: &str = "org.fcitx.Fcitx5.VoiceInput1";
 const FCITX_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
-const INJECTION_TIMEOUT: Duration = Duration::from_secs(5);
+const INPUT_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -35,18 +35,18 @@ pub enum Backend {
 }
 
 /// Stateless apart from the cross-segment spacing rule.
-pub struct Injector {
+pub struct InputMethod {
     backend: Backend,
     /// dotool stays running and reads commands on stdin; respawned on error.
     dotool_stdin: Option<ChildStdin>,
     dotool_child: Option<Child>,
     fcitx_connection: Option<zbus::Connection>,
-    /// Whether the previously injected segment ended in an ASCII
+    /// Whether the previously committed segment ended in an ASCII
     /// letter/digit — Latin words need a separating space, CJK runs don't.
     last_was_latin: bool,
 }
 
-impl Injector {
+impl InputMethod {
     pub fn new(backend: Backend) -> Self {
         Self {
             backend,
@@ -57,7 +57,7 @@ impl Injector {
         }
     }
 
-    /// Return corrected text only when this backend can inject it.
+    /// Return corrected text only when this backend can commit it.
     pub fn compatible_text<'a>(&self, original: &'a str, corrected: &'a str) -> &'a str {
         if self.backend == Backend::Dotool && !corrected.is_ascii() {
             original
@@ -66,7 +66,7 @@ impl Injector {
         }
     }
 
-    pub async fn type_segment(&mut self, text: &str) -> Result<()> {
+    pub async fn commit_text(&mut self, text: &str) -> Result<()> {
         let text = sanitize_control_characters(text);
         let text = text.trim();
         if text.is_empty() {
@@ -86,7 +86,7 @@ impl Injector {
                 if !text.is_ascii() {
                     bail!("dotool only supports ASCII; configure the fcitx5 backend for Unicode");
                 }
-                let outcome = tokio::time::timeout(INJECTION_TIMEOUT, async {
+                let outcome = tokio::time::timeout(INPUT_METHOD_TIMEOUT, async {
                     if needs_space {
                         self.dotool(&["key space"]).await?;
                     }
@@ -97,7 +97,7 @@ impl Injector {
                     Ok(result) => result?,
                     Err(_) => {
                         self.reset_dotool().await;
-                        bail!("dotool injection timed out");
+                        bail!("dotool text input timed out");
                     }
                 }
             }
@@ -221,7 +221,7 @@ async fn wtype(text: &str) -> Result<()> {
         .kill_on_drop(true)
         .spawn()
         .context("failed to spawn wtype (is it installed?)")?;
-    let status = wait_for_process(child, "wtype", INJECTION_TIMEOUT).await?;
+    let status = wait_for_process(child, "wtype", INPUT_METHOD_TIMEOUT).await?;
     if !status.success() {
         bail!("wtype exited with {status}");
     }
@@ -240,13 +240,13 @@ async fn wait_for_process(
                 .kill()
                 .await
                 .with_context(|| format!("failed to kill timed-out {program}"))?;
-            bail!("{program} injection timed out")
+            bail!("{program} text input timed out")
         }
     }
 }
 
 /// Use Fcitx unless a legacy backend is explicitly configured.
-pub fn autodetect(configured: Option<Backend>) -> Backend {
+pub fn default_backend(configured: Option<Backend>) -> Backend {
     configured.unwrap_or(Backend::Fcitx5)
 }
 
@@ -256,7 +256,9 @@ mod tests {
 
     use tokio::process::Command;
 
-    use super::{Backend, Injector, autodetect, sanitize_control_characters, wait_for_process};
+    use super::{
+        Backend, InputMethod, default_backend, sanitize_control_characters, wait_for_process,
+    };
 
     #[test]
     fn control_characters_become_spaces() {
@@ -275,20 +277,20 @@ mod tests {
 
     #[test]
     fn fcitx_is_the_default_backend() {
-        assert_eq!(autodetect(None), Backend::Fcitx5);
-        assert_eq!(autodetect(Some(Backend::Dotool)), Backend::Dotool);
+        assert_eq!(default_backend(None), Backend::Fcitx5);
+        assert_eq!(default_backend(Some(Backend::Dotool)), Backend::Dotool);
     }
 
     #[test]
     fn corrected_text_must_be_compatible_with_the_backend() {
-        let dotool = Injector::new(Backend::Dotool);
+        let dotool = InputMethod::new(Backend::Dotool);
         assert_eq!(
             dotool.compatible_text("dont stop", "Don’t stop."),
             "dont stop"
         );
         assert_eq!(dotool.compatible_text("original", "corrected"), "corrected");
 
-        let fcitx = Injector::new(Backend::Fcitx5);
+        let fcitx = InputMethod::new(Backend::Fcitx5);
         assert_eq!(
             fcitx.compatible_text("dont stop", "Don’t stop."),
             "Don’t stop."
@@ -297,15 +299,15 @@ mod tests {
 
     #[tokio::test]
     async fn dotool_rejects_unicode_before_starting_a_process() {
-        let mut injector = Injector::new(Backend::Dotool);
-        injector.last_was_latin = true;
+        let mut input_method = InputMethod::new(Backend::Dotool);
+        input_method.last_was_latin = true;
         let child = Command::new("sleep").arg("30").spawn().unwrap();
-        injector.dotool_child = Some(child);
-        let error = injector.type_segment("你好").await.unwrap_err();
+        input_method.dotool_child = Some(child);
+        let error = input_method.commit_text("你好").await.unwrap_err();
         assert!(error.to_string().contains("Unicode"));
-        assert!(injector.dotool_stdin.is_none());
+        assert!(input_method.dotool_stdin.is_none());
 
-        let mut child = injector.dotool_child.take().unwrap();
+        let mut child = input_method.dotool_child.take().unwrap();
         let was_running = child.try_wait().unwrap().is_none();
         child.kill().await.unwrap();
         assert!(was_running);

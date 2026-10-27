@@ -1,7 +1,7 @@
 //! voice-input: system-wide voice input for Wayland.
 //!
 //! Microphone audio is buffered for one take, transcribed after the stop
-//! shortcut, and committed as final text through the configured injector.
+//! shortcut, and committed as final text through the configured input method.
 
 use std::path::PathBuf;
 
@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 mod audio;
 mod config;
 mod daemon;
-mod inject;
+mod input_method;
 mod ipc;
 mod notify;
 mod polish;
@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Resident daemon: captures audio, drives the ASR session, injects text
+    /// Resident daemon: captures audio, drives the ASR session, commits text
     Daemon,
     /// Send the start/stop signal to the daemon (bind to a GNOME shortcut)
     Toggle,

@@ -10,7 +10,7 @@ Fcitx-compatible input context (Ghostty, Claude Code, GTK applications).
 - `pw-record` (PipeWire) and `notify-send` (libnotify)
 - Fcitx5 5.1.0 or newer with its D-Bus addon
 - CMake, pkg-config, a C++ compiler, and Fcitx5 development files for the
-  user-local text-injection addon
+  user-local text-input addon
 - An ASR server exposing OpenAI-compatible `POST /v1/audio/transcriptions`,
   such as [sglang-omni](https://github.com/sgl-project/sglang-omni) serving
   Qwen3-ASR
@@ -45,7 +45,7 @@ cargo build --release
    rebuild after Fcitx upgrades because the addon uses its C++ ABI.
 3. First run writes an annotated default config to
    `$XDG_CONFIG_HOME/voice-input/config.toml`; point `provider.url` at your
-   server's `/v1/audio/transcriptions` endpoint. `inject.backend` defaults to
+   server's `/v1/audio/transcriptions` endpoint. `input_method.backend` defaults to
    `fcitx5` and requires the addon from step 2.
 4. Start the daemon:
    ```bash
@@ -56,11 +56,11 @@ cargo build --release
 
 Press once to start dictation and again to stop. Nothing is typed while you are
 speaking. After the second press, the complete take is transcribed and the final
-text is injected once. The tool never presses Enter for you.
+text is committed once. The tool never presses Enter for you.
 
 ## Commands
 
-- `voice-input daemon` — resident process (capture, ASR session, injection)
+- `voice-input daemon` — resident process (capture, ASR session, text input)
 - `voice-input toggle` — start/stop dictation (for the desktop shortcut)
 - `voice-input status` — print daemon state (`idle` / `recording` / `finalizing`)
 - `voice-input probe <wav>` — transcribe a 16kHz mono wav and print the final
@@ -70,7 +70,7 @@ text is injected once. The tool never presses Enter for you.
 
 Each take is buffered in memory and sent in one OpenAI-compatible HTTP
 transcription request when recording stops. There are no incremental transcript
-or injection events during recording. A successful request produces one final
+or text input events during recording. A successful request produces one final
 transcript for the whole take.
 
 ## Conservative DeepSeek polishing
@@ -99,10 +99,10 @@ not allowed.
 A missing key produces one warning and no HTTP request. Missing keys, timeouts,
 HTTP or JSON errors, empty content, control characters, and non-`stop` finish
 reasons all select the original transcript. A correction that the selected
-backend cannot inject (for example, Unicode punctuation through `dotool`) also
-selects the original. The selected transcript gets exactly one injection
+input method cannot commit (for example, Unicode punctuation through `dotool`) also
+selects the original. The selected transcript gets exactly one commit
 attempt; failures are never retried with alternate text because a timeout could
-otherwise duplicate text. `finalizing` includes correction and injection drain,
+otherwise duplicate text. `finalizing` includes correction and text input drain,
 not just the transcription request.
 
 ## Config

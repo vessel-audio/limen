@@ -31,8 +31,8 @@ language = "auto"
 # Length of one audio push (milliseconds)
 chunk_ms = 100
 
-[inject]
-# Text injection backend:
+[input_method]
+# Input method backend:
 #   "fcitx5": direct Unicode commit through the voice-input Fcitx5 addon
 #   "dotool": kernel virtual keyboard via /dev/uinput — works on GNOME,
 #             needs your user to have write access to /dev/uinput
@@ -88,7 +88,7 @@ pub struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
     #[serde(default)]
-    pub inject: InjectConfig,
+    pub input_method: InputMethodConfig,
     #[serde(default)]
     pub polish: PolishConfig,
 }
@@ -127,8 +127,8 @@ fn default_chunk_ms() -> u32 {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InjectConfig {
-    pub backend: Option<crate::inject::Backend>,
+pub struct InputMethodConfig {
+    pub backend: Option<crate::input_method::Backend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

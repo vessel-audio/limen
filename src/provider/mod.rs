@@ -26,7 +26,7 @@ pub struct SessionConfig {
 /// Transcription events coming back from a provider.
 #[derive(Debug)]
 pub enum TranscriptEvent {
-    /// Final text of the take; handed to the injector.
+    /// Final text of the take; handed to the input method.
     Stable(String),
     /// The finalized session delivered its final text.
     Completed,
@@ -42,7 +42,7 @@ pub trait AsrProvider: Send + Sync {
 }
 
 /// One live session. Splits into an audio sink and an event source so the
-/// capture task and the injection task can run concurrently.
+/// capture task and the text input task can run concurrently.
 pub trait AsrSession: Send {
     fn split(self: Box<Self>) -> (Box<dyn AudioSink>, Box<dyn EventSource>);
 }
