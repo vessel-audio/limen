@@ -1,7 +1,8 @@
 //! voice-input: system-wide voice input for Wayland.
 //!
-//! Microphone audio -> pluggable ASR provider -> stable text typed into the
-//! focused window via wtype. See docs/plan.md (not tracked in git).
+//! Microphone audio -> pluggable ASR provider -> stable text committed into
+//! the focused input context through a configurable injector. See docs/plan.md
+//! (not tracked in git).
 
 use std::path::PathBuf;
 
@@ -13,6 +14,7 @@ mod daemon;
 mod inject;
 mod ipc;
 mod notify;
+mod polish;
 mod provider;
 
 #[derive(Parser)]
