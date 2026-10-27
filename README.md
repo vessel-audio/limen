@@ -20,9 +20,32 @@ it commits Unicode text directly instead of simulating keyboard layouts.
 
 ## Build
 
+### Cargo
+
 ```bash
 cargo build --release
 ```
+
+### Nix / flake-parts
+
+Build the default package and run the daemon from the flake:
+
+```bash
+nix build
+nix run . -- daemon
+```
+
+For development, enter the Rust and Fcitx addon build environment, run all
+flake checks, or format the project:
+
+```bash
+nix develop
+nix flake check
+nix fmt
+```
+
+The package provides `pw-record` and `notify-send` in its runtime PATH. It does
+not install the Fcitx addon; follow the separate addon setup below.
 
 ## Setup
 
@@ -39,10 +62,10 @@ cargo build --release
    fcitx5 -d -r
    busctl --user introspect org.fcitx.Fcitx5 /org/freedesktop/Fcitx5/VoiceInput
    ```
-   The introspection output must contain `CommitText`. On NixOS, run the
-   installer from a `pkgs.mkShell` containing `cmake`, `pkg-config`, `gcc`,
-   `coreutils`, and the same `fcitx5` package version as the running daemon;
-   rebuild after Fcitx upgrades because the addon uses its C++ ABI.
+   The introspection output must contain `CommitText`. On NixOS, `nix develop`
+   provides CMake, pkg-config, GCC, coreutils, and Fcitx5 development files.
+   Use the same `fcitx5` package version as the running daemon; rebuild after
+   Fcitx upgrades because the addon uses its C++ ABI.
 3. First run writes an annotated default config to
    `$XDG_CONFIG_HOME/voice-input/config.toml`; point `provider.url` at your
    server's `/v1/audio/transcriptions` endpoint. `input_method.backend` defaults to
