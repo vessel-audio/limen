@@ -14,7 +14,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use futures::stream::{SplitSink, SplitStream};
@@ -27,7 +26,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use crate::config::ProviderConfig;
 use crate::provider::{
-    AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent,
+    AsrProvider, AsrSession, AudioSink, BoxFuture, EventSource, SessionConfig, TranscriptEvent,
 };
 
 pub struct Provider {
@@ -56,34 +55,39 @@ fn transcription_url(base: &str) -> Result<String> {
     })
 }
 
-#[async_trait]
 impl AsrProvider for Provider {
-    async fn start_session(&self, cfg: &SessionConfig) -> Result<Box<dyn AsrSession>> {
-        let url = transcription_url(&self.cfg.url)?;
-        let mut request = url
-            .as_str()
-            .into_client_request()
-            .with_context(|| format!("bad realtime url: {url}"))?;
-        if let Some(key) = &cfg.api_key {
-            let value = format!("Bearer {key}").parse().context("api key header")?;
-            request.headers_mut().insert("Authorization", value);
-        }
-        let (ws, _resp) = connect_async(request)
-            .await
-            .with_context(|| format!("realtime connect failed: {url}"))?;
-        let (ws_sink, ws_stream) = ws.split();
+    fn start_session<'a>(
+        &'a self,
+        cfg: &'a SessionConfig,
+    ) -> BoxFuture<'a, Result<Box<dyn AsrSession>>> {
+        Box::pin(async move {
+            let url = transcription_url(&self.cfg.url)?;
+            let mut request = url
+                .as_str()
+                .into_client_request()
+                .with_context(|| format!("bad realtime url: {url}"))?;
+            if let Some(key) = &cfg.api_key {
+                let value = format!("Bearer {key}").parse().context("api key header")?;
+                request.headers_mut().insert("Authorization", value);
+            }
+            let (ws, _resp) = connect_async(request)
+                .await
+                .with_context(|| format!("realtime connect failed: {url}"))?;
+            let (ws_sink, ws_stream) = ws.split();
 
-        let mut sink = Sink {
-            ws: ws_sink,
-            audio_seq: 0,
-            elapsed_ms: 0.0,
-            sample_rate: cfg.sample_rate,
-        };
-        sink.send_json(&session_update(cfg)).await?;
-        Ok(Box::new(Session {
-            sink,
-            source: Source { ws: ws_stream },
-        }))
+            let mut sink = Sink {
+                ws: ws_sink,
+                audio_seq: 0,
+                elapsed_ms: 0.0,
+                sample_rate: cfg.sample_rate,
+            };
+            sink.send_json(&session_update(cfg)).await?;
+            let session: Box<dyn AsrSession> = Box::new(Session {
+                sink,
+                source: Source { ws: ws_stream },
+            });
+            Ok(session)
+        })
     }
 }
 
@@ -135,39 +139,42 @@ impl Sink {
     }
 }
 
-#[async_trait]
 impl AudioSink for Sink {
-    async fn send_audio(&mut self, pcm: &[i16]) -> Result<()> {
-        let mut bytes = Vec::with_capacity(pcm.len() * 2);
-        for s in pcm {
-            bytes.extend_from_slice(&s.to_le_bytes());
-        }
-        let event = json!({
-            "type": "input_audio_buffer.append",
-            "event_id": next_event_id(),
-            "audio": B64.encode(bytes),
-            "sglang": {"seq": self.audio_seq, "t_start_ms": self.elapsed_ms},
-        });
-        self.audio_seq += 1;
-        self.elapsed_ms += pcm.len() as f64 / self.sample_rate as f64 * 1000.0;
-        self.send_json(&event).await
+    fn send_audio<'a>(&'a mut self, pcm: &'a [i16]) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut bytes = Vec::with_capacity(pcm.len() * 2);
+            for s in pcm {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            let event = json!({
+                "type": "input_audio_buffer.append",
+                "event_id": next_event_id(),
+                "audio": B64.encode(bytes),
+                "sglang": {"seq": self.audio_seq, "t_start_ms": self.elapsed_ms},
+            });
+            self.audio_seq += 1;
+            self.elapsed_ms += pcm.len() as f64 / self.sample_rate as f64 * 1000.0;
+            self.send_json(&event).await
+        })
     }
 
-    async fn finalize(&mut self) -> Result<()> {
-        // `commit` flushes the buffered audio; `transcription.done` ends the
-        // session, after which the server emits `transcription.completed`.
-        // (`sglang.input_audio.end` exists in the schema but the transcription
-        // runtime rejects it, so don't send it.)
-        self.send_json(&json!({
-            "type": "input_audio_buffer.commit",
-            "event_id": next_event_id(),
-        }))
-        .await?;
-        self.send_json(&json!({
-            "type": "transcription.done",
-            "event_id": next_event_id(),
-        }))
-        .await
+    fn finalize(&mut self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            // `commit` flushes the buffered audio; `transcription.done` ends the
+            // session, after which the server emits `transcription.completed`.
+            // (`sglang.input_audio.end` exists in the schema but the transcription
+            // runtime rejects it, so don't send it.)
+            self.send_json(&json!({
+                "type": "input_audio_buffer.commit",
+                "event_id": next_event_id(),
+            }))
+            .await?;
+            self.send_json(&json!({
+                "type": "transcription.done",
+                "event_id": next_event_id(),
+            }))
+            .await
+        })
     }
 }
 
@@ -175,54 +182,55 @@ struct Source {
     ws: SplitStream<Ws>,
 }
 
-#[async_trait]
 impl EventSource for Source {
-    async fn next_event(&mut self) -> Option<TranscriptEvent> {
-        loop {
-            match self.ws.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let value: Value = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => return Some(TranscriptEvent::Failed(e.into())),
-                    };
-                    match value.get("type").and_then(|t| t.as_str()).unwrap_or("") {
-                        "transcription.segment" => {
-                            let text = value
-                                .get("text")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let is_final = value
-                                .get("is_final")
-                                .and_then(|f| f.as_bool())
-                                .unwrap_or(false);
-                            return Some(if is_final {
-                                TranscriptEvent::Stable(text)
-                            } else {
-                                TranscriptEvent::Provisional(text)
-                            });
-                        }
-                        "error" => {
-                            return Some(TranscriptEvent::Failed(anyhow::anyhow!(
-                                "server error event: {value}"
-                            )));
-                        }
-                        // session.created/updated, speech_started/stopped,
-                        // committed: log for the protocol notes, keep reading.
-                        "transcription.completed" => return Some(TranscriptEvent::Completed),
-                        other => {
-                            tracing::debug!(%other, %value, "realtime event");
+    fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>> {
+        Box::pin(async move {
+            loop {
+                match self.ws.next().await {
+                    Some(Ok(Message::Text(text))) => {
+                        let value: Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(e) => return Some(TranscriptEvent::Failed(e.into())),
+                        };
+                        match value.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                            "transcription.segment" => {
+                                let text = value
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let is_final = value
+                                    .get("is_final")
+                                    .and_then(|f| f.as_bool())
+                                    .unwrap_or(false);
+                                return Some(if is_final {
+                                    TranscriptEvent::Stable(text)
+                                } else {
+                                    TranscriptEvent::Provisional(text)
+                                });
+                            }
+                            "error" => {
+                                return Some(TranscriptEvent::Failed(anyhow::anyhow!(
+                                    "server error event: {value}"
+                                )));
+                            }
+                            // session.created/updated, speech_started/stopped,
+                            // committed: log for the protocol notes, keep reading.
+                            "transcription.completed" => return Some(TranscriptEvent::Completed),
+                            other => {
+                                tracing::debug!(%other, %value, "realtime event");
+                            }
                         }
                     }
-                }
-                Some(Ok(Message::Close(_))) | None => return None,
-                Some(Ok(_)) => {} // ping/pong/binary: ignore
-                Some(Err(e)) => {
-                    return Some(TranscriptEvent::Failed(
-                        anyhow::Error::new(e).context("realtime receive"),
-                    ));
+                    Some(Ok(Message::Close(_))) | None => return None,
+                    Some(Ok(_)) => {} // ping/pong/binary: ignore
+                    Some(Err(e)) => {
+                        return Some(TranscriptEvent::Failed(
+                            anyhow::Error::new(e).context("realtime receive"),
+                        ));
+                    }
                 }
             }
-        }
+        })
     }
 }

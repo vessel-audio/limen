@@ -5,16 +5,20 @@
 //! - [`openai_realtime`]: WebSocket OpenAI Realtime protocol, incremental results
 //! - [`openai_batch`]: POST /v1/audio/transcriptions, whole-take fallback
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::time::Instant;
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 use crate::config::Config;
 
 pub mod openai_batch;
 pub mod openai_realtime;
+
+/// Object-safe, cancellable future used by the provider trait objects.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Static parameters of one ASR session.
 #[derive(Debug, Clone)]
@@ -37,9 +41,11 @@ pub enum TranscriptEvent {
     Failed(anyhow::Error),
 }
 
-#[async_trait]
 pub trait AsrProvider: Send + Sync {
-    async fn start_session(&self, cfg: &SessionConfig) -> Result<Box<dyn AsrSession>>;
+    fn start_session<'a>(
+        &'a self,
+        cfg: &'a SessionConfig,
+    ) -> BoxFuture<'a, Result<Box<dyn AsrSession>>>;
 }
 
 /// One live session. Splits into an audio sink and an event source so the
@@ -48,18 +54,16 @@ pub trait AsrSession: Send {
     fn split(self: Box<Self>) -> (Box<dyn AudioSink>, Box<dyn EventSource>);
 }
 
-#[async_trait]
 pub trait AudioSink: Send {
     /// Push one chunk of 16kHz mono s16le audio.
-    async fn send_audio(&mut self, pcm: &[i16]) -> Result<()>;
+    fn send_audio<'a>(&'a mut self, pcm: &'a [i16]) -> BoxFuture<'a, Result<()>>;
     /// End of audio: flush the stable tail; the event stream then winds down.
-    async fn finalize(&mut self) -> Result<()>;
+    fn finalize(&mut self) -> BoxFuture<'_, Result<()>>;
 }
 
-#[async_trait]
 pub trait EventSource: Send {
     /// Next transcript event; `None` means the session is over.
-    async fn next_event(&mut self) -> Option<TranscriptEvent>;
+    fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
 /// Build the configured provider.
