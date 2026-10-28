@@ -67,6 +67,7 @@
                 gnumake
                 coreutils
                 dbus
+                desktop-file-utils
                 fcitx5
                 pipewire
                 libnotify
