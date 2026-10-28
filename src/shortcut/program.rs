@@ -4,8 +4,8 @@
 //! A Nix package runs as `<out>/bin/.voice-input-wrapped` inside the store,
 //! a path that changes with every upgrade and disappears after garbage
 //! collection. A profile link such as `/etc/profiles/per-user/<user>/bin/
-//! voice-input` that resolves into the same package directory keeps working
-//! across upgrades, so it is preferred.
+//! voice-input` that resolves to the running package keeps working across
+//! upgrades, so it is preferred.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -30,8 +30,7 @@ impl Program {
     }
 
     /// Find the path to run: the running executable, unless it is in the Nix
-    /// store and a `voice-input` on `PATH` outside the store resolves into
-    /// the same directory.
+    /// store and a `voice-input` on `PATH` outside the store resolves to it.
     pub(crate) fn find() -> Result<Self> {
         let current_exe = std::env::current_exe().context("cannot find the running executable")?;
         let dirs = std::env::var_os("PATH").unwrap_or_default();
@@ -65,7 +64,7 @@ impl Program {
                     // working directory of whatever runs the program later.
                     candidate.is_absolute()
                         && !candidate.starts_with(NIX_STORE)
-                        && resolved.parent() == program.parent()
+                        && *resolved == program
                 })
                 .map_or_else(
                     || Self::Unstable(program.clone()),
@@ -129,6 +128,10 @@ mod tests {
                 [
                     pair(&format!("{OUT}/voice-input"), &format!("{OUT}/voice-input")),
                     pair("result/bin/voice-input", &format!("{OUT}/voice-input")),
+                    pair(
+                        "/home/me/bin/voice-input",
+                        &format!("{OUT}/.voice-input-wrapped"),
+                    ),
                     pair(
                         "/home/me/.nix-profile/bin/voice-input",
                         "/nix/store/old-voice-input-0.0.9/bin/voice-input",
