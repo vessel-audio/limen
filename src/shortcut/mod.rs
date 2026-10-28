@@ -17,6 +17,8 @@
 //! Alt, Super.
 
 pub(crate) mod cli;
+pub(crate) mod gnome;
+pub(crate) mod program;
 
 use std::fmt;
 use std::str::FromStr;
