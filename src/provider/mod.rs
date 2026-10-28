@@ -1,20 +1,18 @@
-//! ASR provider abstraction: the transcription backend is pluggable and
-//! sglang-omni is just one implementation.
-//!
-//! Shipped providers:
-//! - [`openai_realtime`]: WebSocket OpenAI Realtime protocol, incremental results
-//! - [`openai_batch`]: POST /v1/audio/transcriptions, whole-take fallback
+//! ASR session abstraction for buffered, whole-take transcription.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::time::Instant;
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 use crate::config::Config;
 
 pub mod openai_batch;
-pub mod openai_realtime;
+
+/// Object-safe, cancellable future used by the provider trait objects.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Static parameters of one ASR session.
 #[derive(Debug, Clone)]
@@ -28,53 +26,47 @@ pub struct SessionConfig {
 /// Transcription events coming back from a provider.
 #[derive(Debug)]
 pub enum TranscriptEvent {
-    /// Unstable incremental text; display-only, never injected.
-    Provisional(String),
-    /// Finalized text; handed to the injector.
+    /// Final text of the take; handed to the input method.
     Stable(String),
-    /// The session finished (after `finalize`): all stable text delivered.
+    /// The finalized session delivered its final text.
     Completed,
     Failed(anyhow::Error),
 }
 
-#[async_trait]
+/// Factory for independent ASR sessions.
 pub trait AsrProvider: Send + Sync {
-    async fn start_session(&self, cfg: &SessionConfig) -> Result<Box<dyn AsrSession>>;
+    fn start_session<'a>(
+        &'a self,
+        cfg: &'a SessionConfig,
+    ) -> BoxFuture<'a, Result<Box<dyn AsrSession>>>;
 }
 
 /// One live session. Splits into an audio sink and an event source so the
-/// capture task and the injection task can run concurrently.
+/// capture task and the text input task can run concurrently.
 pub trait AsrSession: Send {
     fn split(self: Box<Self>) -> (Box<dyn AudioSink>, Box<dyn EventSource>);
 }
 
-#[async_trait]
+/// Buffered audio input for one ASR session.
 pub trait AudioSink: Send {
     /// Push one chunk of 16kHz mono s16le audio.
-    async fn send_audio(&mut self, pcm: &[i16]) -> Result<()>;
-    /// End of audio: flush the stable tail; the event stream then winds down.
-    async fn finalize(&mut self) -> Result<()>;
+    fn send_audio<'a>(&'a mut self, pcm: &'a [i16]) -> BoxFuture<'a, Result<()>>;
+    /// Finish the audio and start transcription; results arrive on EventSource.
+    fn finalize(&mut self) -> BoxFuture<'_, Result<()>>;
 }
 
-#[async_trait]
+/// Final transcription results and terminal status for one session.
 pub trait EventSource: Send {
     /// Next transcript event; `None` means the session is over.
-    async fn next_event(&mut self) -> Option<TranscriptEvent>;
+    fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
-/// Build the configured provider.
+/// Build the buffered transcription provider.
 pub fn from_config(cfg: &Config) -> Box<dyn AsrProvider> {
-    use crate::config::ProviderKind;
-    match cfg.provider.kind {
-        ProviderKind::OpenaiRealtime => {
-            Box::new(openai_realtime::Provider::new(cfg.provider.clone()))
-        }
-        ProviderKind::OpenaiBatch => Box::new(openai_batch::Provider::new(cfg.provider.clone())),
-    }
+    Box::new(openai_batch::Provider::new(cfg.provider.clone()))
 }
 
-/// `voice-input probe <wav>`: stream a file at real-time pace and print every
-/// event with a timestamp. Exists to document provider wire behavior.
+/// `voice-input probe <wav>`: transcribe a file and print the final event flow.
 pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
     let pcm = load_wav_16k_mono(wav)?;
     let session_cfg = SessionConfig {
@@ -87,46 +79,27 @@ pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
     let (mut sink, mut events) = session.split();
 
     let started = Instant::now();
-    let chunk_ms = cfg.audio.chunk_ms;
-    let sender = tokio::spawn(async move {
-        let chunk = (16_000 * chunk_ms / 1000) as usize;
-        for frame in pcm.chunks(chunk) {
-            sink.send_audio(frame).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(chunk_ms as u64)).await;
-        }
-        sink.finalize().await
-    });
+    let chunk = (16_000 * cfg.audio.chunk_ms / 1000) as usize;
+    for frame in pcm.chunks(chunk) {
+        sink.send_audio(frame).await?;
+    }
+    sink.finalize().await?;
 
-    let result = loop {
-        match events.next_event().await {
-            Some(ev) => {
-                let at = started.elapsed();
-                match &ev {
-                    TranscriptEvent::Provisional(t) => println!("[{at:>7.1?}] provisional: {t}"),
-                    TranscriptEvent::Stable(t) => println!("[{at:>7.1?}] STABLE: {t}"),
-                    TranscriptEvent::Completed => println!("[{at:>7.1?}] completed"),
-                    TranscriptEvent::Failed(e) => println!("[{at:>7.1?}] FAILED: {e:#}"),
-                }
-                match ev {
-                    // A failure is terminal: stop feeding audio and report it
-                    // instead of letting the sender sleep through the rest of
-                    // the wav and exiting Ok.
-                    TranscriptEvent::Failed(e) => {
-                        sender.abort();
-                        break Err(e.context("provider reported failure"));
-                    }
-                    TranscriptEvent::Completed => break Ok(()),
-                    _ => {}
-                }
+    loop {
+        let event = events.next_event().await;
+        let at = started.elapsed();
+        match event {
+            Some(TranscriptEvent::Stable(text)) => println!("[{at:>7.1?}] final: {text}"),
+            Some(TranscriptEvent::Completed) => {
+                println!("[{at:>7.1?}] completed");
+                return Ok(());
             }
-            // The provider ended the session on its own.
-            None => break Ok(()),
+            Some(TranscriptEvent::Failed(error)) => {
+                println!("[{at:>7.1?}] FAILED: {error:#}");
+                return Err(error.context("provider reported failure"));
+            }
+            None => anyhow::bail!("provider ended without Completed"),
         }
-    };
-    match sender.await {
-        Ok(send_result) => send_result.and(result),
-        Err(join_err) if join_err.is_cancelled() => result,
-        Err(join_err) => Err(join_err.into()),
     }
 }
 

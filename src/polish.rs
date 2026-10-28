@@ -1,4 +1,4 @@
-//! Conservative, provider-independent correction for stable ASR segments.
+//! Conservative, provider-independent correction for final ASR transcripts.
 
 use std::time::{Duration, Instant};
 
