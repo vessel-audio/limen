@@ -46,6 +46,17 @@ pub(crate) enum Backend {
     None,
 }
 
+/// The name used in the config file and on the command line.
+impl fmt::Display for Backend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Portal => "portal",
+            Self::GnomeKeybinding => "gnome-keybinding",
+            Self::None => "none",
+        })
+    }
+}
+
 /// Whether the hold-to-talk key went down or came up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]

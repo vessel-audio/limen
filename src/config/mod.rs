@@ -8,6 +8,7 @@
 //! | cache      | `$XDG_CACHE_HOME/voice-input/`              |
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -15,6 +16,10 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
+
+// Used by `voice-input shortcut` once it lands.
+#[allow(dead_code)]
+mod write;
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# voice-input configuration
@@ -195,13 +200,29 @@ impl Default for ShortcutConfig {
 impl Config {
     /// Load the config; write the annotated default first if none exists.
     pub fn load_or_create(paths: &Paths) -> Result<Self> {
-        if !paths.config_file.exists() {
-            write_default(&paths.config_file)?;
+        let path = &paths.config_file;
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => write::create_default(path)?,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read config: {}", path.display()));
+            }
+            // Replacing a dangling link with the default config would cut it off from
+            // whatever manages it.
+            Ok(metadata) if metadata.file_type().is_symlink() && !path.exists() => {
+                bail!("config {} is a symlink to a missing file", path.display());
+            }
+            Ok(_) => {}
         }
-        let text = fs::read_to_string(&paths.config_file)
-            .with_context(|| format!("failed to read config: {}", paths.config_file.display()))?;
+        Self::load(path)
+    }
+
+    /// Read, parse, and validate the config file; never creates it.
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read config: {}", path.display()))?;
         let cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("failed to parse config: {}", paths.config_file.display()))?;
+            .with_context(|| format!("failed to parse config: {}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -269,19 +290,6 @@ impl Config {
         let var = self.provider.api_key_env.as_ref()?;
         std::env::var(var).ok().filter(|v| !v.is_empty())
     }
-}
-
-/// Atomic write: temp file + rename, so a crash never leaves a truncated config.
-fn write_default(path: &Path) -> Result<()> {
-    let dir = path
-        .parent()
-        .context("config path has no parent directory")?;
-    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, DEFAULT_CONFIG)?;
-    fs::rename(&tmp, path)?;
-    eprintln!("wrote default config: {}", path.display());
-    Ok(())
 }
 
 #[cfg(test)]
