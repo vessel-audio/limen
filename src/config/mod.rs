@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
-// Used by `voice-input shortcut` once it lands.
-#[allow(dead_code)]
 mod write;
+
+pub(crate) use write::{check_writable, snippet, update_shortcut};
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# voice-input configuration

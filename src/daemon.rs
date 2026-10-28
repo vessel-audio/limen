@@ -13,6 +13,7 @@
 //! even while pw-record is being reaped or a take is being finalized.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -54,6 +55,8 @@ struct DictationActor {
     start_caller: Option<oneshot::Sender<String>>,
     /// Shows a desktop notification: `(summary, body)`.
     notify: fn(&str, &str),
+    /// Read again when a client asks to apply the `[shortcut]` section.
+    config_file: PathBuf,
 }
 
 /// Whether the message being handled came from an IPC caller awaiting a reply.
@@ -70,7 +73,12 @@ struct Mailboxes {
 }
 
 impl DictationActor {
-    fn new(session: SessionHandle, input_tx: mpsc::Sender<String>, notify: fn(&str, &str)) -> Self {
+    fn new(
+        session: SessionHandle,
+        input_tx: mpsc::Sender<String>,
+        notify: fn(&str, &str),
+        config_file: PathBuf,
+    ) -> Self {
         Self {
             dictation: Dictation::default(),
             session,
@@ -81,6 +89,7 @@ impl DictationActor {
             hold_pressed: None,
             start_caller: None,
             notify,
+            config_file,
         }
     }
 
@@ -190,6 +199,16 @@ impl DictationActor {
                             let _ = reply.send(ipc::v1::Reply::Ok);
                             self.hold(edge);
                         }
+                        ipc::Command::ShortcutRebind(reply) => {
+                            // The whole file must be valid, though only its
+                            // [shortcut] section applies without a restart.
+                            let _ = reply.send(match Config::load(&self.config_file) {
+                                Ok(_) => ipc::v1::Reply::Ok,
+                                Err(error) => ipc::v1::Reply::Error {
+                                    message: format!("{error:#}"),
+                                },
+                            });
+                        }
                     }
                 }
 
@@ -277,6 +296,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
         SessionHandle::spawn(cfg, session_report_tx),
         input_tx,
         notify,
+        paths.config_file.clone(),
     );
 
     notify("voice-input", "daemon started");
@@ -293,6 +313,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use tokio::sync::{mpsc, oneshot};
@@ -319,7 +340,12 @@ mod tests {
         let (mailbox, session) = mpsc::unbounded_channel();
         let (input_tx, input) = mpsc::channel(16);
         Harness {
-            actor: DictationActor::new(SessionHandle::from_mailbox(mailbox), input_tx, |_, _| {}),
+            actor: DictationActor::new(
+                SessionHandle::from_mailbox(mailbox),
+                input_tx,
+                |_, _| {},
+                PathBuf::from("/nonexistent/config.toml"),
+            ),
             session,
             _input: input,
         }

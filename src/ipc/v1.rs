@@ -5,6 +5,7 @@
 //! |------------------------------------------|-----------------------------------------|
 //! | `{"v":1,"type":"hold","edge":"press"}`   | `{"type":"ok"}`, before the take starts |
 //! | `{"v":1,"type":"hold","edge":"release"}` | `{"type":"ok"}`                         |
+//! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` if the config is valid  |
 //! | anything that fails                      | `{"type":"error","message":"..."}`      |
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,8 @@ pub(crate) const VERSION: u64 = 1;
 pub(crate) enum Request {
     /// The hold-to-talk key went down or came up.
     Hold { edge: HoldEdge },
+    /// Apply the `[shortcut]` section of the config file again.
+    ShortcutRebind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +67,7 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Repl
             let (reply, answer) = oneshot::channel();
             let command = match request {
                 Request::Hold { edge } => Command::Hold(edge, reply),
+                Request::ShortcutRebind => Command::ShortcutRebind(reply),
             };
             super::forward(commands, command, answer)
                 .await

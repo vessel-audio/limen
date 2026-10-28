@@ -4,6 +4,7 @@
 //! shortcut, and committed as final text through the configured input method.
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
@@ -40,6 +41,11 @@ enum Command {
     Toggle,
     /// Query daemon state
     Status,
+    /// Show, set up, or change the global shortcuts
+    Shortcut {
+        #[command(subcommand)]
+        command: shortcut::cli::ShortcutCommand,
+    },
     /// Press or release the hold-to-talk key (for compositor key-release bindings)
     Hold {
         #[arg(value_enum)]
@@ -53,7 +59,7 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -63,25 +69,32 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let paths = config::Paths::discover()?;
 
-    match cli.command {
+    let code = match cli.command {
         Command::Daemon => {
             let cfg = config::Config::load_or_create(&paths)?;
-            daemon::run(paths, cfg).await
+            daemon::run(paths, cfg).await?;
+            ExitCode::SUCCESS
         }
         Command::Toggle => {
             let reply = ipc::send(&paths, "toggle").await?;
             println!("{reply}");
-            Ok(())
+            ExitCode::SUCCESS
         }
         Command::Status => {
             let reply = ipc::send(&paths, "status").await?;
             println!("{reply}");
-            Ok(())
+            ExitCode::SUCCESS
         }
-        Command::Hold { edge } => shortcut::cli::hold(&paths, edge).await,
+        Command::Shortcut { command } => shortcut::cli::run(&paths, command).await?,
+        Command::Hold { edge } => {
+            shortcut::cli::hold(&paths, edge).await?;
+            ExitCode::SUCCESS
+        }
         Command::Probe { wav } => {
             let cfg = config::Config::load_or_create(&paths)?;
-            provider::probe(&cfg, &wav).await
+            provider::probe(&cfg, &wav).await?;
+            ExitCode::SUCCESS
         }
-    }
+    };
+    Ok(code)
 }

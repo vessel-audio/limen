@@ -8,13 +8,14 @@
 //! `voice-input toggle` is adopted instead of adding a second one, and
 //! clearing only disables it.
 //!
-//! Everything here is pure: the I/O lives in `gsettings`.
+//! Everything here is pure; the I/O lives in [`gsettings`].
 
+pub(crate) mod gsettings;
 mod gvariant;
 mod shell;
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::Shortcut;
 
@@ -71,6 +72,15 @@ pub(crate) fn managed<'a>(list: &[String], entries: &'a [CustomKeybinding]) -> M
             .find(|entry| entry.runs_toggle())
             .map_or(Managed::Absent, Managed::Adopted),
     }
+}
+
+/// The program `command` runs, if it parses.
+pub(crate) fn program_of(command: &str) -> Option<PathBuf> {
+    shell::parse_argv(command)
+        .ok()?
+        .into_iter()
+        .next()
+        .map(PathBuf::from)
 }
 
 /// The command GNOME runs: `program toggle`, quoted for GNOME.
@@ -215,11 +225,12 @@ mod tests {
         managed, setup, toggle_command,
     };
 
-    const PREFIX: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/";
+    pub(super) const PREFIX: &str =
+        "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/";
 
     /// The two entries WeChat wrote on the development machine, as
     /// `gsettings get` prints their command.
-    fn wechat() -> Vec<CustomKeybinding> {
+    pub(super) fn wechat() -> Vec<CustomKeybinding> {
         let command = |action: &str| {
             gvariant::parse_string(&format!(
                 r#""/bin/sh -c ''\\''/usr/bin/gdbus'\\'' call --session --dest '\\''com.tencent.wechat.wayland_global_shortcut_d3c81e34e639ba5c_5329_0'\\'' --method '\\''com.tencent.wechat.GlobalShortcuts.Activate'\\'' \"$1\" \"$XDG_ACTIVATION_TOKEN\"' fallback '{action}'""#

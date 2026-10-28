@@ -13,6 +13,7 @@
 mod legacy;
 pub(crate) mod v1;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -35,7 +36,13 @@ pub enum Command {
     Toggle(oneshot::Sender<String>),
     Status(oneshot::Sender<String>),
     Hold(HoldEdge, oneshot::Sender<v1::Reply>),
+    ShortcutRebind(oneshot::Sender<v1::Reply>),
 }
+
+/// The daemon does not listen on its socket.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot connect to {}; is `voice-input daemon` running?", .0.display())]
+pub(crate) struct NotRunning(PathBuf, #[source] std::io::Error);
 
 pub fn bind(paths: &Paths) -> Result<UnixListener> {
     if paths.socket.exists() {
@@ -144,12 +151,9 @@ async fn forward<T>(
 
 /// Client side of the legacy protocol (`toggle` / `status` subcommands).
 pub async fn send(paths: &Paths, request: &str) -> Result<String> {
-    let stream = UnixStream::connect(&paths.socket).await.with_context(|| {
-        format!(
-            "cannot connect to {}; is `voice-input daemon` running?",
-            paths.socket.display()
-        )
-    })?;
+    let stream = UnixStream::connect(&paths.socket)
+        .await
+        .map_err(|error| NotRunning(paths.socket.clone(), error))?;
     let (read, mut write) = stream.into_split();
     write.write_all(request.as_bytes()).await?;
     write.write_all(b"\n").await?;
@@ -188,7 +192,7 @@ mod tests {
                     Command::Status(reply) => {
                         let _ = reply.send("idle".to_string());
                     }
-                    Command::Hold(_, reply) => {
+                    Command::Hold(_, reply) | Command::ShortcutRebind(reply) => {
                         let _ = reply.send(v1::Reply::Ok);
                     }
                 }

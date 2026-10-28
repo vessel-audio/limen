@@ -29,6 +29,14 @@ impl Program {
         }
     }
 
+    /// Whether `path` survives upgrades.
+    pub(crate) fn of(path: PathBuf) -> Self {
+        match path.starts_with(NIX_STORE) {
+            true => Self::Unstable(path),
+            false => Self::Stable(path),
+        }
+    }
+
     /// Find the path to run: the running executable, unless it is in the Nix
     /// store and a `voice-input` on `PATH` outside the store resolves to it.
     pub(crate) fn find() -> Result<Self> {
