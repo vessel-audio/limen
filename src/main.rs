@@ -17,6 +17,9 @@ mod notify;
 mod polish;
 mod provider;
 mod session;
+// Not every shortcut type is wired into the config, IPC, and CLI yet.
+#[allow(dead_code)]
+mod shortcut;
 
 #[derive(Parser)]
 #[command(
