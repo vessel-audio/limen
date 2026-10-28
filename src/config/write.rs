@@ -71,6 +71,7 @@ pub(crate) fn update_shortcut(
     };
     let current: Config = toml::from_str(&text)
         .with_context(|| format!("failed to parse config: {}", path.display()))?;
+    current.validate()?;
     let shortcut = change(current.shortcut);
     if shortcut == current.shortcut {
         return Ok(shortcut);
@@ -207,14 +208,23 @@ pub(super) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<
         .parent()
         .context("config path has no parent directory")?;
     let (temp_path, mut temp) = create_temp(path)?;
-    let written = (|| {
+    let written = (|| -> Result<()> {
         if let Some(mode) = mode {
             temp.set_permissions(Permissions::from_mode(mode))?;
         }
         temp.write_all(contents.as_bytes())?;
         temp.sync_all()?;
+        // A symlink that appeared since the caller checked would be replaced by
+        // the rename: look once more, as late as possible.
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Refusal::Symlink(path.to_path_buf()).into());
+            }
+            Ok(_) | Err(_) => {}
+        }
         fs::rename(&temp_path, path)?;
-        File::open(dir)?.sync_all()
+        File::open(dir)?.sync_all()?;
+        Ok(())
     })();
     written
         .inspect_err(|_| {
@@ -587,5 +597,18 @@ model = "test-model"
         super::create_default(&path).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), LEGACY);
+    }
+
+    #[test]
+    fn an_invalid_config_is_reported_even_when_nothing_changes() {
+        let dir = scratch("invalid-unchanged");
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            DEFAULT_CONFIG.replace("chunk_ms = 100", "chunk_ms = 0"),
+        )
+        .unwrap();
+
+        assert!(update_shortcut(&path, |current| current).is_err());
     }
 }
