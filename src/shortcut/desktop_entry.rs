@@ -53,19 +53,27 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
             fs::create_dir_all(&dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
             let path = dir.join(&name);
-            // Another process may have created it meanwhile: never replace it.
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    file.write_all(entry_for(program).as_bytes())
-                        .and_then(|()| file.sync_all())
-                        .with_context(|| format!("failed to write {}", path.display()))?;
-                    Ok(Install::Installed(path))
-                }
+            // Written in full under a temporary name, then linked into place: the
+            // entry never shows half written, and one that another process
+            // created meanwhile is never replaced.
+            let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+            let linked = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)
+                .and_then(|mut file| {
+                    file.write_all(entry_for(program).as_bytes())?;
+                    file.sync_all()
+                })
+                .and_then(|()| fs::hard_link(&temp, &path));
+            let _ = fs::remove_file(&temp);
+            match linked {
+                Ok(()) => Ok(Install::Installed(path)),
                 Err(error) if error.kind() == ErrorKind::AlreadyExists => {
                     Ok(Install::Present(path))
                 }
                 Err(error) => {
-                    Err(error).with_context(|| format!("failed to create {}", path.display()))
+                    Err(error).with_context(|| format!("failed to write {}", path.display()))
                 }
             }
         }
