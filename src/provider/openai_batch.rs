@@ -111,23 +111,15 @@ impl AudioSink for Sink {
 
 struct Source {
     rx: mpsc::Receiver<TranscriptEvent>,
+    /// Finishes right after sending its terminal event; aborted on drop.
     worker: Option<JoinHandle<()>>,
 }
 
 impl EventSource for Source {
     fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>> {
-        Box::pin(async move {
-            let event = self.rx.recv().await;
-            if matches!(
-                event,
-                None | Some(TranscriptEvent::Completed | TranscriptEvent::Failed(_))
-            ) && let Some(worker) = self.worker.take()
-            {
-                worker.abort();
-                let _ = worker.await;
-            }
-            event
-        })
+        // Nothing may be awaited after `recv` returns: a cancelled call would
+        // drop the event it already took off the channel.
+        Box::pin(self.rx.recv())
     }
 }
 
@@ -224,6 +216,7 @@ fn encode_wav(pcm: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::task::Poll;
     use std::time::Duration;
 
     use serde_json::json;
@@ -454,5 +447,34 @@ mod tests {
             .await
             .expect("worker was not cancelled")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_next_event_does_not_lose_the_terminal_event() {
+        let (events, rx) = tokio::sync::mpsc::channel(1);
+        let worker = tokio::spawn(std::future::pending::<()>());
+        let mut source = Source {
+            rx,
+            worker: Some(worker),
+        };
+        events.send(TranscriptEvent::Completed).await.unwrap();
+        drop(events);
+
+        // The session actor polls `next_event` inside `select!`, which drops
+        // the future whenever a command wins the race.
+        let mut next = source.next_event();
+        let first = std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await;
+        drop(next);
+        let delivered = match first {
+            Poll::Ready(event) => event,
+            Poll::Pending => tokio::time::timeout(TEST_TIMEOUT, source.next_event())
+                .await
+                .unwrap(),
+        };
+
+        match delivered {
+            Some(TranscriptEvent::Completed) => {}
+            other => panic!("terminal event lost after cancellation, got {other:?}"),
+        }
     }
 }
