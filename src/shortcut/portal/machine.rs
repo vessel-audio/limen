@@ -95,6 +95,8 @@ pub(super) struct Machine {
     notified: Option<String>,
     /// A rebind waits for its state to be published.
     rebinding: bool,
+    /// The running generation reported the hold key down, not up yet.
+    holding: bool,
 }
 
 impl Default for Machine {
@@ -108,6 +110,7 @@ impl Default for Machine {
             retry: FIRST_RETRY,
             notified: None,
             rebinding: false,
+            holding: false,
         }
     }
 }
@@ -144,7 +147,7 @@ impl Machine {
                             generation,
                             then: Then::Start,
                         };
-                        vec![Output::Stop(generation)]
+                        self.stop(generation)
                     }
                     Stage::Stopping { generation, .. } => {
                         self.stage = Stage::Stopping {
@@ -181,11 +184,12 @@ impl Machine {
                 Stage::Running {
                     generation: running,
                     ..
-                } if running == generation => {
-                    let mut outputs = self.failed("the portal connection ended".to_string());
-                    outputs.extend(self.wait());
-                    outputs
-                }
+                } if running == generation => [
+                    self.release(),
+                    self.failed("the portal connection ended".to_string()),
+                    self.wait(),
+                ]
+                .concat(),
                 Stage::Running { .. } | Stage::Stopping { .. } | Stage::Idle | Stage::Waiting => {
                     Vec::new()
                 }
@@ -228,17 +232,18 @@ impl Machine {
                     then: Then::Rest,
                 };
                 self.status.session = SessionState::Cancelled;
-                vec![
-                    Output::Stop(generation),
-                    Output::Publish(self.status.clone()),
+                [
+                    self.stop(generation),
+                    vec![Output::Publish(self.status.clone())],
                 ]
+                .concat()
             }
             (_, Report::Failed(error)) => {
                 self.stage = Stage::Stopping {
                     generation,
                     then: Then::Retry,
                 };
-                [vec![Output::Stop(generation)], self.failed(error)].concat()
+                [self.stop(generation), self.failed(error)].concat()
             }
             // The session went with the portal: set up again at once.
             (_, Report::PortalRestarted) => {
@@ -246,15 +251,19 @@ impl Machine {
                     generation,
                     then: Then::Start,
                 };
-                vec![Output::Stop(generation)]
+                self.stop(generation)
             }
             (Step::Bound, Report::Activated(id)) => match Action::from_id(&id) {
                 Some(Action::Toggle) => vec![Output::Activate(Activation::Toggle)],
-                Some(Action::Hold) => vec![Output::Activate(Activation::Hold(HoldEdge::Press))],
+                Some(Action::Hold) => {
+                    self.holding = true;
+                    vec![Output::Activate(Activation::Hold(HoldEdge::Press))]
+                }
                 None => Vec::new(),
             },
             (Step::Bound, Report::Deactivated(id)) => match Action::from_id(&id) {
                 Some(Action::Hold) => {
+                    self.holding = false;
                     vec![Output::Activate(Activation::Hold(HoldEdge::Release))]
                 }
                 Some(Action::Toggle) | None => Vec::new(),
@@ -274,6 +283,19 @@ impl Machine {
                 | Report::Deactivated(_)
                 | Report::Changed(_),
             ) => Vec::new(),
+        }
+    }
+
+    /// Stop `generation`, releasing the hold key it left down: only that
+    /// generation could have reported its release.
+    fn stop(&mut self, generation: Generation) -> Vec<Output> {
+        [self.release(), vec![Output::Stop(generation)]].concat()
+    }
+
+    fn release(&mut self) -> Vec<Output> {
+        match std::mem::take(&mut self.holding) {
+            true => vec![Output::Activate(Activation::Hold(HoldEdge::Release))],
+            false => Vec::new(),
         }
     }
 

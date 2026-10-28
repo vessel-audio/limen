@@ -380,3 +380,33 @@ fn a_task_that_dies_counts_as_a_failure() {
         ]
     );
 }
+
+#[test]
+fn a_hold_left_down_is_released_when_its_generation_stops() {
+    let press = Input::Report(G1, Report::Activated("hold".to_string()));
+    let release = Output::Activate(Activation::Hold(HoldEdge::Release));
+
+    let mut restarted = bound_machine();
+    restarted.handle(press.clone());
+    assert_eq!(
+        restarted.handle(Input::Report(G1, Report::PortalRestarted)),
+        [release.clone(), Output::Stop(G1)]
+    );
+
+    let mut rebound = bound_machine();
+    rebound.handle(press.clone());
+    assert_eq!(
+        rebound.handle(Input::Rebind(portal())),
+        [release.clone(), Output::Stop(G1)]
+    );
+
+    let mut died = bound_machine();
+    died.handle(press.clone());
+    assert_eq!(died.handle(Input::Ended(G1)).first(), Some(&release));
+
+    // Released before: nothing left to release.
+    let mut let_go = bound_machine();
+    let_go.handle(press);
+    let_go.handle(Input::Report(G1, Report::Deactivated("hold".to_string())));
+    assert_eq!(let_go.handle(Input::Rebind(portal())), [Output::Stop(G1)]);
+}
