@@ -364,11 +364,13 @@ mod tests {
     use tokio::time::Instant;
 
     use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
+    use crate::config::ShortcutConfig;
     use crate::dictation::{Event, InputOutcome, MAX_HOLD};
     use crate::ipc::{self, v1::Reply};
     use crate::session::{SessionCommand, SessionHandle};
-    use crate::shortcut::portal::ShortcutHandle;
-    use crate::shortcut::{Activation, HoldEdge};
+    use crate::shortcut::portal::{Bus, ShortcutHandle};
+    use crate::shortcut::status::{PerAction, ShortcutStatus};
+    use crate::shortcut::{Activation, Backend, HoldEdge};
 
     const TAP: Duration = Duration::from_millis(100);
     const KEPT: Duration = Duration::from_secs(1);
@@ -720,5 +722,76 @@ mod tests {
             .send(Activation::Hold(HoldEdge::Release))
             .unwrap();
         assert_eq!(harness.session.recv().await, Some(SessionCommand::Stop));
+    }
+
+    #[tokio::test]
+    async fn shortcut_rebind_applies_only_a_valid_config() {
+        let dir = std::env::temp_dir().join(format!("voice-input-rebind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_file = dir.join("config.toml");
+        let base =
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n";
+        let (activations, _activations) = mpsc::unbounded_channel();
+        let shortcuts = ShortcutHandle::spawn(
+            ShortcutConfig::default(),
+            Bus::Session,
+            activations,
+            |_, _| {},
+        );
+        let before = shortcuts.status();
+        let (mailbox, _session) = mpsc::unbounded_channel();
+        let (input_tx, _input) = mpsc::channel(16);
+        let actor = DictationActor::new(
+            SessionHandle::from_mailbox(mailbox),
+            input_tx,
+            |_, _| {},
+            config_file.clone(),
+            shortcuts,
+        );
+        let senders = spawn_loop(actor);
+        let rebind = || async {
+            let (reply, answer) = oneshot::channel();
+            senders
+                .commands
+                .send(ipc::Command::ShortcutRebind(reply))
+                .await
+                .unwrap();
+            answer.await.unwrap()
+        };
+        let status = || async {
+            let (reply, answer) = oneshot::channel();
+            senders
+                .commands
+                .send(ipc::Command::ShortcutStatus(reply))
+                .await
+                .unwrap();
+            answer.await.unwrap()
+        };
+
+        std::fs::write(&config_file, format!("{base}[audio]\nchunk_ms = 0\n")).unwrap();
+        assert!(matches!(
+            rebind().await,
+            Reply::Error { message } if message.contains("audio.chunk_ms")
+        ));
+        assert_eq!(status().await, Reply::ShortcutStatus(before.clone()));
+
+        std::fs::write(
+            &config_file,
+            format!("{base}[shortcut]\nbackend = \"gnome-keybinding\"\ntoggle = \"Ctrl+Alt+V\"\n"),
+        )
+        .unwrap();
+        assert_eq!(rebind().await, Reply::Ok);
+        assert_eq!(
+            status().await,
+            Reply::ShortcutStatus(ShortcutStatus {
+                backend: Backend::GnomeKeybinding,
+                preferred: PerAction {
+                    toggle: "Ctrl+Alt+V".parse().unwrap(),
+                    hold: before.preferred.hold,
+                },
+                ..before
+            })
+        );
     }
 }
