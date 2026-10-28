@@ -112,7 +112,7 @@ pub(super) async fn run(
             link
         }
         Err(error) => {
-            report(Report::Failed(format!("{error:#}")));
+            report(Report::Failed(describe(&error)));
             while let Some(Command::Call(_)) = commands.recv().await {}
             return;
         }
@@ -133,7 +133,7 @@ pub(super) async fn run(
                     match outcome {
                         Ok(Some(done)) => report(done),
                         Ok(None) => {}
-                        Err(error) => report(Report::Failed(format!("{error:#}"))),
+                        Err(error) => report(Report::Failed(describe(&error))),
                     }
                 }
                 Some(Command::Stop) | None => return link.close().await,
@@ -170,6 +170,13 @@ pub(super) async fn run(
             }
         }
     }
+}
+
+/// `error` and its causes, each once: zbus repeats a D-Bus error as its cause.
+fn describe(error: &anyhow::Error) -> String {
+    let mut causes: Vec<String> = error.chain().map(ToString::to_string).collect();
+    causes.dedup();
+    causes.join(": ")
 }
 
 /// The next message of `stream`; never, without one.
@@ -401,7 +408,7 @@ impl Link {
                         if session.as_str() != expected {
                             match self.closed_signal(session.as_str()).await {
                                 Ok(closed) => self.closed = Some(closed),
-                                Err(error) => return Report::Failed(format!("{error:#}")),
+                                Err(error) => return Report::Failed(describe(&error)),
                             }
                         }
                         self.session = Some(session);
