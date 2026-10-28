@@ -681,3 +681,39 @@ async fn a_portal_that_exits_with_its_dialog_open_is_asked_again() {
     logs(&log, "BindShortcuts ", 2).await;
     client.reaches(SessionState::Bound).await;
 }
+
+#[tokio::test]
+async fn a_bus_that_never_answers_does_not_hold_up_a_rebind() {
+    let dir = std::env::temp_dir().join(format!("voice-input-portal-mute-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket = dir.join("bus");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    // Accept connections and keep them open without a word.
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let (activations_tx, _activations) = mpsc::unbounded_channel();
+    let portal = ShortcutConfig {
+        backend: Backend::Portal,
+        ..ShortcutConfig::default()
+    };
+    let handle = ShortcutHandle::spawn(
+        portal,
+        Bus::Address(format!("unix:path={}", socket.display())),
+        activations_tx,
+        |_, _| {},
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let none = ShortcutConfig::default();
+    tokio::time::timeout(Duration::from_secs(1), handle.rebind(none))
+        .await
+        .expect("the rebind waited for the bus")
+        .unwrap();
+    assert_eq!(handle.status().session, SessionState::Disabled);
+    let _ = std::fs::remove_dir_all(&dir);
+}

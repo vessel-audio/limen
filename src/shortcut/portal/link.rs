@@ -79,6 +79,12 @@ impl Link {
     /// no change in between goes unnoticed, and subscribe to the shortcut
     /// signals before any session exists.
     pub(super) async fn open(bus: &Bus) -> Result<Self> {
+        tokio::time::timeout(CALL_TIMEOUT, Self::subscribed(bus))
+            .await
+            .context("the session bus did not answer")?
+    }
+
+    async fn subscribed(bus: &Bus) -> Result<Self> {
         let connection = bus
             .connect()
             .await

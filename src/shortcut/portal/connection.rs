@@ -86,7 +86,16 @@ pub(super) async fn run(
     let report = |report| {
         let _ = reports.send((generation, report));
     };
-    let mut link = match Link::open(&bus).await {
+    // A rebind must not wait for a bus that is slow to answer.
+    let opened = tokio::select! {
+        opened = Link::open(&bus) => opened,
+        command = commands.recv() => match command {
+            Some(Command::Stop) | None => return,
+            // The actor makes its first call once connected.
+            Some(Command::Call(call)) => Err(anyhow::anyhow!("{call:?} before connecting")),
+        },
+    };
+    let mut link = match opened {
         Ok(link) => {
             report(Report::Connected);
             link
