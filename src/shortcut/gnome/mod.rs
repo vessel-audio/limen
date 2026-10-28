@@ -253,7 +253,7 @@ mod tests {
         ]
     }
 
-    fn paths(entries: &[CustomKeybinding]) -> Vec<String> {
+    pub(super) fn paths(entries: &[CustomKeybinding]) -> Vec<String> {
         entries.iter().map(|entry| entry.path.clone()).collect()
     }
 

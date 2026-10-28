@@ -173,11 +173,10 @@ pub(crate) async fn apply_setup(
     dconf
         .set(&schema, "binding", &gvariant::string(&setup.binding))
         .await?;
+    // Also for an entry already listed: it must still be listed now.
+    check_list(dconf, &read.list).await?;
     match &setup.list {
-        Some(list) => {
-            check_list(dconf, &read.list).await?;
-            dconf.set(MEDIA_KEYS, LIST, &gvariant::strings(list)).await
-        }
+        Some(list) => dconf.set(MEDIA_KEYS, LIST, &gvariant::strings(list)).await,
         None => Ok(()),
     }
 }
@@ -238,7 +237,7 @@ mod tests {
         CUSTOM_KEYBINDING, Dconf, KEYBINDING_SCHEMAS, Keybindings, LIST, MEDIA_KEYS, apply_clear,
         apply_setup, find_conflicts, read,
     };
-    use crate::shortcut::gnome::tests::{PREFIX, wechat};
+    use crate::shortcut::gnome::tests::{PREFIX, paths, wechat};
     use crate::shortcut::gnome::{
         Clear, Conflict, CustomKeybinding, OUR_PATH, clear, gvariant, setup,
     };
@@ -441,11 +440,14 @@ mod tests {
         );
         apply_clear(&dconf, &before, &plan).await.unwrap();
         assert_eq!(
-            dconf.state().await.entries,
-            [CustomKeybinding {
-                binding: String::new(),
-                ..adopted
-            }]
+            dconf.state().await,
+            Keybindings {
+                list: vec![adopted.path.clone()],
+                entries: vec![CustomKeybinding {
+                    binding: String::new(),
+                    ..adopted
+                }],
+            }
         );
     }
 
@@ -464,5 +466,15 @@ mod tests {
                 vec!["org.gnome.mutter.wayland.keybindings"],
             )
         );
+    }
+
+    #[tokio::test]
+    async fn updating_an_entry_removed_meanwhile_fails() {
+        let dconf = FakeDconf {
+            // Our entry disappears from the list while its fields are written.
+            changes: BTreeMap::from([(3, gvariant::strings(&paths(&wechat())))]),
+            ..FakeDconf::with(&[wechat(), vec![own("<Super>x")]].concat())
+        };
+        assert!(set_up(&dconf).await.is_err());
     }
 }
