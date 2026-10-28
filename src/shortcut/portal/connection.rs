@@ -128,7 +128,7 @@ pub(super) async fn run(
                 Some(Command::Stop) | None => return link.close().await,
             },
             message = next(link.pending.as_mut().map(|pending| &mut pending.responses)) => {
-                report(link.response(message));
+                report(link.response(message).await);
             }
             message = next(link.signals.as_mut()) => match message {
                 Some(Ok(message)) => {
@@ -176,16 +176,19 @@ struct Pending {
     responses: MessageStream,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Request {
-    CreateSession,
+    /// `session`: the path the session will have.
+    CreateSession {
+        session: String,
+    },
     BindShortcuts,
 }
 
 impl Request {
-    fn method(self) -> &'static str {
+    fn method(&self) -> &'static str {
         match self {
-            Self::CreateSession => "CreateSession",
+            Self::CreateSession { .. } => "CreateSession",
             Self::BindShortcuts => "BindShortcuts",
         }
     }
@@ -274,13 +277,19 @@ impl Link {
             }
             Call::CreateSession => {
                 let session_token = self.token();
-                self.request(Request::CreateSession, |proxy, token| async move {
-                    let options = HashMap::from([
-                        ("handle_token", Variant::from(token)),
-                        ("session_handle_token", Variant::from(session_token)),
-                    ]);
-                    proxy.call("CreateSession", &(options,)).await
-                })
+                let session = protocol::session_path(&self.unique_name, &session_token);
+                // Like a response, a session closed right away must not be missed.
+                self.closed = Some(self.closed_signal(&session).await?);
+                self.request(
+                    Request::CreateSession { session },
+                    |proxy, token| async move {
+                        let options = HashMap::from([
+                            ("handle_token", Variant::from(token)),
+                            ("session_handle_token", Variant::from(session_token)),
+                        ]);
+                        proxy.call("CreateSession", &(options,)).await
+                    },
+                )
                 .await?;
                 Ok(None)
             }
@@ -332,6 +341,19 @@ impl Link {
         Ok(())
     }
 
+    async fn closed_signal(&self, path: &str) -> Result<MessageStream> {
+        subscribe(
+            &self.connection,
+            MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(PORTAL)
+                .interface(SESSION)
+                .member("Closed")
+                .path(path),
+        )
+        .await
+    }
+
     async fn responses(&self, path: &str) -> Result<MessageStream> {
         subscribe(
             &self.connection,
@@ -346,7 +368,7 @@ impl Link {
     }
 
     /// What the response to the pending request says.
-    fn response(&mut self, message: Option<zbus::Result<Message>>) -> Report {
+    async fn response(&mut self, message: Option<zbus::Result<Message>>) -> Report {
         let Some(pending) = self.pending.take() else {
             return Report::Failed("a response without a request".to_string());
         };
@@ -361,14 +383,23 @@ impl Link {
             ));
         };
         match pending.kind {
-            Request::CreateSession => match protocol::created_session(code, &results) {
-                Outcome::Done(session) => {
-                    self.session = Some(session);
-                    Report::SessionCreated
+            Request::CreateSession { session: expected } => {
+                match protocol::created_session(code, &results) {
+                    Outcome::Done(session) => {
+                        // A portal older than the path convention put it elsewhere.
+                        if session.as_str() != expected {
+                            match self.closed_signal(session.as_str()).await {
+                                Ok(closed) => self.closed = Some(closed),
+                                Err(error) => return Report::Failed(format!("{error:#}")),
+                            }
+                        }
+                        self.session = Some(session);
+                        Report::SessionCreated
+                    }
+                    Outcome::Cancelled => Report::Cancelled,
+                    Outcome::Failed(error) => Report::Failed(error),
                 }
-                Outcome::Cancelled => Report::Cancelled,
-                Outcome::Failed(error) => Report::Failed(error),
-            },
+            }
             Request::BindShortcuts => match protocol::bound(code, &results) {
                 Outcome::Done(triggers) => Report::Bound(triggers),
                 Outcome::Cancelled => Report::Cancelled,
