@@ -47,7 +47,7 @@ struct DictationActor {
     /// When the running hold recording started; how long it lasted decides
     /// whether its release keeps the take.
     hold_started: Option<Instant>,
-    /// When the hold key went down, to log how long it was held.
+    /// When the hold key went down; `Some` until it is released.
     hold_pressed: Option<Instant>,
     /// IPC caller of a shortcut start, answered once the session actor reports
     /// whether the take started.
@@ -154,23 +154,22 @@ impl DictationActor {
     /// Dispatch an edge of the hold-to-talk key. Nobody waits for the reply.
     fn hold(&mut self, edge: HoldEdge) {
         let now = Instant::now();
-        let event = match edge {
-            HoldEdge::Press => {
-                // Key repeat must not restart the measurement.
-                self.hold_pressed.get_or_insert(now);
-                Event::HoldPressed
+        match (edge, self.hold_pressed) {
+            // Key repeat while the key is down. Held across the end of a take,
+            // it must not start the next one: that takes a new press.
+            (HoldEdge::Press, Some(_)) => {}
+            (HoldEdge::Press, None) => {
+                self.hold_pressed = Some(now);
+                self.dispatch(Event::HoldPressed, ReplyTarget::NotRequested);
             }
-            HoldEdge::Release => {
+            (HoldEdge::Release, pressed) => {
+                self.hold_pressed = None;
                 let effective = effective_hold(self.hold_started, now);
-                let held = self
-                    .hold_pressed
-                    .take()
-                    .map(|pressed| now.saturating_duration_since(pressed));
+                let held = pressed.map(|pressed| now.saturating_duration_since(pressed));
                 tracing::info!(?effective, ?held, "hold key released");
-                Event::HoldReleased { effective }
+                self.dispatch(Event::HoldReleased { effective }, ReplyTarget::NotRequested);
             }
-        };
-        self.dispatch(event, ReplyTarget::NotRequested);
+        }
     }
 
     /// Message loop: handle one message at a time until a mailbox closes.
@@ -550,18 +549,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn hold_edges_never_park_as_the_start_caller() {
-        let mut harness = harness();
-        harness.actor.hold(HoldEdge::Press);
-        assert!(harness.actor.start_caller.is_none());
-        harness
-            .actor
-            .dispatch(Event::SessionStarted, ReplyTarget::NotRequested);
-        harness.actor.hold(HoldEdge::Release);
-        assert!(harness.actor.start_caller.is_none());
-    }
-
     #[tokio::test(start_paused = true)]
     async fn release_and_timeout_ready_in_one_iteration_stop_the_take_once() {
         // select! polls ready branches in random order: repeat to see both.
@@ -583,5 +570,39 @@ mod tests {
                 [SessionCommand::Start, SessionCommand::Stop]
             );
         }
+    }
+
+    #[tokio::test]
+    async fn key_repeat_held_across_the_end_of_a_take_starts_nothing() {
+        let mut harness = harness();
+        let (start_reply, _start_answer) = oneshot::channel();
+        harness
+            .actor
+            .dispatch(Event::Toggle, ReplyTarget::Requested(start_reply));
+        harness
+            .actor
+            .dispatch(Event::SessionStarted, ReplyTarget::NotRequested);
+        let (stop_reply, _stop_answer) = oneshot::channel();
+        harness
+            .actor
+            .dispatch(Event::Toggle, ReplyTarget::Requested(stop_reply));
+        // Pressed while the take finalizes, still held once it has finished.
+        harness.actor.hold(HoldEdge::Press);
+        harness
+            .actor
+            .dispatch(Event::ProviderCompleted, ReplyTarget::NotRequested);
+        harness.actor.hold(HoldEdge::Press);
+        harness.actor.hold(HoldEdge::Release);
+        assert_eq!(
+            sent(&mut harness.session),
+            [
+                SessionCommand::Start,
+                SessionCommand::Stop,
+                SessionCommand::Teardown
+            ]
+        );
+
+        harness.actor.hold(HoldEdge::Press);
+        assert_eq!(sent(&mut harness.session), [SessionCommand::Start]);
     }
 }
