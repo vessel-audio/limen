@@ -57,6 +57,8 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
             // entry never shows half written, and one that another process
             // created meanwhile is never replaced.
             let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+            // Only a dead process can have left a file under our process ID.
+            let _ = fs::remove_file(&temp);
             let linked = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -65,17 +67,15 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
                     file.write_all(entry_for(program).as_bytes())?;
                     file.sync_all()
                 })
-                .and_then(|()| fs::hard_link(&temp, &path));
+                .and_then(|()| match fs::hard_link(&temp, &path) {
+                    Ok(()) => Ok(Install::Installed(path.clone())),
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                        Ok(Install::Present(path.clone()))
+                    }
+                    Err(error) => Err(error),
+                });
             let _ = fs::remove_file(&temp);
-            match linked {
-                Ok(()) => Ok(Install::Installed(path)),
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                    Ok(Install::Present(path))
-                }
-                Err(error) => {
-                    Err(error).with_context(|| format!("failed to write {}", path.display()))
-                }
-            }
+            linked.with_context(|| format!("failed to write {}", path.display()))
         }
     }
 }
@@ -204,5 +204,29 @@ mod tests {
             Install::Present(system.join("applications").join(&name))
         );
         assert!(!home.join("applications").join(&name).exists());
+    }
+
+    #[test]
+    fn a_stale_temp_file_does_not_stop_the_install() {
+        let root =
+            std::env::temp_dir().join(format!("voice-input-desktop-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let applications = root.join("home").join("applications");
+        fs::create_dir_all(&applications).unwrap();
+        let name = format!("{APP_ID}.desktop");
+        fs::write(
+            applications.join(format!(".{name}.{}.tmp", std::process::id())),
+            "stale",
+        )
+        .unwrap();
+
+        assert_eq!(
+            install(&root.join("home"), &[], Path::new("/bin/voice-input")).unwrap(),
+            Install::Installed(applications.join(&name))
+        );
+        assert_eq!(
+            fs::read_to_string(applications.join(&name)).unwrap(),
+            entry_for(Path::new("/bin/voice-input"))
+        );
     }
 }
