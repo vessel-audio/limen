@@ -19,7 +19,9 @@
 pub(crate) mod cli;
 pub(crate) mod desktop_entry;
 pub(crate) mod gnome;
+pub(crate) mod portal;
 pub(crate) mod program;
+pub(crate) mod status;
 
 use std::fmt;
 use std::str::FromStr;
@@ -34,6 +36,24 @@ pub(crate) enum Action {
     Toggle,
     /// Hold to talk; releasing the key stops.
     Hold,
+}
+
+impl Action {
+    /// The ID the portal knows the action's shortcut by.
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::Hold => "hold",
+        }
+    }
+
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "toggle" => Some(Self::Toggle),
+            "hold" => Some(Self::Hold),
+            _ => None,
+        }
+    }
 }
 
 /// The mechanism that turns system-wide key presses into actions.
@@ -66,6 +86,13 @@ impl fmt::Display for Backend {
 pub(crate) enum HoldEdge {
     Press,
     Release,
+}
+
+/// A global shortcut fired: what the dictation loop should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Activation {
+    Toggle,
+    Hold(HoldEdge),
 }
 
 /// Why a shortcut does not parse or is not allowed.
