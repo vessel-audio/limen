@@ -120,11 +120,22 @@ pub(super) async fn run(
     loop {
         tokio::select! {
             command = commands.recv() => match command {
-                Some(Command::Call(call)) => match link.call(call).await {
-                    Ok(Some(done)) => report(done),
-                    Ok(None) => {}
-                    Err(error) => report(Report::Failed(format!("{error:#}"))),
-                },
+                Some(Command::Call(call)) => {
+                    // A stop does not wait for a slow call: a rebind waits for the stop.
+                    let outcome = tokio::select! {
+                        outcome = link.call(call) => outcome,
+                        command = commands.recv() => match command {
+                            Some(Command::Stop) | None => return link.close().await,
+                            // The actor makes one call at a time.
+                            Some(Command::Call(call)) => Err(anyhow::anyhow!("{call:?} during a call")),
+                        },
+                    };
+                    match outcome {
+                        Ok(Some(done)) => report(done),
+                        Ok(None) => {}
+                        Err(error) => report(Report::Failed(format!("{error:#}"))),
+                    }
+                }
                 Some(Command::Stop) | None => return link.close().await,
             },
             message = next(link.pending.as_mut().map(|pending| &mut pending.responses)) => {
