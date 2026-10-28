@@ -54,9 +54,9 @@ pub(crate) fn snippet(shortcut: &ShortcutConfig) -> String {
 /// Apply `change` to the `[shortcut]` section of the config file at `path`
 /// and return the section it leaves. The change applies to the file as it is
 /// now, under a lock on its directory, so concurrent commands never lose
-/// each other's updates. A missing file starts from the annotated default.
-/// Nothing is written when the section stays the same, or when the edited
-/// file would no longer be a valid config.
+/// each other's updates. A missing file is created from the annotated
+/// default. Nothing is written when an existing section stays the same, or
+/// when the edited file would no longer be a valid config.
 pub(crate) fn update_shortcut(
     path: &Path,
     change: impl FnOnce(ShortcutConfig) -> ShortcutConfig,
@@ -73,7 +73,8 @@ pub(crate) fn update_shortcut(
         .with_context(|| format!("failed to parse config: {}", path.display()))?;
     current.validate()?;
     let shortcut = change(current.shortcut);
-    if shortcut == current.shortcut {
+    // A missing config is written even unchanged: setup leaves one behind.
+    if shortcut == current.shortcut && mode.is_some() {
         return Ok(shortcut);
     }
     check_writable(path)?;
@@ -180,8 +181,11 @@ fn with_shortcut(text: &str, current: &ShortcutConfig, wanted: &ShortcutConfig) 
         }
         Some(_) => bail!("`shortcut` in the config must be a [shortcut] section"),
     };
+    // From the end of the file backwards, so that earlier offsets stay valid.
+    let mut splices = splices;
+    splices.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
     let mut edited = text.to_string();
-    for (span, replacement) in splices.into_iter().rev() {
+    for (span, replacement) in splices {
         edited.replace_range(span, &replacement);
     }
     Ok(edited)
@@ -611,5 +615,26 @@ model = "test-model"
         .unwrap();
 
         assert!(update_shortcut(&path, |current| current).is_err());
+    }
+
+    #[test]
+    fn keys_in_any_order_change_in_place() {
+        let text = format!("{LEGACY}\n[shortcut]\ntoggle = \"Super+Z\"\nbackend = \"none\"\n");
+        assert_eq!(
+            with_shortcut(&text, &ShortcutConfig::default(), &gnome("Ctrl+Alt+V")).unwrap(),
+            format!(
+                "{LEGACY}\n[shortcut]\ntoggle = \"Ctrl+Alt+V\"\nbackend = \"gnome-keybinding\"\nhold = \"Super+X\"\n"
+            )
+        );
+    }
+
+    #[test]
+    fn an_unchanged_section_still_creates_a_missing_config() {
+        let dir = scratch("unchanged-missing");
+        let path = dir.join("config.toml");
+
+        update_shortcut(&path, |current| current).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
     }
 }
