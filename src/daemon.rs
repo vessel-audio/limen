@@ -40,6 +40,8 @@ struct DictationActor {
     /// Mailbox of the text input worker.
     input_tx: mpsc::Sender<String>,
     finalize_deadline: Option<Deadline>,
+    /// Stops a hold recording whose release never arrived.
+    hold_deadline: Option<Deadline>,
     /// IPC caller of a shortcut start, answered once the session actor reports
     /// whether the take started.
     start_caller: Option<oneshot::Sender<String>>,
@@ -99,6 +101,13 @@ impl DictationActor {
                     Effect::DisarmFinalizeDeadline => {
                         self.finalize_deadline = None;
                     }
+                    Effect::ArmHoldDeadline => {
+                        self.hold_deadline =
+                            Some(Box::pin(tokio::time::sleep(dictation::MAX_HOLD)));
+                    }
+                    Effect::DisarmHoldDeadline => {
+                        self.hold_deadline = None;
+                    }
                     Effect::Notify(Notification::Info(message)) => {
                         notify("voice-input", &message);
                     }
@@ -156,6 +165,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
         session: SessionHandle::spawn(cfg, session_report_tx),
         input_tx,
         finalize_deadline: None,
+        hold_deadline: None,
         start_caller: None,
     };
 
@@ -196,6 +206,12 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                     if actor.finalize_deadline.is_some() => {
                 tracing::warn!("finalize timed out");
                 actor.dispatch(Event::FinalizeTimedOut, ReplyTarget::NotRequested);
+            }
+
+            _ = async { actor.hold_deadline.as_mut().unwrap().await },
+                    if actor.hold_deadline.is_some() => {
+                tracing::warn!("hold exceeded its maximum duration");
+                actor.dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
             }
         }
     }

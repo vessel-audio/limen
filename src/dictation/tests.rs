@@ -1,6 +1,9 @@
+use std::time::Duration;
+
+use super::hold::MIN_HOLD;
 use super::{
-    Dictation, Effect, Event, InputOutcome, Notification, OutputTracker, Phase, StartOrigin,
-    TerminalOutcome, Transition, transition,
+    Control, Dictation, Effect, Event, HoldStart, InputOutcome, Notification, OutputTracker, Phase,
+    StartOrigin, TerminalOutcome, Transition, transition,
 };
 
 fn shortcut_start() -> Dictation {
@@ -12,7 +15,7 @@ fn shortcut_start() -> Dictation {
 
 fn recording() -> Dictation {
     Dictation {
-        phase: Phase::Recording,
+        phase: Phase::Recording(Control::Toggle),
         ..Dictation::default()
     }
 }
@@ -432,6 +435,495 @@ fn timed_out_take_ignores_late_session_reports_while_draining() {
                 effects: Vec::new(),
                 reply: None,
             }
+        );
+    }
+}
+
+fn hold_start(start: HoldStart) -> Dictation {
+    Dictation {
+        start_origin: Some(StartOrigin::Hold(start)),
+        ..Dictation::default()
+    }
+}
+
+fn hold_recording() -> Dictation {
+    Dictation {
+        phase: Phase::Recording(Control::Hold),
+        ..Dictation::default()
+    }
+}
+
+fn unchanged(state: Dictation) -> Transition {
+    Transition {
+        state,
+        effects: Vec::new(),
+        reply: None,
+    }
+}
+
+/// A release after a hold long enough to keep the take.
+const KEPT: Duration = Duration::from_secs(2);
+
+/// A release after an accidental tap.
+const TAP: Duration = MIN_HOLD.checked_sub(Duration::from_millis(1)).unwrap();
+
+/// Apply `events` in order: the final state, plus every effect and reply on
+/// the way.
+fn run(
+    state: Dictation,
+    events: impl IntoIterator<Item = Event>,
+) -> (Dictation, Vec<Effect>, Vec<String>) {
+    events.into_iter().fold(
+        (state, Vec::new(), Vec::new()),
+        |(state, mut effects, mut replies), event| {
+            let transition = transition(state, event);
+            effects.extend(transition.effects);
+            replies.extend(transition.reply);
+            (transition.state, effects, replies)
+        },
+    )
+}
+
+#[test]
+fn hold_press_starts_a_take_that_arms_the_hold_deadline() {
+    assert_eq!(
+        transition(Dictation::default(), Event::HoldPressed),
+        Transition {
+            state: hold_start(HoldStart::Held),
+            effects: vec![Effect::StartSession],
+            reply: None,
+        }
+    );
+    assert_eq!(
+        transition(hold_start(HoldStart::Held), Event::SessionStarted),
+        Transition {
+            state: hold_recording(),
+            effects: vec![Effect::ArmHoldDeadline],
+            reply: None,
+        }
+    );
+}
+
+#[test]
+fn release_before_the_take_starts_discards_it() {
+    let released = transition(
+        hold_start(HoldStart::Held),
+        Event::HoldReleased {
+            effective: Duration::ZERO,
+        },
+    );
+    assert_eq!(released, unchanged(hold_start(HoldStart::ReleasedEarly)));
+    assert_eq!(
+        transition(released.state, Event::SessionStarted),
+        Transition {
+            state: Dictation::default(),
+            effects: vec![Effect::TeardownSession],
+            reply: None,
+        }
+    );
+}
+
+#[test]
+fn release_after_the_minimum_hold_stops_like_a_toggle() {
+    assert_eq!(
+        transition(
+            hold_recording(),
+            Event::HoldReleased {
+                effective: MIN_HOLD
+            }
+        ),
+        Transition {
+            state: finalizing(),
+            effects: vec![Effect::DisarmHoldDeadline, Effect::StopSession],
+            reply: None,
+        }
+    );
+}
+
+#[test]
+fn accidental_tap_discards_the_take_without_a_notification() {
+    assert_eq!(
+        transition(hold_recording(), Event::HoldReleased { effective: TAP }),
+        Transition {
+            state: Dictation::default(),
+            effects: vec![Effect::DisarmHoldDeadline, Effect::TeardownSession],
+            reply: None,
+        }
+    );
+}
+
+#[test]
+fn hold_start_failure_notifies_without_a_reply() {
+    for start in [HoldStart::Held, HoldStart::ReleasedEarly] {
+        assert_eq!(
+            transition(
+                hold_start(start),
+                Event::SessionStartFailed("offline".to_string())
+            ),
+            Transition {
+                state: Dictation::default(),
+                effects: vec![
+                    Effect::TeardownSession,
+                    Effect::Notify(Notification::Error("offline".to_string())),
+                ],
+                reply: None,
+            }
+        );
+    }
+}
+
+#[test]
+fn hold_edges_are_ignored_where_they_do_not_apply() {
+    let queued_start = Dictation {
+        start_origin: Some(StartOrigin::QueuedRestart),
+        ..Dictation::default()
+    };
+    let states = [
+        (recording(), Event::HoldPressed),
+        (recording(), Event::HoldReleased { effective: KEPT }),
+        (hold_recording(), Event::HoldPressed),
+        (shortcut_start(), Event::HoldPressed),
+        (shortcut_start(), Event::HoldReleased { effective: KEPT }),
+        (queued_start, Event::HoldPressed),
+        (queued_start, Event::HoldReleased { effective: KEPT }),
+        (hold_start(HoldStart::Held), Event::HoldPressed),
+        (hold_start(HoldStart::ReleasedEarly), Event::HoldPressed),
+        (
+            hold_start(HoldStart::ReleasedEarly),
+            Event::HoldReleased { effective: KEPT },
+        ),
+        (
+            Dictation::default(),
+            Event::HoldReleased { effective: KEPT },
+        ),
+    ];
+    for (state, event) in states {
+        assert_eq!(
+            transition(state, event.clone()),
+            unchanged(state),
+            "{state:?} {event:?}"
+        );
+    }
+}
+
+#[test]
+fn hold_press_while_finalizing_does_not_queue_a_take() {
+    for state in [finalizing(), pending_input(), completed_input()] {
+        assert_eq!(transition(state, Event::HoldPressed), unchanged(state));
+    }
+}
+
+#[test]
+fn toggle_stops_a_hold_take_and_the_later_release_is_ignored() {
+    assert_eq!(
+        run(
+            hold_recording(),
+            [Event::Toggle, Event::HoldReleased { effective: KEPT }]
+        ),
+        (
+            finalizing(),
+            vec![Effect::DisarmHoldDeadline, Effect::StopSession],
+            vec!["finalizing".to_string()],
+        )
+    );
+}
+
+#[test]
+fn toggle_while_a_hold_take_starts_answers_starting() {
+    assert_eq!(
+        transition(hold_start(HoldStart::Held), Event::Toggle),
+        Transition {
+            state: hold_start(HoldStart::Held),
+            effects: Vec::new(),
+            reply: Some("starting".to_string()),
+        }
+    );
+}
+
+#[test]
+fn holding_through_finalizing_never_starts_a_take() {
+    assert_eq!(
+        run(
+            finalizing(),
+            [
+                Event::HoldPressed,
+                Event::ProviderCompleted,
+                Event::HoldReleased { effective: KEPT },
+            ]
+        ),
+        (
+            Dictation::default(),
+            vec![
+                Effect::DisarmFinalizeDeadline,
+                Effect::TeardownSession,
+                Effect::Notify(Notification::Info("dictation finished".to_string())),
+            ],
+            Vec::new(),
+        )
+    );
+}
+
+#[test]
+fn only_a_hold_recording_arms_the_hold_deadline() {
+    assert_eq!(
+        run(
+            Dictation::default(),
+            [Event::HoldPressed, Event::SessionStarted]
+        ),
+        (
+            hold_recording(),
+            vec![Effect::StartSession, Effect::ArmHoldDeadline],
+            Vec::new(),
+        )
+    );
+    assert_eq!(
+        run(Dictation::default(), [Event::Toggle, Event::SessionStarted]),
+        (
+            recording(),
+            vec![Effect::StartSession],
+            vec!["recording".to_string()],
+        )
+    );
+}
+
+#[test]
+fn every_way_out_of_a_hold_recording_disarms_its_deadline_once() {
+    let cases = [
+        (
+            Event::HoldReleased {
+                effective: MIN_HOLD,
+            },
+            Transition {
+                state: finalizing(),
+                effects: vec![Effect::DisarmHoldDeadline, Effect::StopSession],
+                reply: None,
+            },
+        ),
+        (
+            Event::HoldReleased { effective: TAP },
+            Transition {
+                state: Dictation::default(),
+                effects: vec![Effect::DisarmHoldDeadline, Effect::TeardownSession],
+                reply: None,
+            },
+        ),
+        (
+            Event::Toggle,
+            Transition {
+                state: finalizing(),
+                effects: vec![Effect::DisarmHoldDeadline, Effect::StopSession],
+                reply: Some("finalizing".to_string()),
+            },
+        ),
+        (
+            Event::CaptureFailed("microphone ended".to_string()),
+            Transition {
+                state: Dictation::default(),
+                effects: vec![
+                    Effect::DisarmHoldDeadline,
+                    Effect::TeardownSession,
+                    Effect::Notify(Notification::Error("microphone ended".to_string())),
+                ],
+                reply: None,
+            },
+        ),
+        (
+            Event::AudioBufferFailed("sink closed".to_string()),
+            Transition {
+                state: Dictation::default(),
+                effects: vec![
+                    Effect::DisarmHoldDeadline,
+                    Effect::TeardownSession,
+                    Effect::Notify(Notification::Error("send audio: sink closed".to_string())),
+                ],
+                reply: None,
+            },
+        ),
+        (
+            Event::HoldTimedOut,
+            Transition {
+                state: finalizing(),
+                effects: vec![
+                    Effect::DisarmHoldDeadline,
+                    Effect::StopSession,
+                    Effect::Notify(Notification::Error(
+                        "hold exceeded 60s; recording stopped".to_string(),
+                    )),
+                ],
+                reply: None,
+            },
+        ),
+    ];
+    for (event, expected) in cases {
+        assert_eq!(
+            transition(hold_recording(), event.clone()),
+            expected,
+            "{event:?}"
+        );
+    }
+}
+
+#[test]
+fn takes_that_never_record_never_touch_the_hold_deadline() {
+    assert_eq!(
+        run(
+            Dictation::default(),
+            [
+                Event::HoldPressed,
+                Event::SessionStartFailed("offline".to_string())
+            ]
+        ),
+        (
+            Dictation::default(),
+            vec![
+                Effect::StartSession,
+                Effect::TeardownSession,
+                Effect::Notify(Notification::Error("offline".to_string())),
+            ],
+            Vec::new(),
+        )
+    );
+    assert_eq!(
+        run(
+            Dictation::default(),
+            [
+                Event::HoldPressed,
+                Event::HoldReleased {
+                    effective: Duration::ZERO
+                },
+                Event::SessionStarted,
+            ]
+        ),
+        (
+            Dictation::default(),
+            vec![Effect::StartSession, Effect::TeardownSession],
+            Vec::new(),
+        )
+    );
+}
+
+#[test]
+fn release_and_timeout_stop_the_take_once_in_either_order() {
+    let timeout_notice = Effect::Notify(Notification::Error(
+        "hold exceeded 60s; recording stopped".to_string(),
+    ));
+    assert_eq!(
+        run(
+            hold_recording(),
+            [Event::HoldReleased { effective: KEPT }, Event::HoldTimedOut]
+        ),
+        (
+            finalizing(),
+            vec![Effect::DisarmHoldDeadline, Effect::StopSession],
+            Vec::new(),
+        )
+    );
+    assert_eq!(
+        run(
+            hold_recording(),
+            [Event::HoldTimedOut, Event::HoldReleased { effective: KEPT }]
+        ),
+        (
+            finalizing(),
+            vec![
+                Effect::DisarmHoldDeadline,
+                Effect::StopSession,
+                timeout_notice
+            ],
+            Vec::new(),
+        )
+    );
+}
+
+#[test]
+fn hold_timeout_is_ignored_outside_a_hold_recording() {
+    let states = [
+        Dictation::default(),
+        hold_start(HoldStart::Held),
+        hold_start(HoldStart::ReleasedEarly),
+        shortcut_start(),
+        recording(),
+        finalizing(),
+        pending_input(),
+        draining(),
+        completed_input(),
+    ];
+    for state in states {
+        assert_eq!(
+            transition(state, Event::HoldTimedOut),
+            unchanged(state),
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
+fn a_whole_hold_take_disarms_once_and_never_replies() {
+    assert_eq!(
+        run(
+            Dictation::default(),
+            [
+                Event::HoldPressed,
+                Event::SessionStarted,
+                Event::HoldReleased { effective: KEPT },
+                Event::FinalizationStarted,
+                Event::Transcript("hello".to_string()),
+                Event::InputQueued,
+                Event::ProviderCompleted,
+                Event::InputFinished(InputOutcome::Succeeded),
+            ]
+        ),
+        (
+            Dictation::default(),
+            vec![
+                Effect::StartSession,
+                Effect::ArmHoldDeadline,
+                Effect::DisarmHoldDeadline,
+                Effect::StopSession,
+                Effect::ArmFinalizeDeadline,
+                Effect::QueueInput("hello".to_string()),
+                Effect::DisarmFinalizeDeadline,
+                Effect::TeardownSession,
+                Effect::Notify(Notification::Info("dictation finished".to_string())),
+            ],
+            Vec::new(),
+        )
+    );
+}
+
+#[test]
+fn hold_edges_leave_a_starting_toggle_take_to_its_caller() {
+    let (state, effects, replies) = run(
+        shortcut_start(),
+        [Event::HoldPressed, Event::HoldReleased { effective: KEPT }],
+    );
+    assert_eq!(
+        (state, effects, replies),
+        (shortcut_start(), Vec::new(), Vec::new())
+    );
+    assert_eq!(
+        transition(state, Event::SessionStarted),
+        Transition {
+            state: recording(),
+            effects: Vec::new(),
+            reply: Some("recording".to_string()),
+        }
+    );
+}
+
+#[test]
+fn late_reports_after_a_discarded_tap_are_ignored() {
+    let (tapped, _, _) = run(hold_recording(), [Event::HoldReleased { effective: TAP }]);
+    assert_eq!(tapped, Dictation::default());
+    for late in [
+        Event::CaptureFailed("late".to_string()),
+        Event::ProviderFailed("late".to_string()),
+        Event::SessionStarted,
+    ] {
+        assert_eq!(
+            transition(tapped, late.clone()),
+            unchanged(tapped),
+            "{late:?}"
         );
     }
 }

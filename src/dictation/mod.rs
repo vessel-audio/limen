@@ -4,16 +4,24 @@
 //! No microphone, channel, task handle, network client, or clock lives here.
 //! In the daemon, session effects become messages to the session actor, whose
 //! reports come back as events.
+//!
+//! A take is controlled either by toggling (press once to start, again to
+//! stop) or by holding the hold-to-talk key. The runtime measures how long a
+//! hold lasted and enforces [`MAX_HOLD`] through the hold deadline effects.
 
+mod hold;
 mod output;
 
+use std::time::Duration;
+
+pub(crate) use hold::MAX_HOLD;
 use output::{OutputTracker, TerminalOutcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Phase {
     #[default]
     Idle,
-    Recording,
+    Recording(Control),
     /// Waiting for the session to deliver the final transcript.
     Finalizing,
     /// The session is over; waiting only for queued text to be committed.
@@ -25,8 +33,28 @@ impl Phase {
     fn label(self) -> &'static str {
         match self {
             Phase::Idle => "idle",
-            Phase::Recording => "recording",
+            Phase::Recording(_) => "recording",
             Phase::Finalizing | Phase::Draining => "finalizing",
+        }
+    }
+}
+
+/// Which input ends the take: a second toggle or the release of the hold key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Control {
+    Toggle,
+    Hold,
+}
+
+impl Control {
+    /// `effects` that end a recording, preceded by disarming the deadline
+    /// that only a hold recording has.
+    fn end_recording(self, effects: impl IntoIterator<Item = Effect>) -> Vec<Effect> {
+        match self {
+            Control::Toggle => effects.into_iter().collect(),
+            Control::Hold => std::iter::once(Effect::DisarmHoldDeadline)
+                .chain(effects)
+                .collect(),
         }
     }
 }
@@ -35,6 +63,15 @@ impl Phase {
 enum StartOrigin {
     Shortcut,
     QueuedRestart,
+    Hold(HoldStart),
+}
+
+/// Whether the hold key is still down while its take is starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldStart {
+    Held,
+    /// Released before the take started: it is discarded once it starts.
+    ReleasedEarly,
 }
 
 /// Result of one attempted text input.
@@ -48,6 +85,17 @@ pub(crate) enum InputOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Event {
     Toggle,
+    // Sent by the daemon once it receives hold-to-talk key edges.
+    #[allow(dead_code)]
+    HoldPressed,
+    /// `effective`: how long the hold recorded, measured by the runtime from
+    /// the start of the recording (zero when it never started).
+    #[allow(dead_code)]
+    HoldReleased {
+        effective: Duration,
+    },
+    /// [`MAX_HOLD`] passed since the hold recording started.
+    HoldTimedOut,
     SessionStarted,
     SessionStartFailed(String),
     AudioBufferFailed(String),
@@ -80,6 +128,10 @@ pub(crate) enum Effect {
     TeardownSession,
     ArmFinalizeDeadline,
     DisarmFinalizeDeadline,
+    /// A hold recording started: start measuring it and arm [`MAX_HOLD`].
+    ArmHoldDeadline,
+    /// The hold recording ended: stop measuring it and disarm its deadline.
+    DisarmHoldDeadline,
     Notify(Notification),
 }
 
@@ -95,6 +147,7 @@ pub(crate) struct Transition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Dictation {
     phase: Phase,
+    /// Only a toggle queues the next take; hold-to-talk never does.
     pending_restart: bool,
     start_origin: Option<StartOrigin>,
     output: OutputTracker,
@@ -112,11 +165,13 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
         Event::Toggle => match state.phase {
             Phase::Idle => match state.start_origin {
                 // A start is already in flight; answer without starting twice.
-                Some(StartOrigin::Shortcut | StartOrigin::QueuedRestart) => Transition {
-                    state,
-                    effects: Vec::new(),
-                    reply: Some("starting".to_string()),
-                },
+                Some(StartOrigin::Shortcut | StartOrigin::QueuedRestart | StartOrigin::Hold(_)) => {
+                    Transition {
+                        state,
+                        effects: Vec::new(),
+                        reply: Some("starting".to_string()),
+                    }
+                }
                 None => {
                     state.start_origin = Some(StartOrigin::Shortcut);
                     Transition {
@@ -126,11 +181,11 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     }
                 }
             },
-            Phase::Recording => {
+            Phase::Recording(control) => {
                 state.phase = Phase::Finalizing;
                 Transition {
                     state,
-                    effects: vec![Effect::StopSession],
+                    effects: control.end_recording([Effect::StopSession]),
                     reply: Some("finalizing".to_string()),
                 }
             }
@@ -143,22 +198,30 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 }
             }
         },
+        Event::HoldPressed => hold::pressed(state),
+        Event::HoldReleased { effective } => hold::released(state, effective),
+        Event::HoldTimedOut => hold::timed_out(state),
         Event::SessionStarted => match state.start_origin.take() {
-            Some(origin) => {
-                state.phase = Phase::Recording;
-                state.output.reset();
-                let (effects, reply) = match origin {
-                    StartOrigin::Shortcut => (Vec::new(), Some("recording".to_string())),
-                    StartOrigin::QueuedRestart => (
-                        vec![Effect::Notify(Notification::Info("listening…".to_string()))],
-                        None,
-                    ),
-                };
-                Transition {
-                    state,
-                    effects,
-                    reply,
-                }
+            // Released before the take could start: discard it.
+            Some(StartOrigin::Hold(HoldStart::ReleasedEarly)) => Transition {
+                state,
+                effects: vec![Effect::TeardownSession],
+                reply: None,
+            },
+            Some(StartOrigin::Shortcut) => start_recording(
+                state,
+                Control::Toggle,
+                Vec::new(),
+                Some("recording".to_string()),
+            ),
+            Some(StartOrigin::QueuedRestart) => start_recording(
+                state,
+                Control::Toggle,
+                vec![Effect::Notify(Notification::Info("listening…".to_string()))],
+                None,
+            ),
+            Some(StartOrigin::Hold(HoldStart::Held)) => {
+                start_recording(state, Control::Hold, vec![Effect::ArmHoldDeadline], None)
             }
             None => unchanged(state),
         },
@@ -169,7 +232,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 state.phase = Phase::Idle;
                 let reply = match origin {
                     StartOrigin::Shortcut => Some(format!("error: {error}")),
-                    StartOrigin::QueuedRestart => None,
+                    StartOrigin::QueuedRestart | StartOrigin::Hold(_) => None,
                 };
                 Transition {
                     state,
@@ -182,24 +245,24 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
             }
         },
         Event::AudioBufferFailed(error) => match state.phase {
-            Phase::Recording => terminal(
+            Phase::Recording(control) => terminal(
                 state,
                 TerminalOutcome::Failure,
-                vec![
+                control.end_recording([
                     Effect::TeardownSession,
                     Effect::Notify(Notification::Error(format!("send audio: {error}"))),
-                ],
+                ]),
             ),
             Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
         Event::CaptureFailed(error) => match state.phase {
-            Phase::Recording => terminal(
+            Phase::Recording(control) => terminal(
                 state,
                 TerminalOutcome::Failure,
-                vec![
+                control.end_recording([
                     Effect::TeardownSession,
                     Effect::Notify(Notification::Error(error)),
-                ],
+                ]),
             ),
             Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
@@ -209,7 +272,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 effects: vec![Effect::ArmFinalizeDeadline],
                 reply: None,
             },
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::StopFailed(error) => match state.phase {
             Phase::Finalizing => terminal(
@@ -220,7 +283,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(error)),
                 ],
             ),
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::Transcript(text) => match state.phase {
             Phase::Finalizing => Transition {
@@ -228,7 +291,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 effects: vec![Effect::QueueInput(text)],
                 reply: None,
             },
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::ProviderCompleted => match state.phase {
             Phase::Finalizing => terminal(
@@ -236,7 +299,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 TerminalOutcome::Success,
                 vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
             ),
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::ProviderFailed(error) => match state.phase {
             Phase::Finalizing => terminal(
@@ -248,7 +311,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(error)),
                 ],
             ),
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::ProviderEnded => match state.phase {
             Phase::Finalizing => terminal(
@@ -256,7 +319,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 TerminalOutcome::Failure,
                 vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
             ),
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::FinalizeTimedOut => match state.phase {
             Phase::Finalizing => terminal(
@@ -270,14 +333,14 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     )),
                 ],
             ),
-            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
+            Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },
         Event::InputQueued => match state.phase {
             Phase::Finalizing | Phase::Draining => {
                 state.output.segment_enqueued();
                 finish_if_drained(unchanged(state))
             }
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording(_) => unchanged(state),
         },
         Event::InputDropped => match state.phase {
             Phase::Finalizing | Phase::Draining => {
@@ -290,7 +353,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     reply: None,
                 })
             }
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording(_) => unchanged(state),
         },
         Event::InputFinished(outcome) => match state.phase {
             Phase::Finalizing | Phase::Draining => {
@@ -307,7 +370,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     reply: None,
                 })
             }
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording(_) => unchanged(state),
         },
     }
 }
@@ -317,6 +380,22 @@ fn unchanged(state: Dictation) -> Transition {
         state,
         effects: Vec::new(),
         reply: None,
+    }
+}
+
+/// The session started a fresh take that `control` will end.
+fn start_recording(
+    mut state: Dictation,
+    control: Control,
+    effects: Vec<Effect>,
+    reply: Option<String>,
+) -> Transition {
+    state.phase = Phase::Recording(control);
+    state.output.reset();
+    Transition {
+        state,
+        effects,
+        reply,
     }
 }
 
