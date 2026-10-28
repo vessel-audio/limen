@@ -39,15 +39,17 @@ pub(super) async fn status(paths: &Paths, configured: ShortcutConfig) -> Result<
 pub(super) async fn setup(
     paths: &Paths,
     current: ShortcutConfig,
-    toggle: Shortcut,
-    hold: Shortcut,
+    toggle: Option<Shortcut>,
+    hold: Option<Shortcut>,
 ) -> Result<(), Failure> {
-    check_distinct(toggle, hold)?;
-    let wanted = ShortcutConfig {
+    // Keys left out keep what the config says when it is written.
+    let keys = move |config: ShortcutConfig| ShortcutConfig {
         backend: Backend::Portal,
-        toggle,
-        hold,
+        toggle: toggle.unwrap_or(config.toggle),
+        hold: hold.unwrap_or(config.hold),
     };
+    let wanted = keys(current);
+    check_distinct(wanted.toggle, wanted.hold)?;
     check_config(paths, &current, &wanted)?;
     let program = Program::find()?;
     match desktop_entry::ensure_installed(program.path())? {
@@ -56,7 +58,7 @@ pub(super) async fn setup(
     }
     // A GNOME custom shortcut on the same key would fire next to the portal's.
     gnome::clear_ours().await?;
-    config::update_shortcut(&paths.config_file, |_| wanted)?;
+    config::update_shortcut(&paths.config_file, keys)?;
     match apply(paths).await? {
         Some(status) => {
             print_status(&status);

@@ -97,13 +97,7 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             toggle,
             hold,
         } => match (backend, hold) {
-            (Backend::Portal, _) => {
-                let (toggle, hold) = (
-                    toggle.unwrap_or(current.toggle),
-                    hold.unwrap_or(current.hold),
-                );
-                portal::setup(paths, current, toggle, hold).await
-            }
+            (Backend::Portal, _) => portal::setup(paths, current, toggle, hold).await,
             (Backend::GnomeKeybinding, Some(_)) => Err(Failure::Usage(
                 "--hold is only used by the portal backend".to_string(),
             )),
