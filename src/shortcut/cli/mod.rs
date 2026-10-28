@@ -152,12 +152,21 @@ fn not_set_up() -> Failure {
     .into()
 }
 
-/// The `[shortcut]` section of the config; the defaults before the config
-/// is first written.
-fn configured(paths: &Paths) -> Result<ShortcutConfig> {
-    match fs::symlink_metadata(&paths.config_file) {
+/// The `[shortcut]` section of the config, or the defaults while there is no
+/// config to read (a dangling link to one included). A config that does not
+/// parse or validate can never work: exit code 2.
+fn configured(paths: &Paths) -> Result<ShortcutConfig, Failure> {
+    let path = &paths.config_file;
+    match fs::read_to_string(path) {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(ShortcutConfig::default()),
-        Err(_) | Ok(_) => Ok(Config::load(&paths.config_file)?.shortcut),
+        Err(error) => Err(anyhow::Error::new(error)
+            .context(format!("failed to read config: {}", path.display()))
+            .into()),
+        Ok(text) => Config::parse(&text)
+            .map(|config| config.shortcut)
+            .map_err(|error| {
+                Failure::Usage(format!("invalid config {}: {error:#}", path.display()))
+            }),
     }
 }
 
@@ -209,5 +218,54 @@ pub(crate) async fn hold(paths: &Paths, edge: HoldEdge) -> Result<()> {
     match ipc::request(paths, &v1::Request::Hold { edge }).await? {
         v1::Reply::Ok => Ok(()),
         v1::Reply::Error { message } => bail!("the daemon refused: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
+
+    use super::{Failure, configured};
+    use crate::config::{Paths, ShortcutConfig};
+
+    fn paths(config_file: PathBuf) -> Paths {
+        Paths {
+            socket: config_file.with_file_name("voice-input.sock"),
+            log_file: config_file.with_file_name("daemon.log"),
+            cache_dir: config_file.with_file_name("cache"),
+            config_file,
+        }
+    }
+
+    #[test]
+    fn config_problems_map_to_their_exit_codes() {
+        let dir = std::env::temp_dir().join(format!("voice-input-cli-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("a-directory.toml")).unwrap();
+        let invalid = dir.join("invalid.toml");
+        fs::write(
+            &invalid,
+            "[provider]\nurl = \"http://127.0.0.1:8000\"\nmodel = \"m\"\n\n[shortcut]\ntoggle = \"Shift+A\"\n",
+        )
+        .unwrap();
+        let dangling = dir.join("dangling.toml");
+        symlink(dir.join("missing.toml"), &dangling).unwrap();
+
+        assert!(matches!(
+            configured(&paths(invalid)),
+            Err(Failure::Usage(message)) if message.contains("shortcut.toggle: Shift+A")
+        ));
+        assert!(matches!(
+            configured(&paths(dir.join("a-directory.toml"))),
+            Err(Failure::Runtime(_))
+        ));
+        for absent in [dir.join("missing.toml"), dangling] {
+            assert!(matches!(
+                configured(&paths(absent)),
+                Ok(shortcut) if shortcut == ShortcutConfig::default()
+            ));
+        }
     }
 }

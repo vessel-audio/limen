@@ -13,6 +13,7 @@
 mod legacy;
 pub(crate) mod v1;
 
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -153,7 +154,13 @@ async fn forward<T>(
 pub async fn send(paths: &Paths, request: &str) -> Result<String> {
     let stream = UnixStream::connect(&paths.socket)
         .await
-        .map_err(|error| NotRunning(paths.socket.clone(), error))?;
+        .map_err(|error| match error.kind() {
+            ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
+                anyhow::Error::new(NotRunning(paths.socket.clone(), error))
+            }
+            _ => anyhow::Error::new(error)
+                .context(format!("cannot connect to {}", paths.socket.display())),
+        })?;
     let (read, mut write) = stream.into_split();
     write.write_all(request.as_bytes()).await?;
     write.write_all(b"\n").await?;
@@ -178,7 +185,11 @@ mod tests {
     use tokio::net::UnixStream;
     use tokio::sync::mpsc;
 
-    use super::{Command, MAX_REQUEST_BYTES, handle_conn, v1};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use super::{Command, MAX_REQUEST_BYTES, NotRunning, handle_conn, send, v1};
+    use crate::config::Paths;
 
     /// Answer every command the way an idle daemon would.
     fn idle_daemon() -> mpsc::Sender<Command> {
@@ -294,5 +305,32 @@ mod tests {
             exchange(b"to\xffggle\n").await,
             error_line("request is not valid UTF-8")
         );
+    }
+
+    #[tokio::test]
+    async fn only_a_missing_daemon_counts_as_not_running() {
+        let dir = std::env::temp_dir().join(format!("voice-input-ipc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("locked")).unwrap();
+        std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        let paths = |socket: PathBuf| Paths {
+            config_file: dir.join("config.toml"),
+            socket,
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+        };
+
+        let missing = send(&paths(dir.join("voice-input.sock")), "status").await;
+        let locked = send(
+            &paths(dir.join("locked").join("voice-input.sock")),
+            "status",
+        )
+        .await;
+        std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+
+        assert!(missing.is_err_and(|error| error.downcast_ref::<NotRunning>().is_some()));
+        assert!(locked.is_err_and(|error| error.downcast_ref::<NotRunning>().is_none()));
     }
 }

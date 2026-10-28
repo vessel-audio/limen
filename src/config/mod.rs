@@ -221,8 +221,12 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
-        let cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("failed to parse config: {}", path.display()))?;
+        Self::parse(&text).with_context(|| format!("invalid config: {}", path.display()))
+    }
+
+    /// Parse and validate the text of a config file.
+    pub fn parse(text: &str) -> Result<Self> {
+        let cfg: Config = toml::from_str(text)?;
         cfg.validate()?;
         Ok(cfg)
     }
