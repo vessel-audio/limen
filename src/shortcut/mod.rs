@@ -16,6 +16,8 @@
 //! Ctrl). Rendering always lists the modifiers in GTK's order: Shift, Ctrl,
 //! Alt, Super.
 
+pub(crate) mod cli;
+
 use std::fmt;
 use std::str::FromStr;
 

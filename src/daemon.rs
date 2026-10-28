@@ -152,8 +152,6 @@ impl DictationActor {
     }
 
     /// Dispatch an edge of the hold-to-talk key. Nobody waits for the reply.
-    // The hold key edges reach the daemon through IPC in the next change.
-    #[allow(dead_code)]
     fn hold(&mut self, edge: HoldEdge) {
         let now = Instant::now();
         let event = match edge {
@@ -187,6 +185,11 @@ impl DictationActor {
                         }
                         ipc::Command::Toggle(reply) => {
                             self.dispatch(Event::Toggle, ReplyTarget::Requested(reply));
+                        }
+                        ipc::Command::Hold(edge, reply) => {
+                            // Answered at once: an edge never waits for the take to start.
+                            let _ = reply.send(ipc::v1::Reply::Ok);
+                            self.hold(edge);
                         }
                     }
                 }
@@ -298,7 +301,7 @@ mod tests {
 
     use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
     use crate::dictation::{Event, InputOutcome, MAX_HOLD};
-    use crate::ipc;
+    use crate::ipc::{self, v1::Reply};
     use crate::session::{SessionCommand, SessionHandle};
     use crate::shortcut::HoldEdge;
 
@@ -327,24 +330,43 @@ mod tests {
     struct Senders {
         commands: mpsc::Sender<ipc::Command>,
         _input_reports: mpsc::UnboundedSender<InputOutcome>,
-        _session_reports: mpsc::UnboundedSender<Event>,
+        session_reports: mpsc::UnboundedSender<Event>,
+    }
+
+    fn mailboxes() -> (Mailboxes, Senders) {
+        let (commands_tx, commands) = mpsc::channel(8);
+        let (input_reports_tx, input_reports) = mpsc::unbounded_channel();
+        let (session_reports_tx, session_reports) = mpsc::unbounded_channel();
+        (
+            Mailboxes {
+                commands,
+                input_reports,
+                session_reports,
+            },
+            Senders {
+                commands: commands_tx,
+                _input_reports: input_reports_tx,
+                session_reports: session_reports_tx,
+            },
+        )
     }
 
     /// Run the actor's message loop in the background.
     fn spawn_loop(actor: DictationActor) -> Senders {
-        let (commands_tx, commands) = mpsc::channel(8);
-        let (input_reports_tx, input_reports) = mpsc::unbounded_channel();
-        let (session_reports_tx, session_reports) = mpsc::unbounded_channel();
-        tokio::spawn(actor.run(Mailboxes {
-            commands,
-            input_reports,
-            session_reports,
-        }));
-        Senders {
-            commands: commands_tx,
-            _input_reports: input_reports_tx,
-            _session_reports: session_reports_tx,
-        }
+        let (mailboxes, senders) = mailboxes();
+        tokio::spawn(actor.run(mailboxes));
+        senders
+    }
+
+    /// Send a hold key edge over IPC to a running loop and return its answer.
+    async fn ipc_hold(senders: &Senders, edge: HoldEdge) -> Reply {
+        let (reply, answer) = oneshot::channel();
+        senders
+            .commands
+            .send(ipc::Command::Hold(edge, reply))
+            .await
+            .unwrap();
+        answer.await.unwrap()
     }
 
     fn sent(session: &mut mpsc::UnboundedReceiver<SessionCommand>) -> Vec<SessionCommand> {
@@ -495,5 +517,71 @@ mod tests {
             sent(&mut timed_out_first.session),
             [SessionCommand::Start, SessionCommand::Stop]
         );
+    }
+
+    #[tokio::test]
+    async fn hold_requests_leave_a_waiting_toggle_caller_its_own_answer() {
+        let reports = [
+            (Event::SessionStarted, "recording"),
+            (
+                Event::SessionStartFailed("offline".to_string()),
+                "error: offline",
+            ),
+        ];
+        for (report, toggle_answer) in reports {
+            let mut harness = harness();
+            let senders = spawn_loop(harness.actor);
+            let (reply, answer) = oneshot::channel();
+            senders
+                .commands
+                .send(ipc::Command::Toggle(reply))
+                .await
+                .unwrap();
+            assert_eq!(harness.session.recv().await, Some(SessionCommand::Start));
+            assert_eq!(
+                [
+                    ipc_hold(&senders, HoldEdge::Press).await,
+                    ipc_hold(&senders, HoldEdge::Release).await
+                ],
+                [Reply::Ok, Reply::Ok]
+            );
+            senders.session_reports.send(report).unwrap();
+            assert_eq!(answer.await.unwrap(), toggle_answer);
+        }
+    }
+
+    #[tokio::test]
+    async fn hold_edges_never_park_as_the_start_caller() {
+        let mut harness = harness();
+        harness.actor.hold(HoldEdge::Press);
+        assert!(harness.actor.start_caller.is_none());
+        harness
+            .actor
+            .dispatch(Event::SessionStarted, ReplyTarget::NotRequested);
+        harness.actor.hold(HoldEdge::Release);
+        assert!(harness.actor.start_caller.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn release_and_timeout_ready_in_one_iteration_stop_the_take_once() {
+        // select! polls ready branches in random order: repeat to see both.
+        for _ in 0..16 {
+            let mut harness = harness();
+            start_hold(&mut harness.actor);
+            let (mailboxes, senders) = mailboxes();
+            let (reply, answer) = oneshot::channel();
+            senders
+                .commands
+                .try_send(ipc::Command::Hold(HoldEdge::Release, reply))
+                .unwrap();
+            tokio::time::advance(MAX_HOLD).await;
+            tokio::spawn(harness.actor.run(mailboxes));
+            assert_eq!(answer.await.unwrap(), Reply::Ok);
+            assert_eq!(status(&senders).await, "finalizing");
+            assert_eq!(
+                sent(&mut harness.session),
+                [SessionCommand::Start, SessionCommand::Stop]
+            );
+        }
     }
 }

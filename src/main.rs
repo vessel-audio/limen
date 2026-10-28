@@ -40,6 +40,11 @@ enum Command {
     Toggle,
     /// Query daemon state
     Status,
+    /// Press or release the hold-to-talk key (for compositor key-release bindings)
+    Hold {
+        #[arg(value_enum)]
+        edge: shortcut::HoldEdge,
+    },
     /// Dev tool: transcribe a wav file and print the final event flow
     Probe {
         /// Input wav, must be 16kHz mono s16le
@@ -73,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{reply}");
             Ok(())
         }
+        Command::Hold { edge } => shortcut::cli::hold(&paths, edge).await,
         Command::Probe { wav } => {
             let cfg = config::Config::load_or_create(&paths)?;
             provider::probe(&cfg, &wav).await
