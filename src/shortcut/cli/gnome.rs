@@ -1,6 +1,6 @@
 //! `voice-input shortcut` for the gnome-keybinding and none backends.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::{Failure, check_config, rebind};
 use crate::config::{self, Paths, ShortcutConfig};
@@ -80,7 +80,7 @@ pub(super) async fn bind(
         .filter(|entry| Some(&entry.path) != managed.as_ref())
         .cloned()
         .collect();
-    let (conflicts, unchecked) = gsettings::find_conflicts(&dconf, toggle, &others).await;
+    let (conflicts, unchecked) = gsettings::find_conflicts(&dconf, toggle, &others).await?;
     for schema in unchecked {
         println!("not checked: {schema} (missing from this GNOME)");
     }
@@ -104,6 +104,9 @@ pub(super) async fn bind(
         backend: Backend::GnomeKeybinding,
         toggle,
         ..latest
+    })
+    .with_context(|| {
+        format!("GNOME now runs voice-input on {toggle}, but the config was not updated; run the command again once it can be")
     })?;
     rebind(paths).await?;
     println!(
@@ -131,7 +134,8 @@ pub(super) async fn setup_none(paths: &Paths, current: ShortcutConfig) -> Result
     config::update_shortcut(&paths.config_file, |latest| ShortcutConfig {
         backend: Backend::None,
         ..latest
-    })?;
+    })
+    .context("the GNOME custom shortcut is cleared, but the config was not updated; run the command again once it can be")?;
     rebind(paths).await?;
     status_none();
     Ok(())

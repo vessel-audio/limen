@@ -50,6 +50,9 @@ pub(crate) trait Dconf {
 
     /// Every key of `schema`, one `schema key value` line each.
     fn list(&self, schema: &str) -> impl Future<Output = Result<String>> + Send;
+
+    /// The installed schemas that are not relocatable, one per line.
+    fn schemas(&self) -> impl Future<Output = Result<String>> + Send;
 }
 
 /// The `gsettings` command.
@@ -70,6 +73,10 @@ impl Dconf for Gsettings {
 
     async fn list(&self, schema: &str) -> Result<String> {
         gsettings(&["list-recursively", schema]).await
+    }
+
+    async fn schemas(&self) -> Result<String> {
+        gsettings(&["list-schemas"]).await
     }
 }
 
@@ -202,25 +209,22 @@ pub(crate) async fn apply_clear(
 }
 
 /// What already uses `shortcut` in GNOME's keybinding schemas and `others`,
-/// and the schemas that could not be checked, e.g. because this GNOME
-/// version lacks them.
+/// and the schemas left unchecked because this GNOME version lacks them.
 pub(crate) async fn find_conflicts(
     dconf: &impl Dconf,
     shortcut: Shortcut,
     others: &[CustomKeybinding],
-) -> (Vec<Conflict>, Vec<&'static str>) {
+) -> Result<(Vec<Conflict>, Vec<&'static str>)> {
+    let installed = dconf.schemas().await?;
+    let (present, missing): (Vec<_>, Vec<_>) = KEYBINDING_SCHEMAS
+        .into_iter()
+        .partition(|schema| installed.lines().any(|line| line == *schema));
     let mut listing = String::new();
-    let mut unchecked = Vec::new();
-    for schema in KEYBINDING_SCHEMAS {
-        match dconf.list(schema).await {
-            Ok(keys) => {
-                listing.push_str(&keys);
-                listing.push('\n');
-            }
-            Err(_) => unchecked.push(schema),
-        }
+    for schema in present {
+        listing.push_str(&dconf.list(schema).await?);
+        listing.push('\n');
     }
-    (conflicts(shortcut, &listing, others), unchecked)
+    Ok((conflicts(shortcut, &listing, others), missing))
 }
 
 #[cfg(test)]
@@ -228,11 +232,11 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
-    use anyhow::{Result, bail};
+    use anyhow::Result;
 
     use super::{
-        CUSTOM_KEYBINDING, Dconf, Keybindings, LIST, MEDIA_KEYS, apply_clear, apply_setup,
-        find_conflicts, read,
+        CUSTOM_KEYBINDING, Dconf, KEYBINDING_SCHEMAS, Keybindings, LIST, MEDIA_KEYS, apply_clear,
+        apply_setup, find_conflicts, read,
     };
     use crate::shortcut::gnome::tests::{PREFIX, wechat};
     use crate::shortcut::gnome::{
@@ -318,14 +322,19 @@ mod tests {
             Ok(())
         }
 
+        async fn schemas(&self) -> Result<String> {
+            Ok(KEYBINDING_SCHEMAS
+                .into_iter()
+                .filter(|schema| *schema != "org.gnome.mutter.wayland.keybindings")
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+
         async fn list(&self, schema: &str) -> Result<String> {
             match schema {
                 "org.gnome.shell.keybindings" => Ok(format!(
                     "{schema} toggle-message-tray ['<Super>v', '<Super>m']"
                 )),
-                "org.gnome.mutter.wayland.keybindings" => {
-                    bail!("No such schema “{schema}”")
-                }
                 schema if schema.starts_with(CUSTOM_KEYBINDING) => {
                     Ok(["name", "command", "binding"]
                         .map(|key| format!("{CUSTOM_KEYBINDING} {key} {}", self.value(schema, key)))
@@ -444,7 +453,9 @@ mod tests {
     async fn conflicts_report_the_schemas_left_unchecked() {
         let dconf = FakeDconf::with(&wechat());
         assert_eq!(
-            find_conflicts(&dconf, "Super+V".parse().unwrap(), &wechat()).await,
+            find_conflicts(&dconf, "Super+V".parse().unwrap(), &wechat())
+                .await
+                .unwrap(),
             (
                 vec![Conflict::Setting {
                     schema: "org.gnome.shell.keybindings".to_string(),
