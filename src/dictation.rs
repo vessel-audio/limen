@@ -8,7 +8,11 @@ enum Phase {
     #[default]
     Idle,
     Recording,
+    /// Waiting for the session to deliver the final transcript.
     Finalizing,
+    /// The session is over; waiting only for queued text to be committed.
+    /// Late session reports are ignored so they cannot reopen the take.
+    Draining,
 }
 
 impl Phase {
@@ -16,7 +20,7 @@ impl Phase {
         match self {
             Phase::Idle => "idle",
             Phase::Recording => "recording",
-            Phase::Finalizing => "finalizing",
+            Phase::Finalizing | Phase::Draining => "finalizing",
         }
     }
 }
@@ -186,7 +190,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     reply: Some("finalizing".to_string()),
                 }
             }
-            Phase::Finalizing => {
+            Phase::Finalizing | Phase::Draining => {
                 state.pending_restart = true;
                 Transition {
                     state,
@@ -239,7 +243,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 effects: vec![Effect::BufferAudio(pcm)],
                 reply: None,
             },
-            Phase::Idle | Phase::Finalizing => unchanged(state),
+            Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
         Event::AudioBufferFailed(error) => match state.phase {
             Phase::Recording => terminal(
@@ -250,7 +254,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(format!("send audio: {error}"))),
                 ],
             ),
-            Phase::Idle | Phase::Finalizing => unchanged(state),
+            Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
         Event::CaptureFailed(error) => match state.phase {
             Phase::Recording => terminal(
@@ -261,7 +265,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(error)),
                 ],
             ),
-            Phase::Idle | Phase::Finalizing => unchanged(state),
+            Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
         Event::FinalizationStarted => match state.phase {
             Phase::Finalizing => Transition {
@@ -269,7 +273,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 effects: vec![Effect::ArmFinalizeDeadline],
                 reply: None,
             },
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::StopFailed(error) => match state.phase {
             Phase::Finalizing => terminal(
@@ -280,7 +284,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(error)),
                 ],
             ),
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::Transcript(text) => match state.phase {
             Phase::Finalizing => Transition {
@@ -288,7 +292,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 effects: vec![Effect::QueueInput(text)],
                 reply: None,
             },
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::ProviderCompleted => match state.phase {
             Phase::Finalizing => terminal(
@@ -296,7 +300,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 TerminalOutcome::Success,
                 vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
             ),
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::ProviderFailed(error) => match state.phase {
             Phase::Finalizing => terminal(
@@ -308,7 +312,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     Effect::Notify(Notification::Error(error)),
                 ],
             ),
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::ProviderEnded => match state.phase {
             Phase::Finalizing => terminal(
@@ -316,7 +320,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                 TerminalOutcome::Failure,
                 vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
             ),
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::FinalizeTimedOut => match state.phase {
             Phase::Finalizing => terminal(
@@ -330,17 +334,17 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     )),
                 ],
             ),
-            Phase::Idle | Phase::Recording => unchanged(state),
+            Phase::Idle | Phase::Recording | Phase::Draining => unchanged(state),
         },
         Event::InputQueued => match state.phase {
-            Phase::Finalizing => {
+            Phase::Finalizing | Phase::Draining => {
                 state.output.segment_enqueued();
                 finish_if_drained(unchanged(state))
             }
             Phase::Idle | Phase::Recording => unchanged(state),
         },
         Event::InputDropped => match state.phase {
-            Phase::Finalizing => {
+            Phase::Finalizing | Phase::Draining => {
                 state.output.segment_dropped();
                 finish_if_drained(Transition {
                     state,
@@ -353,7 +357,7 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
             Phase::Idle | Phase::Recording => unchanged(state),
         },
         Event::InputFinished(outcome) => match state.phase {
-            Phase::Finalizing => {
+            Phase::Finalizing | Phase::Draining => {
                 let effects = match &outcome {
                     InputOutcome::Succeeded => Vec::new(),
                     InputOutcome::Failed(error) => vec![Effect::Notify(Notification::Error(
@@ -381,7 +385,7 @@ fn unchanged(state: Dictation) -> Transition {
 }
 
 fn terminal(mut state: Dictation, outcome: TerminalOutcome, effects: Vec<Effect>) -> Transition {
-    state.phase = Phase::Finalizing;
+    state.phase = Phase::Draining;
     state.output.terminal_outcome = Some(outcome);
     finish_if_drained(Transition {
         state,
@@ -391,7 +395,7 @@ fn terminal(mut state: Dictation, outcome: TerminalOutcome, effects: Vec<Effect>
 }
 
 fn finish_if_drained(mut transition: Transition) -> Transition {
-    if transition.state.phase != Phase::Finalizing || !transition.state.output.should_finish() {
+    if transition.state.phase != Phase::Draining || !transition.state.output.should_finish() {
         return transition;
     }
 
@@ -448,6 +452,13 @@ mod tests {
         }
     }
 
+    fn draining() -> Dictation {
+        Dictation {
+            phase: Phase::Draining,
+            ..Dictation::default()
+        }
+    }
+
     fn completed_input() -> Dictation {
         Dictation {
             output: OutputTracker {
@@ -455,7 +466,7 @@ mod tests {
                 terminal_outcome: Some(TerminalOutcome::Success),
                 ..OutputTracker::default()
             },
-            ..pending_input()
+            ..draining()
         }
     }
 
@@ -650,7 +661,7 @@ mod tests {
                         terminal_outcome: Some(TerminalOutcome::Failure),
                         ..OutputTracker::default()
                     },
-                    ..finalizing()
+                    ..draining()
                 },
                 effects: vec![
                     Effect::DisarmFinalizeDeadline,
@@ -793,5 +804,49 @@ mod tests {
                 reply: None,
             }
         );
+    }
+
+    #[test]
+    fn timed_out_take_ignores_late_session_reports_while_draining() {
+        let timed_out = transition(pending_input(), Event::FinalizeTimedOut);
+        assert_eq!(
+            timed_out,
+            Transition {
+                state: Dictation {
+                    output: OutputTracker {
+                        pending_segments: 1,
+                        terminal_outcome: Some(TerminalOutcome::Failure),
+                        ..OutputTracker::default()
+                    },
+                    ..draining()
+                },
+                effects: vec![
+                    Effect::DisarmFinalizeDeadline,
+                    Effect::TeardownSession,
+                    Effect::Notify(Notification::Error(
+                        "provider did not finish in time".to_string()
+                    )),
+                ],
+                reply: None,
+            }
+        );
+        for late in [
+            Event::FinalizationStarted,
+            Event::StopFailed("late".to_string()),
+            Event::Transcript("late".to_string()),
+            Event::ProviderCompleted,
+            Event::ProviderFailed("late".to_string()),
+            Event::ProviderEnded,
+            Event::FinalizeTimedOut,
+        ] {
+            assert_eq!(
+                transition(timed_out.state, late),
+                Transition {
+                    state: timed_out.state,
+                    effects: Vec::new(),
+                    reply: None,
+                }
+            );
+        }
     }
 }
