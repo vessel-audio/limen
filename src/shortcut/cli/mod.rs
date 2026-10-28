@@ -180,13 +180,13 @@ fn check_distinct(toggle: Shortcut, hold: Shortcut) -> Result<Shortcut, Failure>
     }
 }
 
-/// Fail before changing anything else when the config would have to change
-/// but cannot be written, showing what to add to it by hand.
+/// Fail before changing anything else when the config would have to be
+/// written but cannot be, showing what to add to it by hand. Setup writes a
+/// config that does not exist yet (behind a dangling link, too) even when the
+/// section keeps its defaults.
 fn check_config(paths: &Paths, current: &ShortcutConfig, wanted: &ShortcutConfig) -> Result<()> {
-    match (
-        current == wanted,
-        config::check_writable(&paths.config_file),
-    ) {
+    let unchanged = current == wanted && paths.config_file.exists();
+    match (unchanged, config::check_writable(&paths.config_file)) {
         (true, _) | (false, Ok(())) => Ok(()),
         (false, Err(refusal)) => bail!(
             "{refusal}, so it was left unchanged. Add this to the config instead and \
@@ -227,7 +227,7 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
-    use super::{Failure, configured};
+    use super::{Failure, check_config, configured};
     use crate::config::{Paths, ShortcutConfig};
 
     fn paths(config_file: PathBuf) -> Paths {
@@ -267,5 +267,19 @@ mod tests {
                 Ok(shortcut) if shortcut == ShortcutConfig::default()
             ));
         }
+    }
+
+    #[test]
+    fn a_dangling_config_is_refused_before_anything_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("voice-input-cli-check-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dangling = dir.join("config.toml");
+        symlink(dir.join("missing.toml"), &dangling).unwrap();
+        let defaults = ShortcutConfig::default();
+
+        assert!(check_config(&paths(dangling), &defaults, &defaults).is_err());
+        assert!(check_config(&paths(dir.join("new.toml")), &defaults, &defaults).is_ok());
     }
 }
