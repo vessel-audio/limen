@@ -16,6 +16,7 @@
 //! once and no stale signal reaches dictation.
 
 mod connection;
+mod link;
 mod machine;
 mod protocol;
 #[cfg(test)]
