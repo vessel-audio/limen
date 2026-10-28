@@ -14,6 +14,8 @@ use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::shortcut::{Backend, Shortcut};
+
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# voice-input configuration
 # ASR backend: one buffered take per HTTP transcription request.
@@ -48,6 +50,19 @@ url = "https://api.deepseek.com/chat/completions"
 model = "deepseek-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 timeout_ms = 5000
+
+[shortcut]
+# How global shortcuts are bound; set up with `voice-input shortcut setup <backend>`:
+#   "portal":           recommended; supports hold-to-talk. The running daemon
+#                       asks the desktop for global shortcuts
+#   "gnome-keybinding": toggle only; a GNOME custom shortcut runs `voice-input toggle`
+#   "none":             bind `voice-input toggle` in your desktop settings yourself
+backend = "none"
+# portal: prefilled when GNOME first asks; GNOME Settings decides afterwards
+# gnome-keybinding: the key that `setup` / `set` write to GNOME
+toggle = "Super+Z"
+# Hold to talk; portal only
+hold = "Super+X"
 "#;
 
 /// All resolved XDG paths.
@@ -91,6 +106,8 @@ pub struct Config {
     pub input_method: InputMethodConfig,
     #[serde(default)]
     pub polish: PolishConfig,
+    #[serde(default)]
+    pub shortcut: ShortcutConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +170,28 @@ impl Default for PolishConfig {
     }
 }
 
+/// How global shortcuts are bound; see [`crate::shortcut`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShortcutConfig {
+    pub backend: Backend,
+    /// portal: the key GNOME prefills when it first asks; gnome-keybinding:
+    /// the key written to GNOME.
+    pub toggle: Shortcut,
+    /// Hold to talk; used by the portal backend only.
+    pub hold: Shortcut,
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            backend: Backend::None,
+            toggle: Shortcut::DEFAULT_TOGGLE,
+            hold: Shortcut::DEFAULT_HOLD,
+        }
+    }
+}
+
 impl Config {
     /// Load the config; write the annotated default first if none exists.
     pub fn load_or_create(paths: &Paths) -> Result<Self> {
@@ -211,6 +250,18 @@ impl Config {
         if !self.provider.url.starts_with("http") {
             bail!("provider.url must start with http(s)://");
         }
+        for (name, shortcut) in [
+            ("toggle", self.shortcut.toggle),
+            ("hold", self.shortcut.hold),
+        ] {
+            if let Err(error) = shortcut.validate() {
+                bail!("shortcut.{name}: {error}");
+            }
+        }
+        let toggle = self.shortcut.toggle;
+        if toggle == self.shortcut.hold {
+            bail!("shortcut.toggle and shortcut.hold must differ; both are {toggle}");
+        }
         Ok(())
     }
 
@@ -235,7 +286,8 @@ fn write_default(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, ShortcutConfig};
+    use crate::shortcut::Backend;
 
     fn base_config() -> Config {
         toml::from_str(
@@ -295,5 +347,47 @@ mod tests {
         assert!(config.validate().is_err());
         config.polish.timeout_ms = 5000;
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn missing_shortcut_section_leaves_shortcuts_to_the_user() {
+        assert_eq!(
+            base_config().shortcut,
+            ShortcutConfig {
+                backend: Backend::None,
+                toggle: "Super+Z".parse().unwrap(),
+                hold: "Super+X".parse().unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_shortcuts_fail_to_load_and_name_their_key() {
+        let config: Config = toml::from_str(
+            r#"
+            [provider]
+            url = "http://127.0.0.1:8000/v1/audio/transcriptions"
+            model = "test-model"
+
+            [shortcut]
+            backend = "portal"
+            toggle = "Shift+A"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "shortcut.toggle: Shift+A would get in the way of typing; add Super, Ctrl, or Alt"
+        );
+    }
+
+    #[test]
+    fn toggle_and_hold_must_differ() {
+        let mut config = base_config();
+        config.shortcut.hold = config.shortcut.toggle;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "shortcut.toggle and shortcut.hold must differ; both are Super+Z"
+        );
     }
 }
