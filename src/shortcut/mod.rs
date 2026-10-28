@@ -17,6 +17,7 @@
 //! Alt, Super.
 
 pub(crate) mod cli;
+pub(crate) mod desktop_entry;
 pub(crate) mod gnome;
 pub(crate) mod program;
 
