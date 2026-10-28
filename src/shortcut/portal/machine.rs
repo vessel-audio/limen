@@ -49,7 +49,7 @@ pub(super) enum Output {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Step {
+enum Progress {
     Connecting,
     Registering,
     CreatingSession,
@@ -75,7 +75,7 @@ enum Stage {
     Waiting,
     Running {
         generation: Generation,
-        step: Step,
+        progress: Progress,
     },
     Stopping {
         generation: Generation,
@@ -162,8 +162,8 @@ impl Machine {
             Input::Report(generation, report) => match self.stage {
                 Stage::Running {
                     generation: running,
-                    step,
-                } if running == generation => self.report(generation, step, report),
+                    progress,
+                } if running == generation => self.report(generation, progress, report),
                 Stage::Running { .. } | Stage::Stopping { .. } | Stage::Idle | Stage::Waiting => {
                     Vec::new()
                 }
@@ -201,23 +201,28 @@ impl Machine {
         }
     }
 
-    fn report(&mut self, generation: Generation, step: Step, report: Report) -> Vec<Output> {
-        match (step, report) {
-            (Step::Connecting, Report::Connected) => {
-                self.advance(generation, Step::Registering, Call::Register)
+    fn report(
+        &mut self,
+        generation: Generation,
+        progress: Progress,
+        report: Report,
+    ) -> Vec<Output> {
+        match (progress, report) {
+            (Progress::Connecting, Report::Connected) => {
+                self.advance(generation, Progress::Registering, Call::Register)
             }
             // The portal knows the app only after Register: no session before.
-            (Step::Registering, Report::Registered) => {
-                self.advance(generation, Step::CreatingSession, Call::CreateSession)
+            (Progress::Registering, Report::Registered) => {
+                self.advance(generation, Progress::CreatingSession, Call::CreateSession)
             }
-            (Step::CreatingSession, Report::SessionCreated) => {
+            (Progress::CreatingSession, Report::SessionCreated) => {
                 let preferred = self.status.preferred;
-                self.advance(generation, Step::Binding, Call::Bind(preferred))
+                self.advance(generation, Progress::Binding, Call::Bind(preferred))
             }
-            (Step::Binding, Report::Bound(actual)) => {
+            (Progress::Binding, Report::Bound(actual)) => {
                 self.stage = Stage::Running {
                     generation,
-                    step: Step::Bound,
+                    progress: Progress::Bound,
                 };
                 self.retry = FIRST_RETRY;
                 self.notified = None;
@@ -253,7 +258,7 @@ impl Machine {
                 };
                 self.stop(generation)
             }
-            (Step::Bound, Report::Activated(id)) => match Action::from_id(&id) {
+            (Progress::Bound, Report::Activated(id)) => match Action::from_id(&id) {
                 Some(Action::Toggle) => vec![Output::Activate(Activation::Toggle)],
                 Some(Action::Hold) => {
                     self.holding = true;
@@ -261,14 +266,14 @@ impl Machine {
                 }
                 None => Vec::new(),
             },
-            (Step::Bound, Report::Deactivated(id)) => match Action::from_id(&id) {
+            (Progress::Bound, Report::Deactivated(id)) => match Action::from_id(&id) {
                 Some(Action::Hold) => {
                     self.holding = false;
                     vec![Output::Activate(Activation::Hold(HoldEdge::Release))]
                 }
                 Some(Action::Toggle) | None => Vec::new(),
             },
-            (Step::Bound, Report::Changed(actual)) => {
+            (Progress::Bound, Report::Changed(actual)) => {
                 self.status.actual = actual;
                 vec![Output::Publish(self.status.clone())]
             }
@@ -299,8 +304,11 @@ impl Machine {
         }
     }
 
-    fn advance(&mut self, generation: Generation, step: Step, call: Call) -> Vec<Output> {
-        self.stage = Stage::Running { generation, step };
+    fn advance(&mut self, generation: Generation, progress: Progress, call: Call) -> Vec<Output> {
+        self.stage = Stage::Running {
+            generation,
+            progress,
+        };
         vec![Output::Call(generation, call)]
     }
 
@@ -312,7 +320,7 @@ impl Machine {
                 self.last = generation;
                 self.stage = Stage::Running {
                     generation,
-                    step: Step::Connecting,
+                    progress: Progress::Connecting,
                 };
                 self.status = ShortcutStatus {
                     last_error: self.status.last_error.take(),
