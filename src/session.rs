@@ -33,6 +33,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Messages accepted by the session actor's mailbox.
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum SessionCommand {
     /// Open a take; answered with `SessionStarted` or `SessionStartFailed`.
     Start,
@@ -72,6 +73,14 @@ impl SessionHandle {
         if let Err(error) = self.mailbox.send(command) {
             tracing::warn!(command = ?error.0, "session actor is gone");
         }
+    }
+}
+
+#[cfg(test)]
+impl SessionHandle {
+    /// A handle whose commands land in `mailbox` instead of a running actor.
+    pub(crate) fn from_mailbox(mailbox: mpsc::UnboundedSender<SessionCommand>) -> Self {
+        Self { mailbox }
     }
 }
 

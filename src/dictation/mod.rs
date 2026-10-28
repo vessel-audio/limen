@@ -85,12 +85,9 @@ pub(crate) enum InputOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Event {
     Toggle,
-    // Sent by the daemon once it receives hold-to-talk key edges.
-    #[allow(dead_code)]
     HoldPressed,
     /// `effective`: how long the hold recorded, measured by the runtime from
     /// the start of the recording (zero when it never started).
-    #[allow(dead_code)]
     HoldReleased {
         effective: Duration,
     },
