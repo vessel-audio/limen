@@ -6,6 +6,7 @@
 //! work, e.g. invalid keys.
 
 mod gnome;
+mod portal;
 
 use std::fs;
 use std::io::ErrorKind;
@@ -84,7 +85,7 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
     let current = configured(paths)?;
     match command {
         ShortcutCommand::Status => match current.backend {
-            Backend::Portal => portal_unavailable(),
+            Backend::Portal => portal::status(paths, current).await,
             Backend::GnomeKeybinding => gnome::status().await,
             Backend::None => {
                 gnome::status_none();
@@ -96,13 +97,20 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             toggle,
             hold,
         } => match (backend, hold) {
-            (Backend::Portal, _) => portal_unavailable(),
+            (Backend::Portal, _) => {
+                let (toggle, hold) = (
+                    toggle.unwrap_or(current.toggle),
+                    hold.unwrap_or(current.hold),
+                );
+                portal::setup(paths, current, toggle, hold).await
+            }
             (Backend::GnomeKeybinding, Some(_)) => Err(Failure::Usage(
                 "--hold is only used by the portal backend".to_string(),
             )),
             (Backend::GnomeKeybinding, None) => {
                 let toggle = toggle.unwrap_or(current.toggle);
-                gnome::bind(paths, current, check_distinct(toggle, current.hold)?).await
+                check_distinct(toggle, current.hold)?;
+                gnome::bind(paths, current, toggle).await
             }
             (Backend::None, _) => match (toggle, hold) {
                 (None, None) => gnome::setup_none(paths, current).await,
@@ -112,9 +120,10 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             },
         },
         ShortcutCommand::Set { action, keys } => match (current.backend, action) {
-            (Backend::Portal, _) => portal_unavailable(),
+            (Backend::Portal, _) => portal::set(paths, current, action, keys).await,
             (Backend::GnomeKeybinding, Action::Toggle) => {
-                gnome::bind(paths, current, check_distinct(keys, current.hold)?).await
+                check_distinct(keys, current.hold)?;
+                gnome::bind(paths, current, keys).await
             }
             (Backend::GnomeKeybinding, Action::Hold) => Err(anyhow!(
                 "the gnome-keybinding backend cannot hold to talk; \
@@ -124,7 +133,7 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             (Backend::None, _) => Err(not_set_up()),
         },
         ShortcutCommand::Clear { action } => match (current.backend, action) {
-            (Backend::Portal, _) => portal_unavailable(),
+            (Backend::Portal, _) => portal::clear(),
             (Backend::GnomeKeybinding, Action::Toggle) => gnome::clear().await,
             (Backend::GnomeKeybinding, Action::Hold) => {
                 Err(anyhow!("the gnome-keybinding backend has no hold-to-talk key").into())
@@ -132,17 +141,13 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             (Backend::None, _) => Err(not_set_up()),
         },
         ShortcutCommand::Edit => match current.backend {
-            Backend::Portal => portal_unavailable(),
+            Backend::Portal => portal::edit(),
             Backend::GnomeKeybinding => {
                 Err(anyhow!("change the key with `voice-input shortcut set toggle <KEYS>`").into())
             }
             Backend::None => Err(not_set_up()),
         },
     }
-}
-
-fn portal_unavailable() -> Result<(), Failure> {
-    Err(anyhow!("the portal backend is not available yet").into())
 }
 
 fn not_set_up() -> Failure {
@@ -170,13 +175,13 @@ fn configured(paths: &Paths) -> Result<ShortcutConfig, Failure> {
     }
 }
 
-/// `toggle`, unless it is the hold-to-talk key: both cannot share one key.
-fn check_distinct(toggle: Shortcut, hold: Shortcut) -> Result<Shortcut, Failure> {
+/// The toggle and the hold-to-talk key cannot share one key.
+fn check_distinct(toggle: Shortcut, hold: Shortcut) -> Result<(), Failure> {
     match toggle == hold {
         true => Err(Failure::Usage(format!(
-            "{toggle} is the hold-to-talk key; choose another key"
+            "{toggle} cannot be both the toggle and the hold-to-talk key; choose another key"
         ))),
-        false => Ok(toggle),
+        false => Ok(()),
     }
 }
 

@@ -14,7 +14,7 @@ mod output;
 
 use std::time::Duration;
 
-pub(crate) use hold::MAX_HOLD;
+pub(crate) use hold::{MAX_HOLD, MIN_HOLD};
 use output::{OutputTracker, TerminalOutcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
