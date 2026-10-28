@@ -38,6 +38,7 @@ pub enum Command {
     Status(oneshot::Sender<String>),
     Hold(HoldEdge, oneshot::Sender<v1::Reply>),
     ShortcutRebind(oneshot::Sender<v1::Reply>),
+    ShortcutStatus(oneshot::Sender<v1::Reply>),
 }
 
 /// The daemon does not listen on its socket.
@@ -203,7 +204,9 @@ mod tests {
                     Command::Status(reply) => {
                         let _ = reply.send("idle".to_string());
                     }
-                    Command::Hold(_, reply) | Command::ShortcutRebind(reply) => {
+                    Command::Hold(_, reply)
+                    | Command::ShortcutRebind(reply)
+                    | Command::ShortcutStatus(reply) => {
                         let _ = reply.send(v1::Reply::Ok);
                     }
                 }

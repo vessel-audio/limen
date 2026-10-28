@@ -28,7 +28,8 @@ use crate::ipc;
 use crate::notify::notify;
 use crate::polish::Polisher;
 use crate::session::{SessionCommand, SessionHandle};
-use crate::shortcut::HoldEdge;
+use crate::shortcut::portal::{Bus, ShortcutHandle};
+use crate::shortcut::{Activation, HoldEdge};
 
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -57,6 +58,7 @@ struct DictationActor {
     notify: fn(&str, &str),
     /// Read again when a client asks to apply the `[shortcut]` section.
     config_file: PathBuf,
+    shortcuts: ShortcutHandle,
 }
 
 /// Whether the message being handled came from an IPC caller awaiting a reply.
@@ -70,6 +72,7 @@ struct Mailboxes {
     commands: mpsc::Receiver<ipc::Command>,
     input_reports: mpsc::UnboundedReceiver<InputOutcome>,
     session_reports: mpsc::UnboundedReceiver<Event>,
+    activations: mpsc::UnboundedReceiver<Activation>,
 }
 
 impl DictationActor {
@@ -78,6 +81,7 @@ impl DictationActor {
         input_tx: mpsc::Sender<String>,
         notify: fn(&str, &str),
         config_file: PathBuf,
+        shortcuts: ShortcutHandle,
     ) -> Self {
         Self {
             dictation: Dictation::default(),
@@ -90,6 +94,7 @@ impl DictationActor {
             start_caller: None,
             notify,
             config_file,
+            shortcuts,
         }
     }
 
@@ -99,6 +104,8 @@ impl DictationActor {
     fn dispatch(&mut self, event: Event, mut reply: ReplyTarget) {
         let mut events = VecDeque::from([event]);
         while let Some(event) = events.pop_front() {
+            let answers_start =
+                matches!(event, Event::SessionStarted | Event::SessionStartFailed(_));
             let transition = dictation::transition(self.dictation, event);
             self.dictation = transition.state;
             // Only the message itself can come from an IPC caller.
@@ -107,12 +114,19 @@ impl DictationActor {
                 (Some(message), ReplyTarget::Requested(caller)) => {
                     let _ = caller.send(message);
                 }
-                (Some(message), ReplyTarget::NotRequested) => match self.start_caller.take() {
-                    Some(caller) => {
-                        let _ = caller.send(message);
+                // A take started by an IPC toggle answers the caller parked for it.
+                (Some(message), ReplyTarget::NotRequested) if answers_start => {
+                    match self.start_caller.take() {
+                        Some(caller) => {
+                            let _ = caller.send(message);
+                        }
+                        None => tracing::debug!(message, "the take was not started over IPC"),
                     }
-                    None => tracing::warn!(message, "transition reply had no IPC target"),
-                },
+                }
+                // Nobody asked, e.g. a toggle from a global shortcut.
+                (Some(message), ReplyTarget::NotRequested) => {
+                    tracing::debug!(message, "reply without an IPC caller");
+                }
                 // Only a shortcut start defers its answer: the core replies once
                 // the session actor reports whether the take started.
                 (None, ReplyTarget::Requested(caller)) => {
@@ -181,6 +195,30 @@ impl DictationActor {
         }
     }
 
+    /// Apply the `[shortcut]` section of the config again. The whole file must
+    /// be valid, though only that section applies without a restart. The
+    /// caller hears back once the shortcut actor shows the new state.
+    fn rebind(&self, reply: oneshot::Sender<ipc::v1::Reply>) {
+        match Config::load(&self.config_file) {
+            Ok(config) => {
+                let rebound = self.shortcuts.rebind(config.shortcut);
+                tokio::spawn(async move {
+                    let _ = reply.send(match rebound.await {
+                        Ok(()) => ipc::v1::Reply::Ok,
+                        Err(_) => ipc::v1::Reply::Error {
+                            message: "the shortcut backend stopped".to_string(),
+                        },
+                    });
+                });
+            }
+            Err(error) => {
+                let _ = reply.send(ipc::v1::Reply::Error {
+                    message: format!("{error:#}"),
+                });
+            }
+        }
+    }
+
     /// Message loop: handle one message at a time until a mailbox closes.
     async fn run(mut self, mut mailboxes: Mailboxes) -> Result<()> {
         loop {
@@ -199,15 +237,9 @@ impl DictationActor {
                             let _ = reply.send(ipc::v1::Reply::Ok);
                             self.hold(edge);
                         }
-                        ipc::Command::ShortcutRebind(reply) => {
-                            // The whole file must be valid, though only its
-                            // [shortcut] section applies without a restart.
-                            let _ = reply.send(match Config::load(&self.config_file) {
-                                Ok(_) => ipc::v1::Reply::Ok,
-                                Err(error) => ipc::v1::Reply::Error {
-                                    message: format!("{error:#}"),
-                                },
-                            });
+                        ipc::Command::ShortcutRebind(reply) => self.rebind(reply),
+                        ipc::Command::ShortcutStatus(reply) => {
+                            let _ = reply.send(ipc::v1::Reply::ShortcutStatus(self.shortcuts.status()));
                         }
                     }
                 }
@@ -225,6 +257,14 @@ impl DictationActor {
                     match event {
                         Some(event) => self.dispatch(event, ReplyTarget::NotRequested),
                         None => anyhow::bail!("session actor stopped unexpectedly"),
+                    }
+                }
+
+                activation = mailboxes.activations.recv() => {
+                    match activation {
+                        Some(Activation::Toggle) => self.dispatch(Event::Toggle, ReplyTarget::NotRequested),
+                        Some(Activation::Hold(edge)) => self.hold(edge),
+                        None => anyhow::bail!("shortcut actor stopped unexpectedly"),
                     }
                 }
 
@@ -291,12 +331,15 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
+    let (activation_tx, activations) = mpsc::unbounded_channel();
+    let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let actor = DictationActor::new(
         SessionHandle::spawn(cfg, session_report_tx),
         input_tx,
         notify,
         paths.config_file.clone(),
+        shortcuts,
     );
 
     notify("voice-input", "daemon started");
@@ -307,6 +350,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
             commands,
             input_reports,
             session_reports,
+            activations,
         })
         .await
 }
@@ -323,7 +367,8 @@ mod tests {
     use crate::dictation::{Event, InputOutcome, MAX_HOLD};
     use crate::ipc::{self, v1::Reply};
     use crate::session::{SessionCommand, SessionHandle};
-    use crate::shortcut::HoldEdge;
+    use crate::shortcut::portal::ShortcutHandle;
+    use crate::shortcut::{Activation, HoldEdge};
 
     const TAP: Duration = Duration::from_millis(100);
     const KEPT: Duration = Duration::from_secs(1);
@@ -345,6 +390,7 @@ mod tests {
                 input_tx,
                 |_, _| {},
                 PathBuf::from("/nonexistent/config.toml"),
+                ShortcutHandle::detached(),
             ),
             session,
             _input: input,
@@ -356,22 +402,26 @@ mod tests {
         commands: mpsc::Sender<ipc::Command>,
         _input_reports: mpsc::UnboundedSender<InputOutcome>,
         session_reports: mpsc::UnboundedSender<Event>,
+        activations: mpsc::UnboundedSender<Activation>,
     }
 
     fn mailboxes() -> (Mailboxes, Senders) {
         let (commands_tx, commands) = mpsc::channel(8);
         let (input_reports_tx, input_reports) = mpsc::unbounded_channel();
         let (session_reports_tx, session_reports) = mpsc::unbounded_channel();
+        let (activations_tx, activations) = mpsc::unbounded_channel();
         (
             Mailboxes {
                 commands,
                 input_reports,
                 session_reports,
+                activations,
             },
             Senders {
                 commands: commands_tx,
                 _input_reports: input_reports_tx,
                 session_reports: session_reports_tx,
+                activations: activations_tx,
             },
         )
     }
@@ -630,5 +680,45 @@ mod tests {
 
         harness.actor.hold(HoldEdge::Press);
         assert_eq!(sent(&mut harness.session), [SessionCommand::Start]);
+    }
+
+    #[tokio::test]
+    async fn a_shortcut_toggle_leaves_a_waiting_ipc_caller_its_own_answer() {
+        let mut harness = harness();
+        let (reply, answer) = oneshot::channel();
+        harness
+            .actor
+            .dispatch(Event::Toggle, ReplyTarget::Requested(reply));
+        // A shortcut toggle while the take starts is answered "starting", for nobody.
+        harness
+            .actor
+            .dispatch(Event::Toggle, ReplyTarget::NotRequested);
+        harness
+            .actor
+            .dispatch(Event::SessionStarted, ReplyTarget::NotRequested);
+        assert_eq!(answer.await.unwrap(), "recording");
+        assert_eq!(sent(&mut harness.session), [SessionCommand::Start]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shortcut_hold_edges_drive_a_hold_take() {
+        let mut harness = harness();
+        let senders = spawn_loop(harness.actor);
+        senders
+            .activations
+            .send(Activation::Hold(HoldEdge::Press))
+            .unwrap();
+        assert_eq!(harness.session.recv().await, Some(SessionCommand::Start));
+        senders.session_reports.send(Event::SessionStarted).unwrap();
+        // The report and the status query travel through different mailboxes.
+        while status(&senders).await != "recording" {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(KEPT).await;
+        senders
+            .activations
+            .send(Activation::Hold(HoldEdge::Release))
+            .unwrap();
+        assert_eq!(harness.session.recv().await, Some(SessionCommand::Stop));
     }
 }

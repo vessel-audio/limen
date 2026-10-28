@@ -1,12 +1,13 @@
 //! Protocol v1: one JSON object per line, tagged by `type`. Requests carry
 //! the protocol version as `"v":1`; replies are unversioned.
 //!
-//! | Request                                  | Reply                                   |
-//! |------------------------------------------|-----------------------------------------|
-//! | `{"v":1,"type":"hold","edge":"press"}`   | `{"type":"ok"}`, before the take starts |
-//! | `{"v":1,"type":"hold","edge":"release"}` | `{"type":"ok"}`                         |
-//! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` if the config is valid  |
-//! | anything that fails                      | `{"type":"error","message":"..."}`      |
+//! | Request                                  | Reply                                    |
+//! |------------------------------------------|------------------------------------------|
+//! | `{"v":1,"type":"hold","edge":"press"}`   | `{"type":"ok"}`, before the take starts  |
+//! | `{"v":1,"type":"hold","edge":"release"}` | `{"type":"ok"}`                          |
+//! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` once the new state shows |
+//! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
+//! | anything that fails                      | `{"type":"error","message":"..."}`       |
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::Command;
 use crate::shortcut::HoldEdge;
+use crate::shortcut::status::ShortcutStatus;
 
 /// The protocol version this daemon speaks.
 pub(crate) const VERSION: u64 = 1;
@@ -23,15 +25,19 @@ pub(crate) const VERSION: u64 = 1;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Request {
     /// The hold-to-talk key went down or came up.
-    Hold { edge: HoldEdge },
+    Hold {
+        edge: HoldEdge,
+    },
     /// Apply the `[shortcut]` section of the config file again.
     ShortcutRebind,
+    ShortcutStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Reply {
     Ok,
+    ShortcutStatus(ShortcutStatus),
     Error { message: String },
 }
 
@@ -68,6 +74,7 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Repl
             let command = match request {
                 Request::Hold { edge } => Command::Hold(edge, reply),
                 Request::ShortcutRebind => Command::ShortcutRebind(reply),
+                Request::ShortcutStatus => Command::ShortcutStatus(reply),
             };
             super::forward(commands, command, answer)
                 .await

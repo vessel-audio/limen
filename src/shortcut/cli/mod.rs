@@ -204,6 +204,7 @@ async fn rebind(paths: &Paths) -> Result<()> {
         Ok(v1::Reply::Error { message }) => {
             bail!("the daemon did not apply the change: {message}")
         }
+        Ok(v1::Reply::ShortcutStatus(_)) => bail!("the daemon answered something else"),
         Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => {
             println!("The daemon is not running; the change takes effect when it starts.");
             Ok(())
@@ -218,6 +219,7 @@ pub(crate) async fn hold(paths: &Paths, edge: HoldEdge) -> Result<()> {
     match ipc::request(paths, &v1::Request::Hold { edge }).await? {
         v1::Reply::Ok => Ok(()),
         v1::Reply::Error { message } => bail!("the daemon refused: {message}"),
+        v1::Reply::ShortcutStatus(_) => bail!("the daemon answered something else"),
     }
 }
 
