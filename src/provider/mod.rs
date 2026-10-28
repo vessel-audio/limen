@@ -58,6 +58,9 @@ pub trait AudioSink: Send {
 /// Final transcription results and terminal status for one session.
 pub trait EventSource: Send {
     /// Next transcript event; `None` means the session is over.
+    ///
+    /// Must be cancel-safe: the session actor polls it inside `select!`, so
+    /// dropping the future before it completes must not lose an event.
     fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
