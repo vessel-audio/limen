@@ -2,6 +2,8 @@
 //!
 //! Events describe things that happened; effects describe work for the runtime.
 //! No microphone, channel, task handle, network client, or clock lives here.
+//! In the daemon, session effects become messages to the session actor, whose
+//! reports come back as events.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Phase {
@@ -50,7 +52,6 @@ pub(crate) enum Event {
     Toggle,
     SessionStarted,
     SessionStartFailed(String),
-    AudioCaptured(Vec<i16>),
     AudioBufferFailed(String),
     CaptureFailed(String),
     FinalizationStarted,
@@ -76,7 +77,6 @@ pub(crate) enum Notification {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Effect {
     StartSession,
-    BufferAudio(Vec<i16>),
     StopSession,
     QueueInput(String),
     TeardownSession,
@@ -105,14 +105,6 @@ pub(crate) struct Dictation {
 impl Dictation {
     pub(crate) fn label(self) -> &'static str {
         self.phase.label()
-    }
-
-    pub(crate) fn records_audio(self) -> bool {
-        matches!(self.phase, Phase::Recording)
-    }
-
-    pub(crate) fn accepts_provider_events(self) -> bool {
-        matches!(self.phase, Phase::Finalizing)
     }
 }
 
@@ -172,7 +164,12 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
     match event {
         Event::Toggle => match state.phase {
             Phase::Idle => match state.start_origin {
-                Some(StartOrigin::Shortcut | StartOrigin::QueuedRestart) => unchanged(state),
+                // A start is already in flight; answer without starting twice.
+                Some(StartOrigin::Shortcut | StartOrigin::QueuedRestart) => Transition {
+                    state,
+                    effects: Vec::new(),
+                    reply: Some("starting".to_string()),
+                },
                 None => {
                     state.start_origin = Some(StartOrigin::Shortcut);
                     Transition {
@@ -236,14 +233,6 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
                     reply,
                 }
             }
-        },
-        Event::AudioCaptured(pcm) => match state.phase {
-            Phase::Recording => Transition {
-                state,
-                effects: vec![Effect::BufferAudio(pcm)],
-                reply: None,
-            },
-            Phase::Idle | Phase::Finalizing | Phase::Draining => unchanged(state),
         },
         Event::AudioBufferFailed(error) => match state.phase {
             Phase::Recording => terminal(
@@ -494,6 +483,18 @@ mod tests {
     }
 
     #[test]
+    fn toggle_while_starting_answers_without_starting_twice() {
+        assert_eq!(
+            transition(shortcut_start(), Event::Toggle),
+            Transition {
+                state: shortcut_start(),
+                effects: Vec::new(),
+                reply: Some("starting".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn start_failure_replies_and_cleans_up() {
         assert_eq!(
             transition(
@@ -532,15 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_buffers_audio_without_accepting_transcripts() {
-        assert_eq!(
-            transition(recording(), Event::AudioCaptured(vec![1, 2])),
-            Transition {
-                state: recording(),
-                effects: vec![Effect::BufferAudio(vec![1, 2])],
-                reply: None,
-            }
-        );
+    fn recording_does_not_accept_transcripts() {
         assert_eq!(
             transition(recording(), Event::Transcript("early".to_string())),
             Transition {
