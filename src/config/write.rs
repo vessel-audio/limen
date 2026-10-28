@@ -220,6 +220,7 @@ pub(super) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(Refusal::Symlink(path.to_path_buf()).into());
             }
+            Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
             Ok(_) | Err(_) => {}
         }
         fs::rename(&temp_path, path)?;
