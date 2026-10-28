@@ -194,6 +194,7 @@ impl ShortcutActor {
                 }
             }
             Output::Activate(activation) => {
+                tracing::debug!(?activation, "global shortcut");
                 let _ = self.activations.send(activation);
             }
             Output::Notify(error) => {
