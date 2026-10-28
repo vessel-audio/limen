@@ -18,6 +18,8 @@
 mod connection;
 mod machine;
 mod protocol;
+#[cfg(test)]
+mod tests;
 
 use std::pin::Pin;
 

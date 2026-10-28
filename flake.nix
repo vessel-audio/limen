@@ -66,6 +66,7 @@
                 gcc
                 gnumake
                 coreutils
+                dbus
                 fcitx5
                 pipewire
                 libnotify

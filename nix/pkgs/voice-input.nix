@@ -2,6 +2,7 @@
   lib,
   rustPlatform,
   makeWrapper,
+  dbus,
   pipewire,
   libnotify,
   cacert,
@@ -29,6 +30,8 @@ rustPlatform.buildRustPackage {
   SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
 
   nativeBuildInputs = [ makeWrapper ];
+  # The portal tests run a private dbus-daemon.
+  nativeCheckInputs = [ dbus ];
 
   postFixup = ''
     wrapProgram $out/bin/voice-input \

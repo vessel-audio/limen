@@ -30,3 +30,8 @@ zbus = { version = "6.1.0", default-features = false, features = [
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+zbus = { version = "6.1.0", default-features = false, features = [
+  "proxy",
+  "service",
+  "tokio",
+] }
