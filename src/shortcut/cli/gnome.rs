@@ -99,16 +99,13 @@ pub(super) async fn bind(
         toggle,
         keybinding::toggle_command(program.path()),
     );
+    // When the portal holds the key, it must let go before GNOME grabs it:
+    // apply the backend change first and wait for the session to close.
+    if current.backend == Backend::Portal {
+        apply_backend(paths, toggle).await?;
+    }
     gsettings::apply_setup(&dconf, &before, &plan).await?;
-    config::update_shortcut(&paths.config_file, |latest| ShortcutConfig {
-        backend: Backend::GnomeKeybinding,
-        toggle,
-        ..latest
-    })
-    .with_context(|| {
-        format!("GNOME now runs voice-input on {toggle}, but the config was not updated; run the command again once it can be")
-    })?;
-    rebind(paths).await?;
+    apply_backend(paths, toggle).await?;
     println!(
         "toggle:   {toggle} → {} ({})",
         plan.command,
@@ -122,6 +119,20 @@ pub(super) async fn bind(
         );
     }
     Ok(())
+}
+
+/// Record the gnome-keybinding backend in the config and have the daemon
+/// apply it. Idempotent, so it can run before and after the dconf change.
+async fn apply_backend(paths: &Paths, toggle: Shortcut) -> Result<()> {
+    config::update_shortcut(&paths.config_file, |latest| ShortcutConfig {
+        backend: Backend::GnomeKeybinding,
+        toggle,
+        ..latest
+    })
+    .with_context(|| {
+        format!("GNOME now runs voice-input on {toggle}, but the config was not updated; run the command again once it can be")
+    })?;
+    rebind(paths).await
 }
 
 pub(super) async fn setup_none(paths: &Paths, current: ShortcutConfig) -> Result<(), Failure> {
