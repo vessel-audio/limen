@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use voice_input_core::{
     Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths, Push,
-    Report, SetupError, Shortcut, clear, edit, set, setup, spawn_daemon, subscribe,
-    terminate_daemon, v1,
+    Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set, setup, spawn_daemon,
+    subscribe, terminate_daemon, v1,
 };
 
 use crate::model::{Msg, Toast};
@@ -215,9 +215,17 @@ async fn run(
                 match subscribe(&paths).await {
                     Ok(mut candidate) => match tokio::time::timeout(Duration::from_secs(3), candidate.try_next()).await.unwrap_or_else(|_| Err(anyhow::anyhow!("subscription hello timed out"))) {
                         Ok(Some(Push::Hello { protocol, daemon_version })) => {
-                            let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version })).await;
-                            backoff = Backoff::default();
-                            stream = Some(Box::pin(candidate));
+                            match daemon_peer_pid(&paths).await {
+                                Ok(daemon_pid) => {
+                                    let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version, daemon_pid })).await;
+                                    backoff = Backoff::default();
+                                    stream = Some(Box::pin(candidate));
+                                }
+                                Err(error) => {
+                                    let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: format!("{error:#}") })).await;
+                                    next_connect = tokio::time::Instant::now() + backoff.next();
+                                }
+                            }
                         }
                         Ok(Some(Push::Error { message })) => {
                             if is_outdated(&message) {

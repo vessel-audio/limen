@@ -1,6 +1,6 @@
 //! Daemon startup and the common shutdown/cleanup path.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::sync::mpsc;
 
 use super::Projection;
@@ -21,7 +21,7 @@ pub(crate) struct ActorExit {
 
 /// Run the resident daemon with the discovered paths and loaded configuration.
 pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
-    let listener = ipc::bind(&paths)?;
+    let socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (input_tx, input_reports, input_worker) = input::spawn(&cfg)?;
 
@@ -44,7 +44,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
     // Do not accept until every actor and snapshot exists.
     let watchers = ipc::Watchers::new(snapshots, shortcut_watch, levels);
-    let accept = ipc::spawn_accept_loop(listener, cmd_tx.clone(), watchers);
+    let accept = ipc::spawn_accept_loop(socket.listener, cmd_tx.clone(), watchers);
     notify("voice-input", "daemon started");
     tracing::info!(socket = %paths.socket.display(), "daemon listening");
 
@@ -69,13 +69,6 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
         )),
     };
     accept?;
-    match std::fs::remove_file(&paths.socket) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to remove socket {}", paths.socket.display()));
-        }
-    }
+    socket.identity.remove_if_owned(&paths)?;
     exit.result
 }

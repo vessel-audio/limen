@@ -53,6 +53,7 @@ fn connected() -> GuiState {
         .apply(Msg::Hello {
             protocol: 1,
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+            daemon_pid: 100,
         })
         .0
 }
@@ -108,6 +109,7 @@ fn protocol_mismatch_is_fatal_but_version_difference_is_only_a_warning() {
     let (wrong_protocol, _) = GuiState::default().apply(Msg::Hello {
         protocol: 2,
         daemon_version: "0.1.0".to_string(),
+        daemon_pid: 100,
     });
     assert!(matches!(
         wrong_protocol.connection,
@@ -116,6 +118,7 @@ fn protocol_mismatch_is_fatal_but_version_difference_is_only_a_warning() {
     let (warning, _) = GuiState::default().apply(Msg::Hello {
         protocol: 1,
         daemon_version: "0.0.9".to_string(),
+        daemon_pid: 100,
     });
     assert_eq!(
         warning.warning,
@@ -149,7 +152,12 @@ fn only_this_guis_kept_take_is_copied_once_across_reconnects() {
     let (disconnected, _) = repeated.apply(Msg::Disconnected {
         reason: "reconnect".to_string(),
     });
-    let (_reconnected, reconnected_actions) = disconnected.apply(Msg::Snapshot(Box::new(snapshot)));
+    let (reconnected, _) = disconnected.apply(Msg::Hello {
+        protocol: 1,
+        daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+        daemon_pid: 100,
+    });
+    let (_reconnected, reconnected_actions) = reconnected.apply(Msg::Snapshot(Box::new(snapshot)));
     assert!(reconnected_actions.is_empty());
 }
 
@@ -234,4 +242,35 @@ fn replacing_the_daemon_resets_ids_without_spawning_again() {
     assert!(replaced.copied_entries.is_empty());
     assert!(replaced.pending_copies.is_empty());
     assert!(replaced.snapshot.is_none());
+}
+
+#[test]
+fn an_external_daemon_restart_resets_clipboard_correlation() {
+    let (stopped, _) = connected().apply(Msg::StopAccepted { take: 7 });
+    let (copied, _) = stopped.apply(Msg::Snapshot(Box::new(snapshot(
+        DictationState::Idle,
+        vec![kept(10, 7)],
+    ))));
+    let (disconnected, _) = copied.apply(Msg::Disconnected {
+        reason: "external restart".to_string(),
+    });
+    let (reconnected, _) = disconnected.apply(Msg::Hello {
+        protocol: 1,
+        daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+        daemon_pid: 101,
+    });
+    let (stopped, _) = reconnected.apply(Msg::StopAccepted { take: 7 });
+
+    let (_, actions) = stopped.apply(Msg::Snapshot(Box::new(snapshot(
+        DictationState::Idle,
+        vec![kept(10, 7)],
+    ))));
+
+    assert_eq!(
+        actions,
+        [
+            Action::CopyToClipboard("kept text".to_string()),
+            Action::Toast(Toast::CopiedToClipboard),
+        ]
+    );
 }

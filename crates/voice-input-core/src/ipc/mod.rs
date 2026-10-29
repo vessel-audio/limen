@@ -20,7 +20,8 @@ pub use client::{request, send, subscribe};
 pub(crate) use subscription::Watchers;
 pub(crate) mod wire;
 
-use std::os::unix::fs::PermissionsExt;
+use std::io::ErrorKind;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -60,7 +61,44 @@ pub enum Command {
 #[error("cannot connect to {}; is `voice-input daemon` running?", .0.display())]
 pub struct NotRunning(PathBuf, #[source] std::io::Error);
 
-pub fn bind(paths: &Paths) -> Result<UnixListener> {
+pub(crate) struct BoundSocket {
+    pub listener: UnixListener,
+    pub identity: SocketIdentity,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl SocketIdentity {
+    pub fn remove_if_owned(self, paths: &Paths) -> Result<()> {
+        let owned = match std::fs::metadata(&paths.socket) {
+            Ok(metadata) => metadata.dev() == self.device && metadata.ino() == self.inode,
+            Err(error) if error.kind() == ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(error).context(format!(
+                    "failed to inspect socket {}",
+                    paths.socket.display()
+                ));
+            }
+        };
+        match owned {
+            false => Ok(()),
+            true => match std::fs::remove_file(&paths.socket) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error).context(format!(
+                    "failed to remove socket {}",
+                    paths.socket.display()
+                )),
+            },
+        }
+    }
+}
+
+pub fn bind(paths: &Paths) -> Result<BoundSocket> {
     if paths.socket.exists() {
         // Distinguish a live daemon (refuse to start a second one) from a
         // stale socket file left by a crashed one (safe to replace).
@@ -77,7 +115,15 @@ pub fn bind(paths: &Paths) -> Result<UnixListener> {
         .with_context(|| format!("failed to bind {}", paths.socket.display()))?;
     std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to restrict {}", paths.socket.display()))?;
-    Ok(listener)
+    let metadata = std::fs::metadata(&paths.socket)
+        .with_context(|| format!("failed to inspect {}", paths.socket.display()))?;
+    Ok(BoundSocket {
+        listener,
+        identity: SocketIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        },
+    })
 }
 
 /// Accept connections forever, forwarding parsed commands to the main loop.
@@ -385,6 +431,29 @@ mod tests {
         );
         drop(listener);
         std::fs::remove_file(socket).unwrap();
+    }
+
+    #[tokio::test]
+    async fn old_cleanup_does_not_remove_a_replacement_socket() {
+        let dir =
+            std::env::temp_dir().join(format!("voice-input-socket-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths {
+            config_file: dir.join("config.toml"),
+            socket: dir.join("voice-input.sock"),
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+        };
+        let old = bind(&paths).unwrap();
+        let identity = old.identity;
+        drop(old.listener);
+        let _replacement = bind(&paths).unwrap();
+
+        identity.remove_if_owned(&paths).unwrap();
+
+        assert!(paths.socket.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

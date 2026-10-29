@@ -69,6 +69,7 @@ pub enum Msg {
     Hello {
         protocol: u64,
         daemon_version: String,
+        daemon_pid: u32,
     },
     DaemonError {
         message: String,
@@ -93,6 +94,7 @@ pub struct GuiState {
     pub snapshot: Option<WireSnapshot>,
     pub level: Level,
     pub daemon_version: Option<String>,
+    pub daemon_pid: Option<u32>,
     pub command_error: Option<String>,
     pub pending_copies: BTreeSet<u64>,
     pub copied_entries: BTreeSet<u64>,
@@ -106,6 +108,7 @@ impl Default for GuiState {
             snapshot: None,
             level: Level::SILENCE,
             daemon_version: None,
+            daemon_pid: None,
             command_error: None,
             pending_copies: BTreeSet::new(),
             copied_entries: BTreeSet::new(),
@@ -143,6 +146,7 @@ impl GuiState {
             Msg::Hello {
                 protocol,
                 daemon_version,
+                daemon_pid,
             } => {
                 if protocol != 1 {
                     self.connection = Connection::ProtocolMismatch {
@@ -150,6 +154,13 @@ impl GuiState {
                     };
                     return (self, Vec::new());
                 }
+                if self
+                    .daemon_pid
+                    .is_some_and(|previous| previous != daemon_pid)
+                {
+                    self = Self::default();
+                }
+                self.daemon_pid = Some(daemon_pid);
                 self.warning = (daemon_version != env!("CARGO_PKG_VERSION")).then_some(
                     Warning::DaemonVersion {
                         running: daemon_version.clone(),
