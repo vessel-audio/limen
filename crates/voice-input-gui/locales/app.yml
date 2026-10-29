@@ -61,6 +61,15 @@ en:
   history.clear_confirm: Clear completed history?
   history.pending: pending
   shortcuts.apply: Apply
+  shortcuts.session_disabled: disabled
+  shortcuts.session_binding: waiting for GNOME confirmation…
+  shortcuts.session_bound: bound ✓
+  shortcuts.session_cancelled: cancelled; retry setup
+  shortcuts.session_failed: failed
+  shortcuts.retry: Retry
+  shortcuts.hold_order: Release X before Super; otherwise recording stops after 60 seconds
+  footer.polish: polish
+  footer.shortcut: shortcut
   shortcuts.gnome_backend: GNOME custom shortcut
   shortcuts.edit: Change in GNOME Settings
   shortcuts.preferred_toggle: Preferred toggle
@@ -147,6 +156,15 @@ zh-CN:
   history.clear_confirm: 确定清空已完成的历史吗？
   history.pending: 等待中
   shortcuts.apply: 应用
+  shortcuts.session_disabled: 未启用
+  shortcuts.session_binding: 等待 GNOME 确认…
+  shortcuts.session_bound: 已绑定 ✓
+  shortcuts.session_cancelled: 已取消，请重试
+  shortcuts.session_failed: 失败
+  shortcuts.retry: 重试
+  shortcuts.hold_order: 请先松开 X 再松开 Super；否则最长 60 秒后自动结束
+  footer.polish: 润色
+  footer.shortcut: 快捷键
   shortcuts.gnome_backend: GNOME 自定义快捷键
   shortcuts.edit: 在 GNOME 设置中修改
   shortcuts.preferred_toggle: 首选切换键

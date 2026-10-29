@@ -6,7 +6,9 @@ use gpui_kit::component::{
     input::Input,
 };
 use gpui_kit::*;
-use voice_input_core::{Action as ShortcutAction, Backend, Keys, Note, Program, Shortcut};
+use voice_input_core::{
+    Action as ShortcutAction, Backend, Keys, Note, Program, SessionState, Shortcut,
+};
 
 use crate::app::AppView;
 use crate::bridge::{BridgeCommand, ShortcutRequest};
@@ -14,7 +16,24 @@ use crate::recorder::{
     Action as RecorderAction, Event as RecorderEvent, RecorderError, RecorderState,
 };
 
-pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
+pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Window) -> Div {
+    let preferred = view
+        .model
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.shortcut.preferred);
+    if let Some(preferred) = preferred {
+        if !view.toggle_touched {
+            view.toggle_input.update(cx, |input, cx| {
+                input.set_value(preferred.toggle.to_string(), window, cx);
+            });
+        }
+        if !view.hold_touched {
+            view.hold_input.update(cx, |input, cx| {
+                input.set_value(preferred.hold.to_string(), window, cx);
+            });
+        }
+    }
     let selector = div().h_flex().gap_2().children(
         [
             ("backend-portal", Backend::Portal, "portal".to_string()),
@@ -108,13 +127,40 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
 fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
     let status = view.model.snapshot.as_ref().map(|snapshot| {
         let status = &snapshot.shortcut;
-        format!(
-            "{}: {:?}\n{}\n{}",
-            rust_i18n::t!("shortcuts.session"),
-            status.session,
-            trigger(&status.actual.toggle),
-            trigger(&status.actual.hold)
-        )
+        div()
+            .v_flex()
+            .gap_1()
+            .child(format!(
+                "{}: {}",
+                rust_i18n::t!("shortcuts.session"),
+                session_label(status.session)
+            ))
+            .child(trigger(&status.actual.toggle))
+            .child(trigger(&status.actual.hold))
+            .children(status.last_error.clone())
+            .children(match status.session {
+                SessionState::Cancelled | SessionState::Failed => Some(
+                    Button::new("retry-portal")
+                        .outline()
+                        .label(rust_i18n::t!("shortcuts.retry").to_string())
+                        .on_click({
+                            let commands = view.commands.clone();
+                            let preferred = status.preferred;
+                            move |_, _, _| {
+                                let _ = commands.try_send(BridgeCommand::Shortcut(
+                                    ShortcutRequest::Setup {
+                                        backend: Backend::Portal,
+                                        keys: Keys {
+                                            toggle: Some(preferred.toggle),
+                                            hold: Some(preferred.hold),
+                                        },
+                                    },
+                                ));
+                            }
+                        }),
+                ),
+                SessionState::Disabled | SessionState::Binding | SessionState::Bound => None,
+            })
     });
     div()
         .v_flex()
@@ -131,10 +177,21 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
                     }
                 }),
         )
+        .child(rust_i18n::t!("shortcuts.hold_order").to_string())
         .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
         .child(Input::new(&view.toggle_input))
         .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
         .child(Input::new(&view.hold_input))
+}
+
+fn session_label(session: SessionState) -> String {
+    match session {
+        SessionState::Disabled => rust_i18n::t!("shortcuts.session_disabled").to_string(),
+        SessionState::Binding => rust_i18n::t!("shortcuts.session_binding").to_string(),
+        SessionState::Bound => rust_i18n::t!("shortcuts.session_bound").to_string(),
+        SessionState::Cancelled => rust_i18n::t!("shortcuts.session_cancelled").to_string(),
+        SessionState::Failed => rust_i18n::t!("shortcuts.session_failed").to_string(),
+    }
 }
 
 fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {

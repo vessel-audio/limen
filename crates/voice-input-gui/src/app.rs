@@ -320,10 +320,12 @@ impl AppView {
             .snapshot_config()
             .map(|config| {
                 format!(
-                    "{} · {} · polish {} · shortcut {}",
+                    "{} · {} · {} {} · {} {}",
                     config.input_method,
                     config.provider_model,
+                    rust_i18n::t!("footer.polish"),
                     config.polish_enabled,
+                    rust_i18n::t!("footer.shortcut"),
                     self.model
                         .snapshot
                         .as_ref()
@@ -412,11 +414,11 @@ impl AppView {
 }
 
 impl Render for AppView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = match self.page {
             Page::Dictation => pages::dictation(self, cx),
             Page::History => pages::history(self, cx),
-            Page::Shortcuts => pages::shortcuts(self, cx),
+            Page::Shortcuts => pages::shortcuts(self, cx, window),
         };
         div()
             .v_flex()
