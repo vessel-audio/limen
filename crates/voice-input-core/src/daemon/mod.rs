@@ -436,8 +436,9 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let (projection, _snapshots) = Projection::new(&cfg);
+    let (session, _levels) = SessionHandle::spawn(cfg, session_report_tx);
     let actor = DictationActor::new(
-        SessionHandle::spawn(cfg, session_report_tx),
+        session,
         input_tx,
         notify,
         paths.config_file.clone(),

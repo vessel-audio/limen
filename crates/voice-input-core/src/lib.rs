@@ -15,6 +15,7 @@ mod provider;
 mod session;
 mod shortcut;
 
+pub use audio::Level;
 pub use config::{Config, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{

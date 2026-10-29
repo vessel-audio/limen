@@ -17,16 +17,13 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::audio::{Capture, SAMPLE_RATE};
+use crate::audio::{CaptureReap, Level, SAMPLE_RATE, capture_loop, reap_capture};
 use crate::config::Config;
 use crate::dictation::Event;
 use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEvent};
-
-/// How long to wait for the capture task to die after abort.
-const CAPTURE_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Upper bound for stopping capture and handing the take to the provider.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -53,18 +50,23 @@ pub(crate) struct SessionHandle {
 impl SessionHandle {
     /// Spawn the actor. `dictation` is the dictation loop's mailbox, where the
     /// actor reports every outcome.
-    pub(crate) fn spawn(cfg: Config, dictation: mpsc::UnboundedSender<Event>) -> Self {
+    pub(crate) fn spawn(
+        cfg: Config,
+        dictation: mpsc::UnboundedSender<Event>,
+    ) -> (Self, watch::Receiver<Level>) {
         let (mailbox, commands) = mpsc::unbounded_channel();
+        let (level, levels) = watch::channel(Level::SILENCE);
         tokio::spawn(
             SessionActor {
                 cfg,
                 commands,
                 dictation,
                 active: None,
+                level,
             }
             .run(),
         );
-        Self { mailbox }
+        (Self { mailbox }, levels)
     }
 
     /// Fire-and-forget send. A dead actor is noticed by the dictation loop
@@ -91,6 +93,7 @@ struct SessionActor {
     /// The dictation loop's mailbox; every outcome is reported here.
     dictation: mpsc::UnboundedSender<Event>,
     active: Option<Active>,
+    level: watch::Sender<Level>,
 }
 
 impl SessionActor {
@@ -135,7 +138,7 @@ impl SessionActor {
     async fn start(&mut self) {
         // A take never outlives the next `Start`, even if a `Teardown` was missed.
         self.teardown().await;
-        let event = match Active::open(&self.cfg).await {
+        let event = match Active::open(&self.cfg, self.level.clone()).await {
             Ok(active) => {
                 self.active = Some(active);
                 Event::SessionStarted
@@ -191,6 +194,7 @@ struct Active {
     /// reaping takes it out, so teardown can never poll it twice.
     capture: Option<JoinHandle<()>>,
     stage: Stage,
+    level: watch::Sender<Level>,
 }
 
 /// Which input the actor reads from the take between commands.
@@ -204,14 +208,9 @@ enum Stage {
     Ended,
 }
 
-enum CaptureReap {
-    Reaped,
-    TimedOut,
-}
-
 impl Active {
     /// Open a provider session and start capturing the microphone.
-    async fn open(cfg: &Config) -> Result<Self> {
+    async fn open(cfg: &Config, level: watch::Sender<Level>) -> Result<Self> {
         let session_cfg = SessionConfig {
             model: cfg.provider.model.clone(),
             language: cfg.provider.language.clone(),
@@ -223,10 +222,12 @@ impl Active {
             .await?;
         let (sink, events) = session.split();
         let (tx, pcm) = mpsc::channel(64);
+        level.send_replace(Level::SILENCE);
+        let capture_level = level.clone();
         let device = cfg.audio.device.clone();
         let chunk_ms = cfg.audio.chunk_ms;
         let capture = tokio::spawn(async move {
-            if let Err(e) = capture_loop(device, chunk_ms, tx).await {
+            if let Err(e) = capture_loop(device, chunk_ms, tx, capture_level).await {
                 tracing::warn!(error = %format!("{e:#}"), "capture loop failed");
             }
         });
@@ -236,6 +237,7 @@ impl Active {
             pcm,
             capture: Some(capture),
             stage: Stage::Recording,
+            level,
         })
     }
 
@@ -299,43 +301,11 @@ impl Active {
     /// Abort the capture task and wait until pw-record is actually dead
     /// (kill_on_drop runs when the task's `Capture` is dropped).
     async fn reap_capture(&mut self) -> CaptureReap {
+        self.level.send_replace(Level::SILENCE);
         let Some(handle) = self.capture.take() else {
             return CaptureReap::Reaped;
         };
-        handle.abort();
-        match tokio::time::timeout(CAPTURE_REAP_TIMEOUT, handle).await {
-            Ok(_) => CaptureReap::Reaped,
-            Err(_) => {
-                // Dropping the handle detaches the task, but the abort request
-                // still stands. Do not submit audio that may still be appended.
-                tracing::warn!("capture task did not exit within the reap timeout");
-                CaptureReap::TimedOut
-            }
-        }
-    }
-}
-
-async fn capture_loop(
-    device: Option<String>,
-    chunk_ms: u32,
-    tx: mpsc::Sender<Vec<i16>>,
-) -> Result<()> {
-    let mut capture = Capture::start(device.as_deref())?;
-    let chunk_samples = (SAMPLE_RATE * chunk_ms / 1000) as usize;
-    loop {
-        match capture.read_chunk(chunk_samples).await? {
-            Some(pcm) => {
-                // A lagging consumer must not stall the microphone: drop frames.
-                match tx.try_send(pcm) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        tracing::warn!("pcm channel full, dropping a chunk");
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => return Ok(()),
-                }
-            }
-            None => return Ok(()),
-        }
+        reap_capture(handle, self.level.clone()).await
     }
 }
 
@@ -345,9 +315,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
 
     use super::{Active, SessionActor, SessionCommand, Stage};
+    use crate::audio::Level;
     use crate::config::Config;
     use crate::dictation::Event;
     use crate::provider::{AudioSink, BoxFuture, EventSource, TranscriptEvent};
@@ -408,6 +379,7 @@ mod tests {
             pcm,
             capture: None,
             stage: Stage::Recording,
+            level: watch::channel(Level::SILENCE).0,
         }
     }
 
@@ -435,6 +407,7 @@ mod tests {
                 commands,
                 dictation,
                 active: Some(active),
+                level: watch::channel(Level::SILENCE).0,
             }
             .run(),
         );
@@ -530,5 +503,22 @@ mod tests {
             ]
         );
         assert_eq!(*operations.lock().unwrap(), []);
+    }
+
+    #[tokio::test]
+    async fn reaping_capture_resets_the_level() {
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        let (_tx, pcm) = mpsc::channel(1);
+        let mut active = recording_take(&operations, pcm, []);
+        let (level, levels) = watch::channel(Level::SILENCE);
+        active.level = level;
+        active.level.send_replace(Level {
+            rms: 0.5,
+            dbfs: -6.0,
+        });
+
+        active.reap_capture().await;
+
+        assert_eq!(*levels.borrow(), Level::SILENCE);
     }
 }
