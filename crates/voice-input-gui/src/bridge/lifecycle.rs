@@ -46,15 +46,14 @@ pub(super) async fn wait_for_socket_removal(paths: &Paths) -> Result<(), StartEr
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match tokio::net::UnixStream::connect(&paths.socket).await {
-                Ok(stream) => {
-                    drop(stream);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
+                Ok(stream) => drop(stream),
                 // ConnectionRefused can precede the old daemon's unlink; only
                 // a missing path proves that its socket cleanup has finished.
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
                 Err(error) => return Err(StartError::Failed(error.to_string())),
             }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await

@@ -66,6 +66,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
         tokio::time::sleep(Duration::from_millis(200)).await;
         drop(stream);
         drop(listener);
+        tokio::time::sleep(Duration::from_millis(50)).await;
         fs::remove_file(socket).unwrap();
     });
     let (events, mut event_rx) = tokio::sync::mpsc::channel(8);
