@@ -73,6 +73,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     let mut stream = None;
     let mut spawn = SpawnGate { task: None };
     let mut stopped = false;
+    let mut shortcuts = tokio::task::JoinSet::new();
 
     handle_command(
         &paths,
@@ -81,6 +82,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
         &mut stream,
         &mut spawn,
         &mut stopped,
+        &mut shortcuts,
     )
     .await;
 
@@ -95,4 +97,86 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     ));
     server.await.unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn termination_removes_a_stale_socket_after_process_exit() {
+    use std::fs;
+    use voice_input_core::Paths;
+
+    let root = std::env::temp_dir().join(format!(
+        "voice-input-bridge-terminate-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("voice-input.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    drop(tokio::net::UnixListener::bind(&paths.socket).unwrap());
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "sleep 0.05"])
+        .spawn()
+        .unwrap();
+
+    super::wait_for_termination(&paths, child.id())
+        .await
+        .unwrap();
+
+    child.wait().unwrap();
+    assert!(!paths.socket.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quit_stops_the_bridge_while_another_sender_is_alive() {
+    use std::io::{BufRead, Write};
+    use voice_input_core::Paths;
+
+    let root = std::env::temp_dir().join(format!("voice-input-bridge-quit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("voice-input.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    let listener = std::os::unix::net::UnixListener::bind(&paths.socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = String::new();
+        std::io::BufReader::new(&mut stream)
+            .read_line(&mut request)
+            .unwrap();
+        assert!(request.contains("subscribe"));
+        stream
+            .write_all(b"{\"type\":\"hello\",\"protocol\":1,\"daemon_version\":\"test\"}\n")
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+    });
+    let (commands, mut events, bridge) = super::start(paths);
+    let retained = commands.clone();
+    assert!(matches!(
+        events.blocking_recv(),
+        Some(super::BridgeEvent::Msg(crate::model::Msg::Hello { .. }))
+    ));
+
+    commands.blocking_send(super::BridgeCommand::Quit).unwrap();
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = bridge.join();
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(Duration::from_secs(1)).is_ok(),
+        "bridge stayed alive after Quit"
+    );
+    drop(retained);
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }

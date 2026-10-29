@@ -1,0 +1,96 @@
+app.title: voice-input
+nav.dictation: 听写
+nav.history: 历史
+nav.shortcuts: 快捷键
+status.idle: 空闲
+status.starting: 正在打开麦克风…
+status.recording: 正在录音
+status.hold_recording: 按住说话
+status.transcribing: 正在转写…
+status.committing: 正在提交文字…
+status.queued: 已排队
+action.start: 开始听写
+action.stop: 停止并转写
+action.record_another: 转写完再录一段
+action.clear: 清空
+action.copy: 复制
+action.start_daemon: 启动后台服务
+hint.keep_delivery: 点按钮停止时，文字不打字，改为复制到剪贴板
+hint.release_shortcut: 松开快捷键结束
+hint.hold_timeout: 60 秒时自动结束
+hint.no_sound: 连续 3 秒未检测到声音
+hint.shifted_symbol: Shift 符号键请使用手动输入
+history.title: 历史
+history.memory: 仅保存在后台服务内存中，重启即清空
+history.empty: 还没有识别记录
+history.original: 原文
+history.committed: 已提交
+history.kept: 已保留
+history.failed: 提交失败
+history.dropped: 已丢弃
+toast.copied: 已复制到剪贴板
+about.title: 关于 voice-input
+about.version: 版本
+about.protocol: 协议
+about.socket: Socket
+about.config: 配置文件
+about.log: 日志
+about.unknown: 未知
+action.open_config: 打开配置文件
+action.open_log: 打开日志
+action.restart_daemon: 重启后台服务
+action.stop_daemon: 停止后台服务
+action.terminate_daemon: 确认终止后台服务
+action.close: 关闭
+action.confirm: 确认
+action.cancel: 取消
+action.view_history: 查看历史
+connection.connecting: 正在连接
+connection.starting: 正在启动后台服务…
+connection.not_running: 后台服务未运行
+connection.failed_start: 后台服务启动失败
+connection.reconnecting: 正在重连（第
+connection.outdated: 后台服务版本过旧
+connection.daemon_version: 后台服务版本
+connection.gui_expects: GUI 期望版本
+connection.disconnected: 已断开
+connection.stop_confirm: 确定停止后台服务吗？
+connection.terminate_confirm: 确定终止过旧的后台服务吗？
+connection.closing_hint: 关闭窗口不影响后台识别
+history.clear_confirm: 确定清空已完成的历史吗？
+history.pending: 等待中
+shortcuts.apply: 应用
+shortcuts.none_backend: 不设置
+shortcuts.or: 或
+shortcuts.session_disabled: 未启用
+shortcuts.session_binding: 等待 GNOME 确认…
+shortcuts.session_bound: 已绑定 ✓
+shortcuts.session_cancelled: 已取消，请重试
+shortcuts.session_failed: 失败
+shortcuts.retry: 重试
+shortcuts.hold_order: 请先松开 X 再松开 Super；否则最长 60 秒后自动结束
+footer.polish: 润色
+footer.shortcut: 快捷键
+shortcuts.gnome_backend: GNOME 自定义快捷键
+shortcuts.edit: 在 GNOME 设置中修改
+shortcuts.preferred_toggle: 首选切换键
+shortcuts.preferred_hold: 首选按住说话键
+shortcuts.session: 会话
+shortcuts.not_bound: 未绑定
+shortcuts.not_set: 未设置
+shortcuts.record: 录键
+shortcuts.recording: 请按下组合键…（Esc 取消，Backspace 清除）
+shortcuts.set_toggle: 设置切换键
+shortcuts.no_hold: 此后端不支持按住说话。
+shortcuts.bind_command: 请在桌面设置中绑定此命令：
+shortcuts.invalid: 快捷键无效
+note.installed: 已安装
+note.toggle: 切换
+note.unstable: 位于 Nix store，升级后会失效
+note.not_checked: 未检查
+note.daemon_offline: 后台服务未运行，变更将在启动后生效。
+note.stable_path: 路径稳定
+note.unstable_path: 路径会在升级后失效
+note.no_custom: 没有运行 voice-input toggle 的 GNOME 自定义快捷键。
+note.removed: 已移除 GNOME 自定义快捷键。
+note.disabled: 已禁用 GNOME 自定义快捷键，其余内容保留。

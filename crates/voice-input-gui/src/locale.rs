@@ -69,26 +69,23 @@ mod tests {
     }
 
     #[test]
+    fn application_translations_resolve_at_runtime() {
+        rust_i18n::set_locale("en");
+        assert_eq!(rust_i18n::t!("status.idle"), "Idle");
+        rust_i18n::set_locale("zh-CN");
+        assert_eq!(rust_i18n::t!("status.idle"), "空闲");
+    }
+
+    #[test]
     fn every_translation_key_has_both_languages() {
-        let source = include_str!("../locales/app.yml");
-        let keys = |locale: &str| {
-            let mut in_locale = false;
+        let keys = |source: &str| {
             source
                 .lines()
-                .filter_map(|line| {
-                    let trimmed = line.trim();
-                    if trimmed.ends_with(':') && !trimmed.contains(' ') {
-                        in_locale = trimmed == format!("{locale}:");
-                        return None;
-                    }
-                    in_locale
-                        .then(|| trimmed.split(':').next().map(str::to_string))
-                        .flatten()
-                })
+                .filter_map(|line| line.split_once(':').map(|(key, _)| key.to_string()))
                 .collect::<std::collections::BTreeSet<_>>()
         };
-        let en = keys("en");
-        let zh = keys("zh-CN");
+        let en = keys(include_str!("../locales/en.yml"));
+        let zh = keys(include_str!("../locales/zh-CN.yml"));
         assert!(!en.is_empty());
         assert_eq!(en, zh);
     }

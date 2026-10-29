@@ -93,6 +93,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
         .v_flex()
         .gap_3()
         .p_4()
+        .track_focus(&view.recorder_focus)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
             if event.keystroke.key == "backspace" && (this.toggle_focused || this.hold_focused) {
                 return;
@@ -225,8 +226,9 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                     Button::new("record-toggle")
                         .outline()
                         .label(rust_i18n::t!("shortcuts.record").to_string())
-                        .on_click(cx.listener(|this, _, _, _| {
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.recorder = this.recorder.clone().apply(RecorderEvent::Start).0;
+                            this.recorder_focus.focus(window, cx);
                         })),
                 )
                 .child(

@@ -63,3 +63,27 @@ pub(super) async fn wait_for_socket_removal(paths: &Paths) -> Result<(), StartEr
 pub(super) fn is_outdated(message: &str) -> bool {
     message.contains("invalid request") || message.contains("unknown variant")
 }
+
+pub(super) async fn wait_for_termination(paths: &Paths, pid: u32) -> Result<(), StartError> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let exited = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => stat
+                    .rsplit_once(") ")
+                    .is_some_and(|(_, state)| state.starts_with('Z')),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(_) => false,
+            };
+            match exited {
+                false => tokio::time::sleep(Duration::from_millis(50)).await,
+                true => match std::fs::remove_file(&paths.socket) {
+                    Ok(()) => return Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                    Err(error) => return Err(StartError::Failed(error.to_string())),
+                },
+            }
+        }
+    })
+    .await
+    .map_err(|_| StartError::Failed("daemon did not exit within 5s".to_string()))?
+}

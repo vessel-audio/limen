@@ -189,9 +189,15 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 })),
         );
     let body = match entries.is_empty() {
-        true => div().child(rust_i18n::t!("history.empty").to_string()),
+        true => div()
+            .id("history-empty")
+            .child(rust_i18n::t!("history.empty").to_string()),
         false => div()
+            .id("history-entries")
             .v_flex()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
             .gap_2()
             .children(entries.iter().rev().map(history_card)),
     };

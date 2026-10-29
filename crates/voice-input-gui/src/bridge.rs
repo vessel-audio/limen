@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use voice_input_core::{
     Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths, Push,
     Report, SetupError, Shortcut, clear, edit, set, setup, spawn_daemon, subscribe,
@@ -18,11 +18,14 @@ use voice_input_core::{
 use crate::model::{Msg, Toast};
 use lifecycle::{
     StartError, StartResult, is_outdated, request_with_timeout, restart, wait_for_socket_removal,
+    wait_for_termination,
 };
 
 /// Commands sent from the GPUI thread to the bridge.
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
+    /// Stop the bridge even if GPUI tasks still retain command senders.
+    Quit,
     Start,
     Stop,
     ClearHistory,
@@ -65,6 +68,8 @@ pub struct ShortcutFailure {
     pub report: Report,
     pub message: String,
 }
+
+type ShortcutTasks = JoinSet<Result<Report, ShortcutFailure>>;
 
 /// Start a current-thread Tokio runtime on a dedicated native thread.
 pub fn start(
@@ -152,6 +157,7 @@ async fn run(
 ) {
     let mut backoff = Backoff::default();
     let mut spawn = SpawnGate { task: None };
+    let mut shortcuts = ShortcutTasks::new();
     let mut stream: Option<Pin<Box<dyn Stream<Item = Result<Push>>>>> = None;
     let mut next_connect = tokio::time::Instant::now();
     let mut stopped = false;
@@ -159,14 +165,31 @@ async fn run(
         tokio::select! {
             command = commands.recv() => {
                 let Some(command) = command else { return; };
-                handle_command(
-                    &paths,
-                    &events,
-                    command,
-                    &mut stream,
-                    &mut spawn,
-                    &mut stopped,
-                ).await;
+                match command {
+                    BridgeCommand::Quit => return,
+                    command => handle_command(
+                        &paths,
+                        &events,
+                        command,
+                        &mut stream,
+                        &mut spawn,
+                        &mut stopped,
+                        &mut shortcuts,
+                    ).await,
+                }
+            }
+            result = shortcuts.join_next(), if !shortcuts.is_empty() => {
+                match result {
+                    Some(Ok(result)) => {
+                        let _ = events.send(BridgeEvent::ShortcutReport(result)).await;
+                    }
+                    Some(Err(error)) => {
+                        let _ = events.send(BridgeEvent::Msg(Msg::CommandError {
+                            message: format!("shortcut operation failed: {error}"),
+                        })).await;
+                    }
+                    None => {}
+                }
             }
             outcome = spawn.finish() => {
                 let Some(outcome) = outcome else { continue; };
@@ -278,6 +301,7 @@ async fn handle_command(
     stream: &mut Option<Pin<Box<dyn Stream<Item = Result<Push>>>>>,
     spawn: &mut SpawnGate,
     stopped: &mut bool,
+    shortcuts: &mut ShortcutTasks,
 ) {
     match command {
         BridgeCommand::Start => match request_with_timeout(paths, &v1::Request::Start).await {
@@ -406,7 +430,7 @@ async fn handle_command(
             }
         }
         BridgeCommand::TerminateDaemon => match terminate_daemon(paths).await {
-            Ok(()) => match wait_for_socket_removal(paths).await {
+            Ok(pid) => match wait_for_termination(paths, pid).await {
                 Ok(()) => {
                     *stopped = true;
                     *stream = None;
@@ -427,9 +451,10 @@ async fn handle_command(
             }
         },
         BridgeCommand::Shortcut(request) => {
-            let result = run_shortcut(paths, request).await;
-            let _ = events.send(BridgeEvent::ShortcutReport(result)).await;
+            let paths = paths.clone();
+            shortcuts.spawn(async move { run_shortcut(&paths, request).await });
         }
+        BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),
     }
 }
 

@@ -140,7 +140,8 @@ pub async fn daemon_peer_pid(paths: &Paths) -> Result<u32> {
 }
 
 /// SIGTERM an outdated daemon after the caller has obtained user confirmation.
-pub async fn terminate_daemon(paths: &Paths) -> Result<()> {
+/// Return its validated PID so the caller can wait for process exit.
+pub async fn terminate_daemon(paths: &Paths) -> Result<u32> {
     let pid = daemon_peer_pid(paths).await?;
     // SAFETY: kill is called with a validated positive PID and SIGTERM, with no
     // pointers or borrowed memory. UID was checked before this call.
@@ -148,7 +149,7 @@ pub async fn terminate_daemon(paths: &Paths) -> Result<()> {
     if result == -1 {
         return Err(std::io::Error::last_os_error()).context("failed to terminate daemon");
     }
-    Ok(())
+    Ok(pid)
 }
 
 fn peer_pid(pid: i32, uid: u32) -> Result<u32> {

@@ -35,6 +35,7 @@ pub fn run(paths: Paths) -> Result<()> {
     };
     locale::initialize();
     let (commands, mut events, bridge_thread) = bridge::start(paths.clone());
+    let bridge_commands = commands.clone();
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
     gpui_kit::application().run(move |cx| {
@@ -96,6 +97,7 @@ pub fn run(paths: Paths) -> Result<()> {
             }
         }
     });
+    let _ = bridge_commands.blocking_send(BridgeCommand::Quit);
     let _ = bridge_thread.join();
     match opened.borrow_mut().take() {
         Some(error) => Err(error),
