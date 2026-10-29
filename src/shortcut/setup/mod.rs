@@ -299,7 +299,7 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::PathBuf;
 
-    use super::{SetupError, check_config, configured};
+    use super::{Note, Report, SetupError, check_config, configured, rebind};
     use crate::config::{Paths, ShortcutConfig};
 
     fn paths(config_file: PathBuf) -> Paths {
@@ -339,6 +339,25 @@ mod tests {
                 Ok(shortcut) if shortcut == ShortcutConfig::default()
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn an_absent_daemon_produces_a_deferred_report() {
+        let config = std::env::temp_dir().join(format!(
+            "voice-input-offline-rebind-{}/config.toml",
+            std::process::id()
+        ));
+        let mut report = Report::default();
+
+        rebind(&paths(config), &mut report).await.unwrap();
+
+        assert_eq!(
+            report,
+            Report {
+                notes: vec![Note::DaemonNotRunning],
+                ..Report::default()
+            }
+        );
     }
 
     #[test]

@@ -48,12 +48,17 @@ case "$command" in
         printf 'reset %s %s\n' "$schema" "$key" >> "$state/writes"
         ;;
     list-schemas)
-        printf '%s\n' \
+        for schema in \
             org.gnome.desktop.wm.keybindings \
             org.gnome.shell.keybindings \
             org.gnome.mutter.keybindings \
             org.gnome.mutter.wayland.keybindings \
             org.gnome.settings-daemon.plugins.media-keys
+        do
+            if [ ! -e "$state/omit-$schema" ]; then
+                printf '%s\n' "$schema"
+            fi
+        done
         ;;
     list-recursively)
         case "$schema" in
@@ -250,6 +255,99 @@ fn gnome_setup_is_repeatable_and_preserves_other_entries_without_a_daemon() {
 }
 
 #[test]
+fn gnome_setup_reports_unchecked_schemas_and_the_binding() {
+    let sandbox = Sandbox::new("gnome-report");
+    fs::write(
+        sandbox.root.join("state/omit-org.gnome.shell.keybindings"),
+        "",
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = strings(&sandbox.run(
+        "GNOME",
+        &[
+            "shortcut",
+            "setup",
+            "gnome-keybinding",
+            "--toggle",
+            "Super+Z",
+        ],
+    ));
+    let command = sandbox
+        .entry(OUR_PATH, "command")
+        .trim()
+        .trim_matches('\'')
+        .to_string();
+    assert_eq!(
+        (code, stdout, stderr),
+        (
+            0,
+            format!(
+                "not checked: org.gnome.shell.keybindings (missing from this GNOME)\nThe daemon is not running; the change takes effect when it starts.\ntoggle:   Super+Z → {command} (stable path)\n"
+            ),
+            String::new(),
+        )
+    );
+}
+
+#[test]
+fn gnome_clear_reports_removed_and_absent_entries() {
+    let sandbox = Sandbox::new("gnome-clear-reports");
+    sandbox.write_config("gnome-keybinding");
+    let (code, _, _) = strings(&sandbox.run("GNOME", &["shortcut", "setup", "gnome-keybinding"]));
+    assert_eq!(code, 0);
+
+    let removed = strings(&sandbox.run("GNOME", &["shortcut", "clear", "toggle"]));
+    let absent = strings(&sandbox.run("GNOME", &["shortcut", "clear", "toggle"]));
+    assert_eq!(
+        [removed, absent],
+        [
+            (
+                0,
+                "Removed the GNOME custom shortcut.\n".to_string(),
+                String::new(),
+            ),
+            (
+                0,
+                "No GNOME custom shortcut runs `voice-input toggle`.\n".to_string(),
+                String::new(),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn gnome_clear_disables_and_preserves_an_adopted_entry() {
+    let sandbox = Sandbox::new("gnome-clear-adopted");
+    sandbox.write_config("gnome-keybinding");
+    sandbox.seed_other_entry("manual", "<Super>z");
+    let path = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/manual/";
+    let dir = format!("{ENTRY_SCHEMA}:{path}").replace(['/', ':'], "_");
+    let dir = sandbox.root.join("state/entries").join(dir);
+    fs::write(
+        dir.join("command"),
+        format!("'{} toggle'\n", env!("CARGO_BIN_EXE_voice-input")),
+    )
+    .unwrap();
+    fs::write(sandbox.root.join("state/list"), format!("['{path}']\n")).unwrap();
+
+    let (code, stdout, stderr) = strings(&sandbox.run("GNOME", &["shortcut", "clear", "toggle"]));
+    assert_eq!(
+        (code, stdout, stderr),
+        (
+            0,
+            format!("Disabled the GNOME custom shortcut at {path}; it stays otherwise.\n"),
+            String::new(),
+        )
+    );
+    assert_eq!(sandbox.entry(path, "binding"), "''\n");
+    assert_eq!(
+        sandbox.entry(path, "command"),
+        format!("'{} toggle'\n", env!("CARGO_BIN_EXE_voice-input"))
+    );
+}
+
+#[test]
 fn gnome_setup_refuses_a_symlinked_config_before_changing_dconf() {
     let sandbox = Sandbox::new("gnome-symlink");
     let before = seed_wechat(&sandbox);
@@ -334,6 +432,22 @@ fn portal_setup_reports_a_cancelled_dialog_from_the_daemon() {
     assert_eq!(requests.len(), 2);
     assert!(requests[0].contains("shortcut_rebind"));
     assert!(requests[1].contains("shortcut_status"));
+}
+
+#[test]
+fn edit_does_not_leak_gnome_settings_output() {
+    let sandbox = Sandbox::new("portal-edit-output");
+    sandbox.write_config("portal");
+    let settings = sandbox.root.join("bin/gnome-control-center");
+    fs::write(
+        &settings,
+        "#!/bin/sh\nprintf 'child stdout\\n'\nprintf 'child stderr\\n' >&2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&settings, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let (code, stdout, stderr) = strings(&sandbox.run("KDE", &["shortcut", "edit"]));
+    assert_eq!((code, stdout, stderr), (0, String::new(), String::new()));
 }
 
 #[test]

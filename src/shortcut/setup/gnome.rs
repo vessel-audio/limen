@@ -145,13 +145,19 @@ pub(super) async fn setup_none(
     Ok(())
 }
 
+impl From<Clear> for Note {
+    fn from(clear: Clear) -> Self {
+        match clear {
+            Clear::Nothing => Self::NoCustomShortcut,
+            Clear::Remove { .. } => Self::CustomShortcutRemoved,
+            Clear::Disable { path } => Self::CustomShortcutDisabled(path),
+        }
+    }
+}
+
 pub(super) async fn clear(report: &mut Report) -> Result<(), SetupError> {
     require_gnome()?;
-    let note = match clear_ours().await? {
-        Clear::Nothing => Note::NoCustomShortcut,
-        Clear::Remove { .. } => Note::CustomShortcutRemoved,
-        Clear::Disable { path } => Note::CustomShortcutDisabled(path),
-    };
+    let note = Note::from(clear_ours().await?);
     report.notes.push(note);
     Ok(())
 }
@@ -185,5 +191,33 @@ fn require_gnome() -> Result<()> {
             "the gnome-keybinding backend needs a GNOME session (XDG_CURRENT_DESKTOP is {:?})",
             std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default()
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Note;
+    use crate::shortcut::gnome::Clear;
+
+    #[test]
+    fn clear_results_become_their_report_notes() {
+        let path = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/manual/";
+        assert_eq!(
+            [
+                Note::from(Clear::Nothing),
+                Note::from(Clear::Remove {
+                    path: path.to_string(),
+                    list: Vec::new(),
+                }),
+                Note::from(Clear::Disable {
+                    path: path.to_string(),
+                }),
+            ],
+            [
+                Note::NoCustomShortcut,
+                Note::CustomShortcutRemoved,
+                Note::CustomShortcutDisabled(path.to_string()),
+            ]
+        );
     }
 }

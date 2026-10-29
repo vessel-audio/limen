@@ -1,5 +1,7 @@
 //! Operations for the GlobalShortcuts portal backend.
 
+use std::process::Stdio;
+
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
@@ -92,6 +94,9 @@ pub(super) async fn set(
 pub(super) async fn edit() -> Result<(), SetupError> {
     let mut child = Command::new("gnome-control-center")
         .args(["applications", APP_ID])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .context("cannot open GNOME Settings; change the keys under Apps → voice-input")?;
