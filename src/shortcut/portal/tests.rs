@@ -18,7 +18,7 @@ use super::protocol::{PORTAL, PORTAL_PATH, request_path};
 use super::{Bus, ShortcutHandle};
 use crate::config::ShortcutConfig;
 use crate::shortcut::status::{PerAction, SessionState, Trigger};
-use crate::shortcut::{Activation, Backend, HoldEdge};
+use crate::shortcut::{Activation, ActivationReceipt, Backend, HoldEdge};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -398,7 +398,7 @@ impl FakePortal {
 /// The actor under test, on the private bus.
 struct Client {
     handle: ShortcutHandle,
-    activations: mpsc::UnboundedReceiver<Activation>,
+    activations: mpsc::UnboundedReceiver<ActivationReceipt>,
 }
 
 impl Client {
@@ -437,6 +437,7 @@ impl Client {
             .await
             .expect("no activation")
             .unwrap()
+            .activation
     }
 }
 

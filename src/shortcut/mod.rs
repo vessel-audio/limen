@@ -95,6 +95,15 @@ pub(crate) enum Activation {
     Hold(HoldEdge),
 }
 
+/// An activation and when it reached the daemon's mailbox. Keeping this
+/// timestamp next to the event prevents later mailbox scheduling from
+/// changing a hold's effective duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActivationReceipt {
+    pub(crate) activation: Activation,
+    pub(crate) received_at: tokio::time::Instant,
+}
+
 /// Why a shortcut does not parse or is not allowed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum ShortcutError {

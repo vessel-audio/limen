@@ -31,7 +31,7 @@ pub(crate) use connection::Bus;
 use connection::{Command, Generation, Report};
 use machine::{Input, Machine, Output};
 
-use super::Activation;
+use super::ActivationReceipt;
 use super::status::ShortcutStatus;
 use crate::config::ShortcutConfig;
 
@@ -55,7 +55,7 @@ impl ShortcutHandle {
     pub(crate) fn spawn(
         config: ShortcutConfig,
         bus: Bus,
-        activations: mpsc::UnboundedSender<Activation>,
+        activations: mpsc::UnboundedSender<ActivationReceipt>,
         notify: fn(&str, &str),
     ) -> Self {
         let (mailbox, rebinds) = mpsc::unbounded_channel();
@@ -126,7 +126,7 @@ struct ShortcutActor {
     running: Option<Running>,
     retry: Option<Pin<Box<tokio::time::Sleep>>>,
     status: watch::Sender<ShortcutStatus>,
-    activations: mpsc::UnboundedSender<Activation>,
+    activations: mpsc::UnboundedSender<ActivationReceipt>,
     notify: fn(&str, &str),
     /// Rebinds whose state is not published yet.
     rebound: Vec<oneshot::Sender<()>>,
@@ -196,7 +196,10 @@ impl ShortcutActor {
             }
             Output::Activate(activation) => {
                 tracing::debug!(?activation, "global shortcut");
-                let _ = self.activations.send(activation);
+                let _ = self.activations.send(ActivationReceipt {
+                    activation,
+                    received_at: tokio::time::Instant::now(),
+                });
             }
             Output::Notify(error) => {
                 (self.notify)("voice-input error", &format!("global shortcuts: {error}"));

@@ -29,7 +29,7 @@ use crate::notify::notify;
 use crate::polish::Polisher;
 use crate::session::{SessionCommand, SessionHandle};
 use crate::shortcut::portal::{Bus, ShortcutHandle};
-use crate::shortcut::{Activation, HoldEdge};
+use crate::shortcut::{Activation, ActivationReceipt, HoldEdge};
 
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,7 +72,7 @@ struct Mailboxes {
     commands: mpsc::Receiver<ipc::Command>,
     input_reports: mpsc::UnboundedReceiver<InputOutcome>,
     session_reports: mpsc::UnboundedReceiver<Event>,
-    activations: mpsc::UnboundedReceiver<Activation>,
+    activations: mpsc::UnboundedReceiver<ActivationReceipt>,
 }
 
 impl DictationActor {
@@ -176,7 +176,12 @@ impl DictationActor {
 
     /// Dispatch an edge of the hold-to-talk key. Nobody waits for the reply.
     fn hold(&mut self, edge: HoldEdge) {
-        let now = Instant::now();
+        self.hold_at(edge, Instant::now());
+    }
+
+    /// Apply an edge as received at `now`, not when a later mailbox turn
+    /// happens to handle it.
+    fn hold_at(&mut self, edge: HoldEdge, now: Instant) {
         match (edge, self.hold_pressed) {
             // Key repeat while the key is down. Held across the end of a take,
             // it must not start the next one: that takes a new press.
@@ -262,8 +267,10 @@ impl DictationActor {
 
                 activation = mailboxes.activations.recv() => {
                     match activation {
-                        Some(Activation::Toggle) => self.dispatch(Event::Toggle, ReplyTarget::NotRequested),
-                        Some(Activation::Hold(edge)) => self.hold(edge),
+                        Some(ActivationReceipt { activation: Activation::Toggle, .. }) => self.dispatch(Event::Toggle, ReplyTarget::NotRequested),
+                        Some(ActivationReceipt { activation: Activation::Hold(edge), received_at }) => {
+                            self.hold_at(edge, received_at);
+                        }
                         None => anyhow::bail!("shortcut actor stopped unexpectedly"),
                     }
                 }
@@ -370,7 +377,7 @@ mod tests {
     use crate::session::{SessionCommand, SessionHandle};
     use crate::shortcut::portal::{Bus, ShortcutHandle};
     use crate::shortcut::status::{PerAction, ShortcutStatus};
-    use crate::shortcut::{Activation, Backend, HoldEdge};
+    use crate::shortcut::{Activation, ActivationReceipt, Backend, HoldEdge};
 
     const TAP: Duration = Duration::from_millis(100);
     const KEPT: Duration = Duration::from_secs(1);
@@ -404,7 +411,7 @@ mod tests {
         commands: mpsc::Sender<ipc::Command>,
         _input_reports: mpsc::UnboundedSender<InputOutcome>,
         session_reports: mpsc::UnboundedSender<Event>,
-        activations: mpsc::UnboundedSender<Activation>,
+        activations: mpsc::UnboundedSender<ActivationReceipt>,
     }
 
     fn mailboxes() -> (Mailboxes, Senders) {
@@ -708,7 +715,10 @@ mod tests {
         let senders = spawn_loop(harness.actor);
         senders
             .activations
-            .send(Activation::Hold(HoldEdge::Press))
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Press),
+                received_at: Instant::now(),
+            })
             .unwrap();
         assert_eq!(harness.session.recv().await, Some(SessionCommand::Start));
         senders.session_reports.send(Event::SessionStarted).unwrap();
@@ -719,7 +729,10 @@ mod tests {
         tokio::time::advance(KEPT).await;
         senders
             .activations
-            .send(Activation::Hold(HoldEdge::Release))
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Release),
+                received_at: Instant::now(),
+            })
             .unwrap();
         assert_eq!(harness.session.recv().await, Some(SessionCommand::Stop));
     }
@@ -792,6 +805,32 @@ mod tests {
                 },
                 ..before
             })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn release_queued_before_the_start_report_stays_a_tap() {
+        let mut harness = harness();
+        harness.actor.hold(HoldEdge::Press);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let (mailboxes, senders) = mailboxes();
+        // The release is already queued when the start report is handled.
+        senders
+            .activations
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Release),
+                received_at: Instant::now(),
+            })
+            .unwrap();
+        harness
+            .actor
+            .dispatch(Event::SessionStarted, ReplyTarget::NotRequested);
+        // Scheduling delays the queued release beyond MIN_HOLD.
+        tokio::time::advance(Duration::from_millis(400)).await;
+        tokio::spawn(harness.actor.run(mailboxes));
+        assert_eq!(
+            [harness.session.recv().await, harness.session.recv().await],
+            [Some(SessionCommand::Start), Some(SessionCommand::Teardown)]
         );
     }
 }
