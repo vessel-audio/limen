@@ -84,11 +84,11 @@ pub(crate) fn update_shortcut(
         .with_context(|| format!("failed to parse config: {}", path.display()))?;
     current.validate()?;
     let shortcut = change(current.shortcut);
+    check_writable(path)?;
     // A missing config is written even unchanged: setup leaves one behind.
     if shortcut == current.shortcut && mode.is_some() {
         return Ok(shortcut);
     }
-    check_writable(path)?;
     let edited = with_shortcut(&text, &current.shortcut, &shortcut)?;
     let config: Config = toml::from_str(&edited).context("the edited config does not parse")?;
     config.validate()?;
@@ -487,17 +487,14 @@ model = "test-model"
     }
 
     #[test]
-    fn an_unchanged_section_is_not_written_even_through_a_symlink() {
+    fn an_unchanged_symlink_is_refused_without_being_written() {
         let dir = scratch("unchanged");
         let target = dir.join("managed.toml");
         fs::write(&target, DEFAULT_CONFIG).unwrap();
         let link = dir.join("config.toml");
         symlink(&target, &link).unwrap();
 
-        assert_eq!(
-            update_shortcut(&link, |current| current).unwrap(),
-            ShortcutConfig::default()
-        );
+        assert!(update_shortcut(&link, |current| current).is_err());
         assert_eq!(fs::read_to_string(&target).unwrap(), DEFAULT_CONFIG);
     }
 

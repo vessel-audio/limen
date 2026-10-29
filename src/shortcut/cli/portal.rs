@@ -50,7 +50,7 @@ pub(super) async fn setup(
     };
     let wanted = keys(current);
     check_distinct(wanted.toggle, wanted.hold)?;
-    check_config(paths, &current, &wanted)?;
+    check_config(paths, &wanted)?;
     let program = Program::find()?;
     if let Program::Unstable(path) = &program {
         eprintln!(
@@ -95,7 +95,7 @@ pub(super) async fn set(
         },
     };
     check_distinct(wanted.toggle, wanted.hold)?;
-    check_config(paths, &current, &wanted)?;
+    check_config(paths, &wanted)?;
     config::update_shortcut(&paths.config_file, |latest| match action {
         Action::Toggle => ShortcutConfig {
             toggle: keys,

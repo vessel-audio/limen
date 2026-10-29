@@ -67,7 +67,7 @@ pub(super) async fn bind(
         toggle,
         ..current
     };
-    check_config(paths, &current, &wanted)?;
+    check_config(paths, &wanted)?;
     let dconf = Gsettings;
     let before = gsettings::read(&dconf).await?;
     let managed = match keybinding::managed(&before.list, &before.entries) {
@@ -183,7 +183,7 @@ pub(super) async fn setup_none(paths: &Paths, current: ShortcutConfig) -> Result
         backend: Backend::None,
         ..current
     };
-    check_config(paths, &current, &wanted)?;
+    check_config(paths, &wanted)?;
     clear_ours().await?;
     config::update_shortcut(&paths.config_file, |latest| ShortcutConfig {
         backend: Backend::None,

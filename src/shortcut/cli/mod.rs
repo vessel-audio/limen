@@ -179,15 +179,14 @@ fn check_distinct(toggle: Shortcut, hold: Shortcut) -> Result<(), Failure> {
     }
 }
 
-/// Fail before changing anything else when the config would have to be
-/// written but cannot be, showing what to add to it by hand. Setup writes a
-/// config that does not exist yet (behind a dangling link, too) even when the
-/// section keeps its defaults.
-fn check_config(paths: &Paths, current: &ShortcutConfig, wanted: &ShortcutConfig) -> Result<()> {
-    let unchanged = current == wanted && paths.config_file.exists();
-    match (unchanged, config::check_writable(&paths.config_file)) {
-        (true, _) | (false, Ok(())) => Ok(()),
-        (false, Err(refusal)) => bail!(
+/// Fail before changing anything else when the config cannot be replaced,
+/// showing what to add to it by hand. The check applies even when the section
+/// already has the wanted values: setup must not touch dconf behind a symlink
+/// or a read-only config.
+fn check_config(paths: &Paths, wanted: &ShortcutConfig) -> Result<()> {
+    match config::check_writable(&paths.config_file) {
+        Ok(()) => Ok(()),
+        Err(refusal) => bail!(
             "{refusal}, so it was left unchanged. Add this to the config instead and \
              run the command again:\n\n{}",
             config::snippet(wanted)
@@ -280,7 +279,7 @@ mod tests {
         symlink(dir.join("missing.toml"), &dangling).unwrap();
         let defaults = ShortcutConfig::default();
 
-        assert!(check_config(&paths(dangling), &defaults, &defaults).is_err());
-        assert!(check_config(&paths(dir.join("new.toml")), &defaults, &defaults).is_ok());
+        assert!(check_config(&paths(dangling), &defaults).is_err());
+        assert!(check_config(&paths(dir.join("new.toml")), &defaults).is_ok());
     }
 }
