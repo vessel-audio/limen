@@ -129,14 +129,23 @@ mod tests;
 
 /// Read and validate the daemon PID from a Unix peer's credentials.
 pub async fn daemon_peer_pid(paths: &Paths) -> Result<u32> {
+    daemon_peer(paths).await.map(|(pid, _)| pid)
+}
+
+async fn daemon_peer(paths: &Paths) -> Result<(u32, SocketIdentity)> {
+    let socket = SocketIdentity::for_path(paths)?;
     let stream = tokio::net::UnixStream::connect(&paths.socket)
         .await
         .with_context(|| format!("cannot connect to {}", paths.socket.display()))?;
     let credentials = stream.peer_cred().context("cannot read peer credentials")?;
-    peer_pid(
+    let pid = peer_pid(
         credentials.pid().context("peer has no PID")?,
         credentials.uid(),
-    )
+    )?;
+    match SocketIdentity::for_path(paths)? == socket {
+        true => Ok((pid, socket)),
+        false => bail!("daemon socket changed while checking its owner; retry"),
+    }
 }
 
 /// Validated process and socket identities captured before daemon termination.
@@ -151,8 +160,7 @@ pub struct DaemonTermination {
 /// SIGTERM an outdated daemon after the caller has obtained user confirmation.
 /// Return identities needed to wait and clean up without touching a replacement.
 pub async fn terminate_daemon(paths: &Paths) -> Result<DaemonTermination> {
-    let socket = SocketIdentity::for_path(paths)?;
-    let pid = daemon_peer_pid(paths).await?;
+    let (pid, socket) = daemon_peer(paths).await?;
     // SAFETY: kill is called with a validated positive PID and SIGTERM, with no
     // pointers or borrowed memory. UID was checked before this call.
     let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };

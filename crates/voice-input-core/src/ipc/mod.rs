@@ -67,7 +67,7 @@ pub(crate) struct BoundSocket {
 }
 
 /// Filesystem identity of the socket created by one daemon process.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SocketIdentity {
     device: u64,
     inode: u64,
