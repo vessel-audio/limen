@@ -181,6 +181,51 @@ pub(crate) async fn apply_setup(
     }
 }
 
+/// Undo the parts of `setup` that may have been written before a failure.
+/// Other applications' list changes are preserved. A new entry is disabled
+/// before removing only its path; an existing entry gets its old fields back.
+pub(crate) async fn rollback_setup(
+    dconf: &impl Dconf,
+    read: &Keybindings,
+    setup: &Setup,
+) -> Result<()> {
+    let schema = entry_schema(&setup.path);
+    match read.entries.iter().find(|entry| entry.path == setup.path) {
+        Some(original) => {
+            if setup.name.is_some() && setup.name.as_deref() != Some(original.name.as_str()) {
+                dconf
+                    .set(&schema, "name", &gvariant::string(&original.name))
+                    .await?;
+            }
+            if setup.command != original.command {
+                dconf
+                    .set(&schema, "command", &gvariant::string(&original.command))
+                    .await?;
+            }
+            if setup.binding != original.binding {
+                dconf
+                    .set(&schema, "binding", &gvariant::string(&original.binding))
+                    .await?;
+            }
+            Ok(())
+        }
+        None => {
+            dconf.set(&schema, "binding", &gvariant::string("")).await?;
+            let current = read_list(dconf).await?;
+            if current.contains(&setup.path) {
+                let remaining: Vec<String> = current
+                    .into_iter()
+                    .filter(|path| *path != setup.path)
+                    .collect();
+                dconf
+                    .set(MEDIA_KEYS, LIST, &gvariant::strings(&remaining))
+                    .await?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Carry out `clear`, planned from `read`.
 pub(crate) async fn apply_clear(
     dconf: &impl Dconf,
@@ -235,7 +280,7 @@ mod tests {
 
     use super::{
         CUSTOM_KEYBINDING, Dconf, KEYBINDING_SCHEMAS, Keybindings, LIST, MEDIA_KEYS, apply_clear,
-        apply_setup, find_conflicts, read,
+        apply_setup, find_conflicts, read, rollback_setup,
     };
     use crate::shortcut::gnome::tests::{PREFIX, paths, wechat};
     use crate::shortcut::gnome::{
@@ -476,5 +521,38 @@ mod tests {
             ..FakeDconf::with(&[wechat(), vec![own("<Super>x")]].concat())
         };
         assert!(set_up(&dconf).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn rollback_restores_fields_without_undoing_other_list_changes() {
+        let ours = own("<Super>x");
+        let initial = [wechat(), vec![ours.clone()]].concat();
+        let changed_list: Vec<String> = initial
+            .iter()
+            .rev()
+            .map(|entry| entry.path.clone())
+            .collect();
+        let dconf = FakeDconf {
+            changes: BTreeMap::from([(3, gvariant::strings(&changed_list))]),
+            ..FakeDconf::with(&initial)
+        };
+        let before = dconf.state().await;
+        let plan = setup(
+            &before.list,
+            &before.entries,
+            "Super+Z".parse().unwrap(),
+            "/new/voice-input toggle".to_string(),
+        );
+        assert!(apply_setup(&dconf, &before, &plan).await.is_err());
+
+        rollback_setup(&dconf, &before, &plan).await.unwrap();
+
+        assert_eq!(
+            dconf.state().await,
+            Keybindings {
+                list: changed_list,
+                entries: vec![ours, wechat()[1].clone(), wechat()[0].clone()],
+            }
+        );
     }
 }
