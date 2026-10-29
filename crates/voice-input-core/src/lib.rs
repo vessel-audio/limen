@@ -21,6 +21,7 @@ pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, StateSnapshot,
 };
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
+pub use ipc::v1::Delivery;
 pub use ipc::{request, send, v1};
 pub use provider::probe;
 pub use shortcut::desktop_entry::APP_ID;

@@ -4,6 +4,8 @@ use crate::daemon::snapshot::{
     ConfigSummary, ErrorEntry, FIELD_CAP, HistoryEntry, HistoryOutcome, MAX_PUSH_BYTES, capped,
 };
 use crate::dictation::{Control, DictationState, DictationView};
+use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
+use crate::shortcut::{Backend, Shortcut};
 
 fn config() -> Config {
     toml::from_str(
@@ -260,6 +262,38 @@ fn the_worst_bounded_snapshot_fits_the_push_limit() {
     assert!(
         serialized.len() <= MAX_PUSH_BYTES,
         "{} bytes",
+        serialized.len()
+    );
+    let description = capped(&"\"".repeat(300), 256).0;
+    let trigger = || Trigger {
+        description: description.clone(),
+        shortcuts: vec![Shortcut::DEFAULT_TOGGLE; 4],
+    };
+    let shortcut = ShortcutStatus {
+        backend: Backend::Portal,
+        session: SessionState::Failed,
+        preferred: PerAction {
+            toggle: Shortcut::DEFAULT_TOGGLE,
+            hold: Shortcut::DEFAULT_HOLD,
+        },
+        actual: PerAction {
+            toggle: Some(trigger()),
+            hold: Some(trigger()),
+        },
+        last_error: Some(capped(&"\"".repeat(ERROR_CAP + 1), ERROR_CAP).0),
+    };
+    let mut wire = serde_json::to_value(projection.snapshot()).unwrap();
+    let fields = wire.as_object_mut().unwrap();
+    fields.insert("type".to_string(), serde_json::json!("snapshot"));
+    fields.insert("seq".to_string(), serde_json::json!(1));
+    fields.insert(
+        "shortcut".to_string(),
+        serde_json::to_value(shortcut).unwrap(),
+    );
+    let serialized = serde_json::to_vec(&wire).unwrap();
+    assert!(
+        serialized.len() <= MAX_PUSH_BYTES,
+        "full wire snapshot is {} bytes",
         serialized.len()
     );
 }

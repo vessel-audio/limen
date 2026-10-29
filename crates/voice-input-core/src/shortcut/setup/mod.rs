@@ -278,7 +278,9 @@ async fn rebind(paths: &Paths, report: &mut Report) -> Result<()> {
         Ok(v1::Reply::Error { message }) => {
             bail!("the daemon did not apply the change: {message}")
         }
-        Ok(v1::Reply::ShortcutStatus(_)) => bail!("the daemon answered something else"),
+        Ok(v1::Reply::ShortcutStatus(_) | v1::Reply::Accepted { .. }) => {
+            bail!("the daemon answered something else")
+        }
         Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => {
             report.notes.push(Note::DaemonNotRunning);
             Ok(())
@@ -292,7 +294,9 @@ pub async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
     match ipc::request(paths, &v1::Request::ShortcutStatus).await {
         Ok(v1::Reply::ShortcutStatus(status)) => Ok(Some(status)),
         Ok(v1::Reply::Error { message }) => bail!("the daemon could not tell: {message}"),
-        Ok(v1::Reply::Ok) => bail!("the daemon answered something else"),
+        Ok(v1::Reply::Ok | v1::Reply::Accepted { .. }) => {
+            bail!("the daemon answered something else")
+        }
         Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => Ok(None),
         Err(error) => Err(error),
     }

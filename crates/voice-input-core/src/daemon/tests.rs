@@ -69,7 +69,7 @@ pub(super) struct Senders {
     pub(super) activations: mpsc::UnboundedSender<ActivationReceipt>,
 }
 
-fn mailboxes() -> (Mailboxes, Senders) {
+pub(super) fn mailboxes() -> (Mailboxes, Senders) {
     let (commands_tx, commands) = mpsc::channel(8);
     let (input_reports_tx, input_reports) = mpsc::unbounded_channel();
     let (session_reports_tx, session_reports) = mpsc::unbounded_channel();

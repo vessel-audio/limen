@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::config::{Config, Paths};
-use crate::dictation::{self, Dictation, Effect, Event, InputOutcome, Notification};
+use crate::dictation::{self, Control, Dictation, Effect, Event, InputOutcome, Notification};
 use crate::ipc;
 use crate::notify::notify;
 use crate::session::{SessionCommand, SessionHandle};
@@ -66,6 +66,7 @@ struct DictationActor {
     shortcuts: ShortcutHandle,
     outstanding_input: usize,
     projection: Projection,
+    delivery: ipc::v1::Delivery,
 }
 
 /// Whether the message being handled came from an IPC caller awaiting a reply.
@@ -105,6 +106,7 @@ impl DictationActor {
             shortcuts,
             outstanding_input: 0,
             projection,
+            delivery: ipc::v1::Delivery::Input,
         }
     }
 
@@ -112,6 +114,7 @@ impl DictationActor {
     /// produced by its effects. Never awaits; slow effects are messages to
     /// other actors.
     fn dispatch(&mut self, event: Event, mut reply: ReplyTarget) {
+        let previous = self.dictation.view().state;
         let mut events = VecDeque::from([event]);
         while let Some(event) = events.pop_front() {
             let answers_start =
@@ -152,7 +155,11 @@ impl DictationActor {
                     Effect::TeardownSession => self.session.tell(SessionCommand::Teardown),
                     Effect::QueueInput(text) => {
                         let entry = self.projection.queue(&text, unix_ms());
-                        let job = InputJob { entry, text };
+                        let job = InputJob {
+                            entry,
+                            delivery: self.delivery,
+                            text,
+                        };
                         match self.outstanding_input < MAX_OUTSTANDING_INPUT {
                             false => {
                                 tracing::warn!("too many outstanding text input jobs");
@@ -198,7 +205,65 @@ impl DictationActor {
                 }
             }
         }
-        self.projection.publish(self.dictation.view(), unix_ms());
+        let view = self.dictation.view();
+        if let (true, false) = (
+            matches!(view.state, dictation::DictationState::Starting { .. }),
+            matches!(previous, dictation::DictationState::Starting { .. }),
+        ) {
+            self.delivery = ipc::v1::Delivery::Input;
+        }
+        self.projection.publish(view, unix_ms());
+    }
+
+    fn start(&mut self) -> ipc::v1::Reply {
+        let view = self.dictation.view();
+        match view.state {
+            dictation::DictationState::Idle => {
+                self.dispatch(Event::Toggle, ReplyTarget::NotRequested);
+                ipc::v1::Reply::Accepted {
+                    take: self.projection.take(),
+                }
+            }
+            dictation::DictationState::Transcribing | dictation::DictationState::Committing => {
+                let take = self.projection.take() + 1;
+                match view.queued {
+                    true => {}
+                    false => self.dispatch(Event::Toggle, ReplyTarget::NotRequested),
+                }
+                ipc::v1::Reply::Accepted { take }
+            }
+            dictation::DictationState::Starting { .. }
+            | dictation::DictationState::Recording { .. } => ipc::v1::Reply::Error {
+                message: "already recording".to_string(),
+            },
+        }
+    }
+
+    fn stop(&mut self, delivery: ipc::v1::Delivery) -> ipc::v1::Reply {
+        match self.dictation.view().state {
+            dictation::DictationState::Recording { .. } => {
+                let take = self.projection.take();
+                self.delivery = delivery;
+                self.dispatch(Event::Toggle, ReplyTarget::NotRequested);
+                ipc::v1::Reply::Accepted { take }
+            }
+            dictation::DictationState::Idle
+            | dictation::DictationState::Starting { .. }
+            | dictation::DictationState::Transcribing
+            | dictation::DictationState::Committing => ipc::v1::Reply::Error {
+                message: "not recording".to_string(),
+            },
+        }
+    }
+
+    fn toggle(&mut self, reply: ReplyTarget) {
+        if matches!(
+            self.dictation.view().state,
+            dictation::DictationState::Recording { .. }
+        ) {
+            self.delivery = ipc::v1::Delivery::Input;
+        }
+        self.dispatch(Event::Toggle, reply);
     }
 
     /// Dispatch an edge of the hold-to-talk key. Nobody waits for the reply.
@@ -218,6 +283,14 @@ impl DictationActor {
                 self.dispatch(Event::HoldPressed, ReplyTarget::NotRequested);
             }
             (HoldEdge::Release, pressed) => {
+                if matches!(
+                    self.dictation.view().state,
+                    dictation::DictationState::Recording {
+                        control: Control::Hold
+                    }
+                ) {
+                    self.delivery = ipc::v1::Delivery::Input;
+                }
                 self.hold_pressed = None;
                 let effective = effective_hold(self.hold_started, now);
                 let held = pressed.map(|pressed| now.saturating_duration_since(pressed));
@@ -262,7 +335,13 @@ impl DictationActor {
                             let _ = reply.send(self.dictation.label().to_string());
                         }
                         ipc::Command::Toggle(reply) => {
-                            self.dispatch(Event::Toggle, ReplyTarget::Requested(reply));
+                            self.toggle(ReplyTarget::Requested(reply));
+                        }
+                        ipc::Command::Start(reply) => {
+                            let _ = reply.send(self.start());
+                        }
+                        ipc::Command::Stop { delivery, reply } => {
+                            let _ = reply.send(self.stop(delivery));
                         }
                         ipc::Command::Hold(edge, reply) => {
                             // Answered at once: an edge never waits for the take to start.
@@ -279,11 +358,12 @@ impl DictationActor {
                 outcome = mailboxes.input_reports.recv() => {
                     match outcome {
                         Some(report) => {
-                            let InputReport { entry, text, outcome } = report;
+                            let InputReport { entry, delivery, text, outcome } = report;
                             self.outstanding_input = self.outstanding_input.checked_sub(1).expect("input report without an outstanding job");
-                            let completion = match &outcome {
-                                InputOutcome::Succeeded => Completion::Committed,
-                                InputOutcome::Failed(error) => Completion::CommitFailed(error.clone()),
+                            let completion = match (&outcome, delivery) {
+                                (InputOutcome::Succeeded, ipc::v1::Delivery::Input) => Completion::Committed,
+                                (InputOutcome::Succeeded, ipc::v1::Delivery::Keep) => Completion::Kept,
+                                (InputOutcome::Failed(error), _) => Completion::CommitFailed(error.clone()),
                             };
                             self.projection.complete(entry, text, completion);
                             self.dispatch(Event::InputFinished(outcome), ReplyTarget::NotRequested);
@@ -301,7 +381,7 @@ impl DictationActor {
 
                 activation = mailboxes.activations.recv() => {
                     match activation {
-                        Some(ActivationReceipt { activation: Activation::Toggle, .. }) => self.dispatch(Event::Toggle, ReplyTarget::NotRequested),
+                        Some(ActivationReceipt { activation: Activation::Toggle, .. }) => self.toggle(ReplyTarget::NotRequested),
                         Some(ActivationReceipt { activation: Activation::Hold(edge), received_at }) => {
                             self.hold_at(edge, received_at);
                         }

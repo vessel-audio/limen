@@ -36,6 +36,11 @@ pub(crate) const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub enum Command {
     Toggle(oneshot::Sender<String>),
     Status(oneshot::Sender<String>),
+    Start(oneshot::Sender<v1::Reply>),
+    Stop {
+        delivery: v1::Delivery,
+        reply: oneshot::Sender<v1::Reply>,
+    },
     Hold(HoldEdge, oneshot::Sender<v1::Reply>),
     ShortcutRebind(oneshot::Sender<v1::Reply>),
     ShortcutStatus(oneshot::Sender<v1::Reply>),
@@ -208,7 +213,9 @@ mod tests {
                     Command::Status(reply) => {
                         let _ = reply.send("idle".to_string());
                     }
-                    Command::Hold(_, reply)
+                    Command::Start(reply)
+                    | Command::Stop { reply, .. }
+                    | Command::Hold(_, reply)
                     | Command::ShortcutRebind(reply)
                     | Command::ShortcutStatus(reply) => {
                         let _ = reply.send(v1::Reply::Ok);

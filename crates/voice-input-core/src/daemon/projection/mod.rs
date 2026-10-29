@@ -17,6 +17,7 @@ const HISTORY_BUDGET: usize = 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Completion {
     Committed,
+    Kept,
     CommitFailed(String),
 }
 
@@ -49,6 +50,10 @@ impl Projection {
             },
             receiver,
         )
+    }
+
+    pub(crate) fn take(&self) -> u64 {
+        self.snapshot.take
     }
 
     #[cfg(test)]
@@ -139,6 +144,7 @@ impl Projection {
         entry.truncated |= text_truncated;
         entry.outcome = match completion {
             Completion::Committed => HistoryOutcome::Committed,
+            Completion::Kept => HistoryOutcome::Kept,
             Completion::CommitFailed(error) => {
                 let error = sanitize_control_characters(&error);
                 let (error, error_truncated) = capped(&error, FIELD_CAP);

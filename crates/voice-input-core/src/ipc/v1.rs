@@ -25,10 +25,25 @@ pub const VERSION: u64 = 1;
 /// A rebind may wait for the old portal request and session to close.
 const REBIND_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How a stopped take is delivered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// Commit the polished text to the focused application.
+    #[default]
+    Input,
+    /// Keep the polished text in history without typing it.
+    Keep,
+}
+
 /// A request, without its version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// Start a take, or queue one behind output that is finishing.
+    Start,
+    /// Stop the current recording with the requested delivery mode.
+    Stop { delivery: Delivery },
     /// The hold-to-talk key went down or came up.
     Hold { edge: HoldEdge },
     /// Apply the `[shortcut]` section of the config file again.
@@ -43,6 +58,8 @@ pub enum Request {
 pub enum Reply {
     /// The request completed without additional data.
     Ok,
+    /// A start or stop intent was accepted for this take.
+    Accepted { take: u64 },
     /// The current global-shortcut state.
     ShortcutStatus(ShortcutStatus),
     /// The request failed; the message remains English for CLI compatibility.
@@ -80,6 +97,10 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Repl
         Ok(request) => {
             let (reply, answer) = oneshot::channel();
             let (command, reply_timeout) = match request {
+                Request::Start => (Command::Start(reply), super::CONN_TIMEOUT),
+                Request::Stop { delivery } => {
+                    (Command::Stop { delivery, reply }, super::CONN_TIMEOUT)
+                }
                 Request::Hold { edge } => (Command::Hold(edge, reply), super::CONN_TIMEOUT),
                 Request::ShortcutRebind => (Command::ShortcutRebind(reply), REBIND_REPLY_TIMEOUT),
                 Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
@@ -115,7 +136,7 @@ mod tests {
 
     use tokio::sync::mpsc;
 
-    use super::{Envelope, Reply, Request, answer, parse};
+    use super::{Delivery, Envelope, Reply, Request, answer, parse};
     use crate::shortcut::HoldEdge;
 
     #[test]
@@ -162,6 +183,27 @@ mod tests {
                     edge: HoldEdge::Release
                 })
             ]
+        );
+    }
+
+    #[test]
+    fn intents_carry_delivery_and_accepted_take_ids() {
+        assert_eq!(
+            [
+                r#"{"v":1,"type":"start"}"#,
+                r#"{"v":1,"type":"stop","delivery":"keep"}"#,
+            ]
+            .map(parse),
+            [
+                Ok(Request::Start),
+                Ok(Request::Stop {
+                    delivery: Delivery::Keep,
+                }),
+            ]
+        );
+        assert_eq!(
+            Reply::Accepted { take: 7 }.to_line(),
+            r#"{"type":"accepted","take":7}"#
         );
     }
 
