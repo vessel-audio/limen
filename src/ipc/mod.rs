@@ -101,10 +101,13 @@ async fn handle_conn_inner(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) ->
                 message: "request is not valid UTF-8".to_string(),
             }
             .to_line(),
-            Ok(text) => match text.trim_ascii_start().starts_with('{') {
-                true => v1::answer(&text, &cmd_tx).await.to_line(),
-                false => legacy::answer(&text, &cmd_tx).await?,
-            },
+            Ok(text) => {
+                let text = text.trim_ascii();
+                match text.starts_with('{') {
+                    true => v1::answer(text, &cmd_tx).await.to_line(),
+                    false => legacy::answer(text, &cmd_tx).await?,
+                }
+            }
         },
     };
     write.write_all(reply.as_bytes()).await?;
@@ -259,12 +262,14 @@ mod tests {
                 exchange(format!(" \t{hold}  \n").as_bytes()).await,
                 exchange(br#"{"v":2,"type":"hold","edge":"press"}"#).await,
                 exchange(br#"{"type":"hold","edge":"press"}"#).await,
+                exchange(b"\x0c{\"v\":1,\"type\":\"hold\",\"edge\":\"press\"}\x0c").await,
             ],
             [
                 "{\"type\":\"ok\"}\n".to_string(),
                 "{\"type\":\"ok\"}\n".to_string(),
                 error_line("unsupported protocol version 2; supported: 1"),
                 error_line("missing protocol version"),
+                "{\"type\":\"ok\"}\n".to_string(),
             ]
         );
     }
