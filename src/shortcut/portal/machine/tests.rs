@@ -402,7 +402,24 @@ fn a_hold_left_down_is_released_when_its_generation_stops() {
 
     let mut died = bound_machine();
     died.handle(press.clone());
-    assert_eq!(died.handle(Input::Ended(G1)).first(), Some(&release));
+
+    // The whole output of a generation that died holding the key.
+    let error = "the portal connection ended".to_string();
+    assert_eq!(
+        died.handle(Input::Ended(G1)),
+        [
+            release,
+            Output::Publish(ShortcutStatus {
+                last_error: Some(error.clone()),
+                ..ShortcutStatus {
+                    session: SessionState::Failed,
+                    ..bound()
+                }
+            }),
+            Output::Notify(error),
+            Output::RetryAfter(FIRST_RETRY),
+        ]
+    );
 
     // Released before: nothing left to release.
     let mut let_go = bound_machine();

@@ -17,7 +17,7 @@ use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Variant, fdo, 
 use super::protocol::{PORTAL, PORTAL_PATH, request_path};
 use super::{Bus, ShortcutHandle};
 use crate::config::ShortcutConfig;
-use crate::shortcut::status::SessionState;
+use crate::shortcut::status::{PerAction, SessionState, Trigger};
 use crate::shortcut::{Activation, Backend, HoldEdge};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -495,13 +495,11 @@ async fn a_response_sent_before_the_call_returns_still_binds() {
     let mut client = Client::start(&bus);
     client.reaches(SessionState::Bound).await;
     assert_eq!(
-        client
-            .handle
-            .status()
-            .actual
-            .toggle
-            .map(|trigger| trigger.description),
-        Some("Press <Super>z".to_string())
+        client.handle.status().actual,
+        PerAction {
+            toggle: Some(Trigger::new("Press <Super>z".to_string())),
+            hold: Some(Trigger::new("Press <Super>x".to_string())),
+        }
     );
     assert_eq!(
         calls(&log),
