@@ -1,5 +1,18 @@
 //! Optional GPUI control panel for the voice-input daemon.
 
+mod locale;
+mod model;
+mod recorder;
+
+pub use model::{
+    Action, Connection, DictationButton, DisabledReason, GuiState, Msg, Toast, Warning,
+};
+pub use recorder::{
+    Action as RecorderAction, Event as RecorderEvent, RecorderError, RecorderState,
+};
+
+rust_i18n::i18n!("locales");
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -9,10 +22,13 @@ use voice_input_core::Paths;
 
 /// Run the control panel on the calling thread.
 pub fn run(_paths: Paths) -> Result<()> {
-    struct Window;
+    struct Window {
+        model: model::GuiState,
+    }
 
     impl Render for Window {
         fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let _ = self.model.button();
             div()
                 .size_full()
                 .items_center()
@@ -21,6 +37,8 @@ pub fn run(_paths: Paths) -> Result<()> {
         }
     }
 
+    locale::initialize();
+    let (model, _) = model::GuiState::default().apply(model::Msg::Connecting);
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
     gpui_kit::application().run(move |cx| {
@@ -31,7 +49,11 @@ pub fn run(_paths: Paths) -> Result<()> {
                 ..WindowOptions::default()
             },
             cx,
-            |_, cx| cx.new(|_| Window),
+            |_, cx| {
+                cx.new(|_| Window {
+                    model: model.clone(),
+                })
+            },
         ) {
             Ok(_) => {}
             Err(error) => {

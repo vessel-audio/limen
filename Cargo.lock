@@ -7179,7 +7179,10 @@ name = "voice-input-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "gpui-kit",
+ "rust-i18n",
+ "tokio",
  "voice-input-core",
 ]
 
