@@ -31,6 +31,7 @@ en:
   toast.copied: Copied to clipboard
   about.title: About voice-input
   shortcuts.apply: Apply
+  shortcuts.gnome_backend: GNOME custom shortcut
   shortcuts.edit: Change in GNOME Settings
   shortcuts.preferred_toggle: Preferred toggle
   shortcuts.preferred_hold: Preferred hold-to-talk
@@ -44,6 +45,7 @@ en:
   shortcuts.bind_command: "Bind this command in your desktop settings:"
   shortcuts.invalid: invalid shortcut
   note.installed: Installed
+  note.toggle: Toggle
   note.unstable: is in the Nix store and stops working after an upgrade
   note.not_checked: Not checked
   note.daemon_offline: The daemon is not running; the change takes effect when it starts.
@@ -85,6 +87,7 @@ zh-CN:
   toast.copied: 已复制到剪贴板
   about.title: 关于 voice-input
   shortcuts.apply: 应用
+  shortcuts.gnome_backend: GNOME 自定义快捷键
   shortcuts.edit: 在 GNOME 设置中修改
   shortcuts.preferred_toggle: 首选切换键
   shortcuts.preferred_hold: 首选按住说话键
@@ -98,6 +101,7 @@ zh-CN:
   shortcuts.bind_command: 请在桌面设置中绑定此命令：
   shortcuts.invalid: 快捷键无效
   note.installed: 已安装
+  note.toggle: 切换
   note.unstable: 位于 Nix store，升级后会失效
   note.not_checked: 未检查
   note.daemon_offline: 后台服务未运行，变更将在启动后生效。

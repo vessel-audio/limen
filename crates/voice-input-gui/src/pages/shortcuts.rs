@@ -17,13 +17,13 @@ use crate::recorder::{
 pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     let selector = div().h_flex().gap_2().children(
         [
-            ("backend-portal", Backend::Portal, "portal"),
+            ("backend-portal", Backend::Portal, "portal".to_string()),
             (
                 "backend-gnome",
                 Backend::GnomeKeybinding,
-                "GNOME keybinding",
+                rust_i18n::t!("shortcuts.gnome_backend").to_string(),
             ),
-            ("backend-none", Backend::None, "none"),
+            ("backend-none", Backend::None, "none".to_string()),
         ]
         .map(|(id, backend, label)| {
             Button::new(id)
@@ -103,7 +103,8 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
     let status = view.model.snapshot.as_ref().map(|snapshot| {
         let status = &snapshot.shortcut;
         format!(
-            "Session: {:?}\n{}\n{}",
+            "{}: {:?}\n{}\n{}",
+            rust_i18n::t!("shortcuts.session"),
             status.session,
             trigger(&status.actual.toggle),
             trigger(&status.actual.hold)
@@ -302,7 +303,8 @@ fn format_note(note: &Note) -> String {
             command,
             program,
         } => format!(
-            "Toggle {keys} → {command} ({})",
+            "{} {keys} → {command} ({})",
+            rust_i18n::t!("note.toggle"),
             match program {
                 Program::Stable(_) => rust_i18n::t!("note.stable_path"),
                 Program::Unstable(_) => rust_i18n::t!("note.unstable_path"),
