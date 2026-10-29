@@ -42,7 +42,11 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
                 Backend::GnomeKeybinding,
                 rust_i18n::t!("shortcuts.gnome_backend").to_string(),
             ),
-            ("backend-none", Backend::None, "none".to_string()),
+            (
+                "backend-none",
+                Backend::None,
+                rust_i18n::t!("shortcuts.none_backend").to_string(),
+            ),
         ]
         .map(|(id, backend, label)| {
             let button = Button::new(id).label(label);
@@ -133,7 +137,15 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
             .child(format!(
                 "{}: {}",
                 rust_i18n::t!("shortcuts.session"),
-                session_label(status.session)
+                match status.session {
+                    SessionState::Disabled =>
+                        rust_i18n::t!("shortcuts.session_disabled").to_string(),
+                    SessionState::Binding => rust_i18n::t!("shortcuts.session_binding").to_string(),
+                    SessionState::Bound => rust_i18n::t!("shortcuts.session_bound").to_string(),
+                    SessionState::Cancelled =>
+                        rust_i18n::t!("shortcuts.session_cancelled").to_string(),
+                    SessionState::Failed => rust_i18n::t!("shortcuts.session_failed").to_string(),
+                }
             ))
             .child(trigger(&status.actual.toggle))
             .child(trigger(&status.actual.hold))
@@ -182,16 +194,6 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         .child(Input::new(&view.toggle_input))
         .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
         .child(Input::new(&view.hold_input))
-}
-
-fn session_label(session: SessionState) -> String {
-    match session {
-        SessionState::Disabled => rust_i18n::t!("shortcuts.session_disabled").to_string(),
-        SessionState::Binding => rust_i18n::t!("shortcuts.session_binding").to_string(),
-        SessionState::Bound => rust_i18n::t!("shortcuts.session_bound").to_string(),
-        SessionState::Cancelled => rust_i18n::t!("shortcuts.session_cancelled").to_string(),
-        SessionState::Failed => rust_i18n::t!("shortcuts.session_failed").to_string(),
-    }
 }
 
 fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
@@ -347,7 +349,7 @@ fn trigger(trigger: &Option<voice_input_core::Trigger>) -> String {
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
-                    .join(" or ")
+                    .join(&format!(" {} ", rust_i18n::t!("shortcuts.or")))
             }
         },
     )
