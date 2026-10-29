@@ -24,22 +24,33 @@ pub(crate) enum Refusal {
     Symlink(PathBuf),
     #[error("{} is not writable", .0.display())]
     ReadOnly(PathBuf),
+    #[error("cannot create a temporary file in {} to replace the config", .0.display())]
+    UnwritableDirectory(PathBuf),
 }
 
 /// Check that the config file at `path` may be replaced. A missing file may
-/// be created.
+/// be created. Replacement needs both a writable file and a directory in
+/// which its temporary file can be created.
 pub(crate) fn check_writable(path: &Path) -> Result<(), Refusal> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(Refusal::Symlink(path.to_path_buf()))
+            return Err(Refusal::Symlink(path.to_path_buf()));
         }
         Ok(_) => match OpenOptions::new().write(true).open(path) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(Refusal::ReadOnly(path.to_path_buf())),
+            Ok(_) => {}
+            Err(_) => return Err(Refusal::ReadOnly(path.to_path_buf())),
         },
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(Refusal::ReadOnly(path.to_path_buf())),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(_) => return Err(Refusal::ReadOnly(path.to_path_buf())),
     }
+    let Some(dir) = path.parent() else {
+        return Err(Refusal::ReadOnly(path.to_path_buf()));
+    };
+    fs::create_dir_all(dir).map_err(|_| Refusal::UnwritableDirectory(dir.to_path_buf()))?;
+    let (temp_path, temp) =
+        create_temp(path).map_err(|_| Refusal::UnwritableDirectory(dir.to_path_buf()))?;
+    drop(temp);
+    fs::remove_file(temp_path).map_err(|_| Refusal::UnwritableDirectory(dir.to_path_buf()))
 }
 
 /// The `[shortcut]` section as TOML, for users who must add it themselves.
@@ -636,5 +647,24 @@ model = "test-model"
         update_shortcut(&path, |current| current).unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+    }
+
+    #[test]
+    fn replacement_requires_a_writable_directory() {
+        let dir = scratch("readonly-dir");
+        let path = dir.join("config.toml");
+        fs::write(&path, DEFAULT_CONFIG).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let existing = check_writable(&path);
+        let missing = check_writable(&dir.join("new.toml"));
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            existing.is_err(),
+            "a writable file in a read-only directory passed"
+        );
+        assert!(
+            missing.is_err(),
+            "a missing config in a read-only directory passed"
+        );
     }
 }
