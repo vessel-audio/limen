@@ -324,3 +324,9 @@ fn fake_server(paths: &CorePaths) {
         }
     }
 }
+
+#[test]
+fn another_uid_is_never_signalled() {
+    let error = super::peer_pid(123, u32::MAX).unwrap_err();
+    assert!(error.to_string().contains("another UID"));
+}

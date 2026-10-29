@@ -7183,6 +7183,7 @@ dependencies = [
  "gpui-kit",
  "rust-i18n",
  "tokio",
+ "tracing",
  "voice-input-core",
 ]
 

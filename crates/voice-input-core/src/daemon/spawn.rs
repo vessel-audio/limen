@@ -126,3 +126,39 @@ fn log_tail(paths: &Paths) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Read and validate the daemon PID from a Unix peer's credentials.
+pub async fn daemon_peer_pid(paths: &Paths) -> Result<u32> {
+    let stream = tokio::net::UnixStream::connect(&paths.socket)
+        .await
+        .with_context(|| format!("cannot connect to {}", paths.socket.display()))?;
+    let credentials = stream.peer_cred().context("cannot read peer credentials")?;
+    peer_pid(
+        credentials.pid().context("peer has no PID")?,
+        credentials.uid(),
+    )
+}
+
+/// SIGTERM an outdated daemon after the caller has obtained user confirmation.
+pub async fn terminate_daemon(paths: &Paths) -> Result<()> {
+    let pid = daemon_peer_pid(paths).await?;
+    // SAFETY: kill is called with a validated positive PID and SIGTERM, with no
+    // pointers or borrowed memory. UID was checked before this call.
+    let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error()).context("failed to terminate daemon");
+    }
+    Ok(())
+}
+
+fn peer_pid(pid: i32, uid: u32) -> Result<u32> {
+    // SAFETY: geteuid has no arguments, pointers, or memory-safety preconditions.
+    let effective = unsafe { libc::geteuid() };
+    if uid != effective {
+        bail!("refusing to signal a daemon owned by another UID");
+    }
+    if pid <= 0 {
+        bail!("peer has an invalid PID");
+    }
+    Ok(pid as u32)
+}

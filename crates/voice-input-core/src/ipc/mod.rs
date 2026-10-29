@@ -15,6 +15,7 @@ mod legacy;
 mod subscription;
 pub mod v1;
 
+pub use self::NotRunning as DaemonNotRunning;
 pub use client::{request, send, subscribe};
 pub(crate) use subscription::Watchers;
 pub(crate) mod wire;
@@ -57,7 +58,7 @@ pub enum Command {
 /// The daemon does not listen on its socket.
 #[derive(Debug, thiserror::Error)]
 #[error("cannot connect to {}; is `voice-input daemon` running?", .0.display())]
-pub(crate) struct NotRunning(PathBuf, #[source] std::io::Error);
+pub struct NotRunning(PathBuf, #[source] std::io::Error);
 
 pub fn bind(paths: &Paths) -> Result<UnixListener> {
     if paths.socket.exists() {

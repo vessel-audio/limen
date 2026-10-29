@@ -7,6 +7,7 @@ use voice_input_core::{DictationState, Level, StateSnapshot, WireSnapshot};
 /// Connection and daemon-launch state shown across every page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Connection {
+    NotRunning,
     Connecting,
     Spawning,
     Connected,
@@ -73,6 +74,10 @@ pub enum Msg {
         message: String,
     },
     Snapshot(Box<WireSnapshot>),
+    CommandError {
+        message: String,
+    },
+    DaemonStopped,
     StopAccepted {
         take: u64,
     },
@@ -87,6 +92,7 @@ pub struct GuiState {
     pub snapshot: Option<WireSnapshot>,
     pub level: Level,
     pub daemon_version: Option<String>,
+    pub command_error: Option<String>,
     pub pending_copies: BTreeSet<u64>,
     pub copied_entries: BTreeSet<u64>,
 }
@@ -99,6 +105,7 @@ impl Default for GuiState {
             snapshot: None,
             level: Level::SILENCE,
             daemon_version: None,
+            command_error: None,
             pending_copies: BTreeSet::new(),
             copied_entries: BTreeSet::new(),
         }
@@ -154,6 +161,14 @@ impl GuiState {
             }
             Msg::DaemonError { message } => {
                 self.connection = Connection::ProtocolMismatch { message };
+                (self, Vec::new())
+            }
+            Msg::CommandError { message } => {
+                self.command_error = Some(message);
+                (self, Vec::new())
+            }
+            Msg::DaemonStopped => {
+                self.connection = Connection::NotRunning;
                 (self, Vec::new())
             }
             Msg::StopAccepted { take } => {

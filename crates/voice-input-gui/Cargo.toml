@@ -9,4 +9,5 @@ gpui-kit.workspace = true
 futures-util.workspace = true
 rust-i18n.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 voice-input-core.workspace = true

@@ -205,3 +205,15 @@ fn button_availability_matches_the_daemon_view() {
         DictationButton::Disabled(DisabledReason::Offline)
     );
 }
+
+#[test]
+fn command_errors_stay_verbatim_and_an_intentional_stop_does_not_spawn() {
+    let (state, actions) = connected().apply(Msg::CommandError {
+        message: "not recording".to_string(),
+    });
+    assert_eq!(state.command_error.as_deref(), Some("not recording"));
+    assert!(actions.is_empty());
+    let (stopped, actions) = state.apply(Msg::DaemonStopped);
+    assert_eq!(stopped.connection, Connection::NotRunning);
+    assert!(actions.is_empty());
+}

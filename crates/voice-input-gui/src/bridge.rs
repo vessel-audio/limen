@@ -1,0 +1,419 @@
+//! Tokio bridge for subscriptions, daemon lifecycle, and shortcut operations.
+
+use std::pin::Pin;
+use std::time::Duration;
+
+use anyhow::Result;
+use futures_util::{Stream, TryStreamExt};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use voice_input_core::{
+    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Paths, Push, Report,
+    SetupError, Shortcut, clear, edit, request, set, setup, spawn_daemon, subscribe,
+    terminate_daemon, v1,
+};
+
+use crate::model::{Msg, Toast};
+
+/// Commands sent from the GPUI thread to the bridge.
+#[derive(Debug)]
+pub enum BridgeCommand {
+    Start,
+    Stop,
+    ClearHistory,
+    SpawnDaemon,
+    RestartDaemon,
+    ShutdownDaemon,
+    TerminateDaemon,
+    Shortcut(ShortcutRequest),
+}
+
+/// Shortcut writes executed through the same core operations as the CLI.
+#[derive(Debug)]
+pub enum ShortcutRequest {
+    Setup {
+        backend: Backend,
+        keys: Keys,
+    },
+    Set {
+        action: ShortcutAction,
+        keys: Shortcut,
+    },
+    Clear {
+        action: ShortcutAction,
+    },
+    Edit,
+}
+
+/// Events sent from the bridge to the GPUI thread.
+#[derive(Debug)]
+pub enum BridgeEvent {
+    Msg(Msg),
+    OfferTerminate,
+    ShortcutReport(Result<Report, String>),
+    Toast(Toast),
+}
+
+/// Start a current-thread Tokio runtime on a dedicated native thread.
+pub fn start(
+    paths: Paths,
+) -> (
+    mpsc::Sender<BridgeCommand>,
+    mpsc::Receiver<BridgeEvent>,
+    std::thread::JoinHandle<()>,
+) {
+    let (commands, command_rx) = mpsc::channel(32);
+    let (events, event_rx) = mpsc::channel(64);
+    let thread = std::thread::Builder::new()
+        .name("voice-input-bridge".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("bridge runtime");
+            runtime.block_on(run(paths, events, command_rx));
+        })
+        .expect("failed to spawn bridge thread");
+    (commands, event_rx, thread)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Backoff(Duration);
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self(Duration::from_millis(500))
+    }
+}
+
+impl Backoff {
+    fn next(&mut self) -> Duration {
+        let current = self.0;
+        self.0 = (self.0 * 2).min(Duration::from_secs(5));
+        current
+    }
+
+    fn reset(&mut self) {
+        self.0 = Duration::from_millis(500);
+    }
+}
+
+type StartResult = Result<(), StartError>;
+
+#[derive(Debug)]
+enum StartError {
+    Outdated(String),
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StartMode {
+    Spawn,
+    Restart,
+}
+
+struct SpawnGate {
+    task: Option<JoinHandle<StartResult>>,
+}
+
+impl SpawnGate {
+    fn start(&mut self, paths: &Paths, mode: StartMode) -> bool {
+        if self.task.is_some() {
+            return false;
+        }
+        let paths = paths.clone();
+        self.task = Some(tokio::spawn(async move {
+            match mode {
+                StartMode::Spawn => spawn_daemon(&paths)
+                    .await
+                    .map_err(|error| StartError::Failed(format!("{error:#}"))),
+                StartMode::Restart => restart(&paths).await,
+            }
+        }));
+        true
+    }
+
+    async fn finish(&mut self) -> Option<StartResult> {
+        match &mut self.task {
+            Some(task) => Some(
+                task.await
+                    .unwrap_or_else(|error| Err(StartError::Failed(error.to_string()))),
+            ),
+            None => std::future::pending().await,
+        }
+    }
+}
+
+#[tracing::instrument(skip_all)]
+async fn run(
+    paths: Paths,
+    events: mpsc::Sender<BridgeEvent>,
+    mut commands: mpsc::Receiver<BridgeCommand>,
+) {
+    let mut backoff = Backoff::default();
+    let mut spawn = SpawnGate { task: None };
+    let mut stream: Option<Pin<Box<dyn Stream<Item = Result<Push>>>>> = None;
+    let mut next_connect = tokio::time::Instant::now();
+    let mut stopped = false;
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else { return; };
+                handle_command(
+                    &paths,
+                    &events,
+                    command,
+                    &mut stream,
+                    &mut spawn,
+                    &mut stopped,
+                ).await;
+            }
+            outcome = spawn.finish() => {
+                let Some(outcome) = outcome else { continue; };
+                spawn.task = None;
+                match outcome {
+                    Ok(()) => {
+                        stopped = false;
+                        next_connect = tokio::time::Instant::now();
+                        let _ = events.send(BridgeEvent::Msg(Msg::Connecting)).await;
+                    }
+                    Err(StartError::Outdated(message)) => {
+                        stopped = true;
+                        let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message })).await;
+                        let _ = events.send(BridgeEvent::OfferTerminate).await;
+                    }
+                    Err(StartError::Failed(log_tail)) => {
+                        stopped = true;
+                        let _ = events.send(BridgeEvent::Msg(Msg::SpawnFailed { log_tail })).await;
+                    }
+                }
+            }
+            _ = tokio::time::sleep_until(next_connect), if stream.is_none() && spawn.task.is_none() && !stopped => {
+                match subscribe(&paths).await {
+                    Ok(mut candidate) => match candidate.try_next().await {
+                        Ok(Some(Push::Hello { protocol, daemon_version })) => {
+                            let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version })).await;
+                            backoff.reset();
+                            stream = Some(Box::pin(candidate));
+                        }
+                        Ok(Some(Push::Error { message })) => {
+                            let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message: message.clone() })).await;
+                            if is_outdated(&message) {
+                                let _ = events.send(BridgeEvent::OfferTerminate).await;
+                            }
+                            stopped = is_outdated(&message);
+                            next_connect = tokio::time::Instant::now() + backoff.next();
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {
+                            let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: "subscription ended".to_string() })).await;
+                            next_connect = tokio::time::Instant::now() + backoff.next();
+                        }
+                    },
+                    Err(error) => {
+                        if error.downcast_ref::<DaemonNotRunning>().is_some() && spawn.task.is_none() {
+                            let _ = events.send(BridgeEvent::Msg(Msg::NotRunning)).await;
+                            spawn.start(&paths, StartMode::Spawn);
+                        } else {
+                            let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: format!("{error:#}") })).await;
+                            next_connect = tokio::time::Instant::now() + backoff.next();
+                        }
+                    }
+                }
+            }
+            push = next_push(&mut stream), if stream.is_some() => {
+                match push {
+                    Some(Ok(Push::Snapshot(snapshot))) => {
+                        let _ = events.send(BridgeEvent::Msg(Msg::Snapshot(snapshot))).await;
+                    }
+                    Some(Ok(Push::Level { rms, dbfs })) => {
+                        let _ = events.send(BridgeEvent::Msg(Msg::Level(voice_input_core::Level { rms, dbfs }))).await;
+                    }
+                    Some(Ok(Push::Hello { .. })) => {}
+                    Some(Ok(Push::Error { message })) => {
+                        if is_outdated(&message) {
+                            stopped = true;
+                            let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message })).await;
+                            let _ = events.send(BridgeEvent::OfferTerminate).await;
+                        } else {
+                            let _ = events.send(BridgeEvent::Msg(Msg::CommandError { message })).await;
+                            next_connect = tokio::time::Instant::now() + backoff.next();
+                        }
+                        stream = None;
+                    }
+                    Some(Err(error)) => {
+                        let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: format!("{error:#}") })).await;
+                        stream = None;
+                        next_connect = tokio::time::Instant::now() + backoff.next();
+                    }
+                    None => {
+                        let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: "daemon closed the connection".to_string() })).await;
+                        stream = None;
+                        next_connect = tokio::time::Instant::now() + backoff.next();
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn next_push(
+    stream: &mut Option<Pin<Box<dyn Stream<Item = Result<Push>>>>>,
+) -> Option<Result<Push>> {
+    match stream {
+        Some(stream) => match stream.try_next().await {
+            Ok(push) => push.map(Ok),
+            Err(error) => Some(Err(error)),
+        },
+        None => std::future::pending().await,
+    }
+}
+
+async fn handle_command(
+    paths: &Paths,
+    events: &mpsc::Sender<BridgeEvent>,
+    command: BridgeCommand,
+    stream: &mut Option<Pin<Box<dyn Stream<Item = Result<Push>>>>>,
+    spawn: &mut SpawnGate,
+    stopped: &mut bool,
+) {
+    match command {
+        BridgeCommand::Start => {
+            let _ = request(paths, &v1::Request::Start)
+                .await
+                .map_err(|error| error.to_string());
+        }
+        BridgeCommand::Stop => {
+            match request(
+                paths,
+                &v1::Request::Stop {
+                    delivery: Delivery::Keep,
+                },
+            )
+            .await
+            {
+                Ok(v1::Reply::Accepted { take }) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::StopAccepted { take }))
+                        .await;
+                }
+                Ok(v1::Reply::Error { message }) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError { message }))
+                        .await;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: format!("{error:#}"),
+                        }))
+                        .await;
+                }
+            }
+        }
+        BridgeCommand::ClearHistory => {
+            let _ = request(paths, &v1::Request::ClearHistory).await;
+        }
+        BridgeCommand::SpawnDaemon => {
+            *stopped = false;
+            spawn.start(paths, StartMode::Spawn);
+        }
+        BridgeCommand::RestartDaemon => {
+            *stopped = false;
+            spawn.start(paths, StartMode::Restart);
+        }
+        BridgeCommand::ShutdownDaemon => match request(paths, &v1::Request::Shutdown).await {
+            Ok(v1::Reply::Ok) => {
+                *stopped = true;
+                *stream = None;
+                let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+            }
+            Ok(v1::Reply::Error { message }) => {
+                let _ = events
+                    .send(BridgeEvent::Msg(Msg::DaemonError { message }))
+                    .await;
+                let _ = events.send(BridgeEvent::OfferTerminate).await;
+            }
+            Ok(_) | Err(_) => {}
+        },
+        BridgeCommand::TerminateDaemon => match terminate_daemon(paths).await {
+            Ok(()) => {
+                *stopped = true;
+                *stream = None;
+                let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+            }
+            Err(error) => {
+                let _ = events
+                    .send(BridgeEvent::Msg(Msg::CommandError {
+                        message: format!("{error:#}"),
+                    }))
+                    .await;
+            }
+        },
+        BridgeCommand::Shortcut(request) => {
+            let result = run_shortcut(paths, request).await;
+            let _ = events.send(BridgeEvent::ShortcutReport(result)).await;
+        }
+    }
+}
+
+async fn run_shortcut(paths: &Paths, request: ShortcutRequest) -> Result<Report, String> {
+    let result = match request {
+        ShortcutRequest::Setup { backend, keys } => setup(paths, backend, keys).await,
+        ShortcutRequest::Set { action, keys } => set(paths, action, keys).await,
+        ShortcutRequest::Clear { action } => clear(paths, action).await,
+        ShortcutRequest::Edit => edit(paths).await,
+    };
+    result.map_err(|error| match error {
+        SetupError::Usage { message, .. } => message,
+        SetupError::Runtime { error, .. } => format!("{error:#}"),
+    })
+}
+
+async fn restart(paths: &Paths) -> StartResult {
+    match request(paths, &v1::Request::Shutdown).await {
+        Ok(v1::Reply::Ok) => {
+            wait_for_socket_close(paths).await?;
+            spawn_daemon(paths)
+                .await
+                .map_err(|error| StartError::Failed(format!("{error:#}")))
+        }
+        Ok(v1::Reply::Error { message }) if is_outdated(&message) => {
+            Err(StartError::Outdated(message))
+        }
+        Ok(v1::Reply::Error { message }) => Err(StartError::Failed(message)),
+        Ok(_) => Err(StartError::Failed("unexpected shutdown reply".to_string())),
+        Err(error) => Err(StartError::Failed(format!("{error:#}"))),
+    }
+}
+
+async fn wait_for_socket_close(paths: &Paths) -> Result<(), StartError> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match tokio::net::UnixStream::connect(&paths.socket).await {
+                Ok(stream) => {
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(StartError::Failed(error.to_string())),
+            }
+        }
+    })
+    .await
+    .map_err(|_| StartError::Failed("daemon did not stop within 5s".to_string()))?
+}
+
+fn is_outdated(message: &str) -> bool {
+    message.contains("invalid request") || message.contains("unknown variant")
+}
+
+#[cfg(test)]
+mod tests;

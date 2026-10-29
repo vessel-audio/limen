@@ -46,7 +46,7 @@ pub async fn request(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> 
 }
 
 /// Open a long-lived subscription and parse each bounded push line.
-pub async fn subscribe(paths: &Paths) -> Result<impl Stream<Item = Result<Push>>> {
+pub async fn subscribe(paths: &Paths) -> Result<impl Stream<Item = Result<Push>> + 'static> {
     let stream = connect(paths).await?;
     let (read, mut write) = stream.into_split();
     write
