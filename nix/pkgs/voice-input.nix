@@ -19,6 +19,7 @@
 }:
 
 let
+  launch = if withGui then "gui" else "daemon";
   runtimePipewire =
     if withGui then
       pipewire
@@ -89,7 +90,7 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     install -Dm644 data/io.github.Emin017.VoiceInput.desktop -t $out/share/applications
     substituteInPlace $out/share/applications/io.github.Emin017.VoiceInput.desktop \
-      --replace-fail "Exec=voice-input daemon" "Exec=$out/bin/voice-input daemon"
+      --replace-fail "Exec=voice-input daemon" "Exec=$out/bin/voice-input ${launch}"
   '';
 
   doInstallCheck = true;
@@ -97,7 +98,7 @@ rustPlatform.buildRustPackage {
     runHook preInstallCheck
     entry=$out/share/applications/io.github.Emin017.VoiceInput.desktop
     desktop-file-validate "$entry"
-    grep -qx "Exec=$out/bin/voice-input daemon" "$entry"
+    grep -qx "Exec=$out/bin/voice-input ${launch}" "$entry"
     runHook postInstallCheck
   '';
 

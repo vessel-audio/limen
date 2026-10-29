@@ -14,7 +14,7 @@ use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, Connection, GuiState, Msg, Warning};
 use crate::pages;
 use crate::recorder::RecorderState;
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
 
 /// Root application state owned by the GPUI thread.
 pub struct AppView {
@@ -26,6 +26,9 @@ pub struct AppView {
     pub recorder: RecorderState,
     pub toggle_input: Entity<InputState>,
     pub hold_input: Entity<InputState>,
+    pub toggle_touched: bool,
+    pub hold_touched: bool,
+    _subscriptions: Vec<Subscription>,
     pub about: bool,
     pub confirm_clear: bool,
     pub confirm_shutdown: Option<ShutdownAction>,
@@ -33,7 +36,7 @@ pub struct AppView {
     pub offer_terminate: bool,
     pub level_history: Vec<f32>,
     pub silent_since: Option<Instant>,
-    pub shortcut_report: Option<Result<voice_input_core::Report, String>>,
+    pub shortcut_report: Option<Result<voice_input_core::Report, crate::bridge::ShortcutFailure>>,
 }
 
 /// Top-level navigation pages.
@@ -58,6 +61,28 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let toggle_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Super+Z")
+                .default_value("Super+Z")
+        });
+        let hold_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Super+X")
+                .default_value("Super+X")
+        });
+        let subscriptions = vec![
+            cx.subscribe_in(&toggle_input, window, |this, _, event, _, _| {
+                if matches!(event, InputEvent::Change) {
+                    this.toggle_touched = true;
+                }
+            }),
+            cx.subscribe_in(&hold_input, window, |this, _, event, _, _| {
+                if matches!(event, InputEvent::Change) {
+                    this.hold_touched = true;
+                }
+            }),
+        ];
         Self {
             model: GuiState::default(),
             commands,
@@ -65,16 +90,11 @@ impl AppView {
             page: Page::Dictation,
             selected_backend: Backend::Portal,
             recorder: RecorderState::Idle { current: None },
-            toggle_input: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Super+Z")
-                    .default_value("Super+Z")
-            }),
-            hold_input: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Super+X")
-                    .default_value("Super+X")
-            }),
+            toggle_input,
+            hold_input,
+            toggle_touched: false,
+            hold_touched: false,
+            _subscriptions: subscriptions,
             about: false,
             confirm_clear: false,
             confirm_shutdown: None,
@@ -89,6 +109,10 @@ impl AppView {
     /// Apply one bridge event and return GUI-only side effects.
     pub fn apply_bridge_event(&mut self, event: BridgeEvent) -> Vec<Action> {
         let level_event = matches!(event, BridgeEvent::Msg(Msg::Level(_)));
+        if matches!(event, BridgeEvent::Msg(Msg::DaemonReplaced)) {
+            self.toggle_touched = false;
+            self.hold_touched = false;
+        }
         let actions = self.apply_event(event);
         self.update_level_tracking(level_event);
         actions
@@ -121,6 +145,7 @@ impl AppView {
             )
         });
         if !recording {
+            self.model.level = voice_input_core::Level::SILENCE;
             self.level_history.clear();
             self.silent_since = None;
             return;

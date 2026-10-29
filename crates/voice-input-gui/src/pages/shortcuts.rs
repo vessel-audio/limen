@@ -40,7 +40,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         Backend::None => div()
             .v_flex()
             .gap_2()
-            .child("Bind this command in your desktop settings:")
+            .child(rust_i18n::t!("shortcuts.bind_command").to_string())
             .child(
                 Button::new("copy-toggle-command")
                     .outline()
@@ -52,12 +52,16 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                     }),
             ),
     };
-    let report = view.shortcut_report.as_ref().map(|result| match result {
-        Ok(report) => div()
+    let report = view.shortcut_report.as_ref().map(|result| {
+        let (report, error) = match result {
+            Ok(report) => (report, None),
+            Err(failure) => (&failure.report, Some(failure.message.clone())),
+        };
+        div()
             .v_flex()
             .gap_1()
-            .children(report.notes.iter().map(format_note)),
-        Err(error) => div().child(error.clone()),
+            .children(report.notes.iter().map(format_note))
+            .children(error)
     });
     div()
         .v_flex()
@@ -89,7 +93,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .child(
             Button::new("apply-shortcut-backend")
                 .primary()
-                .label("Apply")
+                .label(rust_i18n::t!("shortcuts.apply").to_string())
                 .on_click(cx.listener(apply)),
         )
         .children(report)
@@ -112,7 +116,7 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         .child(
             Button::new("edit-portal-shortcuts")
                 .outline()
-                .label("Change in GNOME Settings")
+                .label(rust_i18n::t!("shortcuts.edit").to_string())
                 .on_click({
                     let commands = view.commands.clone();
                     move |_, _, _| {
@@ -120,24 +124,23 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
                     }
                 }),
         )
-        .child("Preferred toggle")
+        .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
         .child(Input::new(&view.toggle_input))
-        .child("Preferred hold-to-talk")
+        .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
         .child(Input::new(&view.hold_input))
 }
 
 fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     let (current, error) = match &view.recorder {
         RecorderState::Idle { current } => (
-            current.map_or("not set".to_string(), |key| key.to_string()),
+            current.map_or(rust_i18n::t!("shortcuts.not_set").to_string(), |key| {
+                key.to_string()
+            }),
             None,
         ),
-        RecorderState::Recording { .. } => (
-            "Press a shortcut… (Esc cancels, Backspace clears)".to_string(),
-            None,
-        ),
+        RecorderState::Recording { .. } => (rust_i18n::t!("shortcuts.recording").to_string(), None),
         RecorderState::Invalid { error, .. } => (
-            "invalid shortcut".to_string(),
+            rust_i18n::t!("shortcuts.invalid").to_string(),
             Some(match error {
                 RecorderError::ShiftedSymbol => rust_i18n::t!("hint.shifted_symbol").to_string(),
                 RecorderError::Invalid(error) => error.clone(),
@@ -155,7 +158,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 .child(
                     Button::new("record-toggle")
                         .outline()
-                        .label("Record")
+                        .label(rust_i18n::t!("shortcuts.record").to_string())
                         .on_click(cx.listener(|this, _, _, _| {
                             this.recorder = this.recorder.clone().apply(RecorderEvent::Start).0;
                         })),
@@ -163,7 +166,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 .child(
                     Button::new("clear-toggle")
                         .ghost()
-                        .label("Clear")
+                        .label(rust_i18n::t!("action.clear").to_string())
                         .on_click({
                             let commands = view.commands.clone();
                             move |_, _, _| {
@@ -180,7 +183,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .child(
             Button::new("set-toggle-manual")
                 .outline()
-                .label("Set toggle")
+                .label(rust_i18n::t!("shortcuts.set_toggle").to_string())
                 .on_click(cx.listener(|this, _, _, cx| {
                     let text = this.toggle_input.read(cx).value();
                     let (next, action) = this
@@ -198,7 +201,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                     }
                 })),
         )
-        .child("Hold-to-talk is not supported by this backend.")
+        .child(rust_i18n::t!("shortcuts.no_hold").to_string())
         .children(error)
 }
 
@@ -210,14 +213,20 @@ fn apply(view: &mut AppView, _: &ClickEvent, _: &mut Window, cx: &mut Context<Ap
         .snapshot
         .as_ref()
         .map(|snapshot| snapshot.shortcut.preferred);
-    let toggle = parse_or_default(
-        toggle.to_string(),
-        preferred.map_or(Shortcut::DEFAULT_TOGGLE, |keys| keys.toggle),
-    );
-    let hold = parse_or_default(
-        hold.to_string(),
-        preferred.map_or(Shortcut::DEFAULT_HOLD, |keys| keys.hold),
-    );
+    let toggle = match view.toggle_touched {
+        true => parse_or_default(
+            toggle.to_string(),
+            preferred.map_or(Shortcut::DEFAULT_TOGGLE, |keys| keys.toggle),
+        ),
+        false => Ok(preferred.map_or(Shortcut::DEFAULT_TOGGLE, |keys| keys.toggle)),
+    };
+    let hold = match view.hold_touched {
+        true => parse_or_default(
+            hold.to_string(),
+            preferred.map_or(Shortcut::DEFAULT_HOLD, |keys| keys.hold),
+        ),
+        false => Ok(preferred.map_or(Shortcut::DEFAULT_HOLD, |keys| keys.hold)),
+    };
     let result = match (toggle, hold) {
         (Err(error), _) | (_, Err(error)) => Err(error),
         (Ok(toggle), Ok(hold)) => {
@@ -245,7 +254,10 @@ fn apply(view: &mut AppView, _: &ClickEvent, _: &mut Window, cx: &mut Context<Ap
         }
     };
     if let Err(error) = result {
-        view.shortcut_report = Some(Err(error));
+        view.shortcut_report = Some(Err(crate::bridge::ShortcutFailure {
+            report: Default::default(),
+            message: error,
+        }));
     }
 }
 
@@ -260,31 +272,31 @@ fn parse_or_default(text: String, default: Shortcut) -> Result<Shortcut, String>
 }
 
 fn trigger(trigger: &Option<voice_input_core::Trigger>) -> String {
-    trigger.as_ref().map_or("not bound".to_string(), |trigger| {
-        if trigger.shortcuts.is_empty() {
-            trigger.description.clone()
-        } else {
-            trigger
-                .shortcuts
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(" or ")
-        }
-    })
+    trigger.as_ref().map_or(
+        rust_i18n::t!("shortcuts.not_bound").to_string(),
+        |trigger| {
+            if trigger.shortcuts.is_empty() {
+                trigger.description.clone()
+            } else {
+                trigger
+                    .shortcuts
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            }
+        },
+    )
 }
 
 fn format_note(note: &Note) -> String {
     match note {
-        Note::Installed(path) => format!("Installed {}", path.display()),
-        Note::UnstableLauncher(path) => format!(
-            "{} is in the Nix store and stops working after an upgrade",
-            path.display()
-        ),
-        Note::NotChecked(schema) => format!("Not checked: {schema}"),
-        Note::DaemonNotRunning => {
-            "The daemon is not running; the change takes effect when it starts.".to_string()
+        Note::Installed(path) => format!("{} {}", rust_i18n::t!("note.installed"), path.display()),
+        Note::UnstableLauncher(path) => {
+            format!("{} {}", path.display(), rust_i18n::t!("note.unstable"))
         }
+        Note::NotChecked(schema) => format!("{}: {schema}", rust_i18n::t!("note.not_checked")),
+        Note::DaemonNotRunning => rust_i18n::t!("note.daemon_offline").to_string(),
         Note::GnomeBinding {
             keys,
             command,
@@ -292,14 +304,14 @@ fn format_note(note: &Note) -> String {
         } => format!(
             "Toggle {keys} → {command} ({})",
             match program {
-                Program::Stable(_) => "stable path",
-                Program::Unstable(_) => "unstable path",
+                Program::Stable(_) => rust_i18n::t!("note.stable_path"),
+                Program::Unstable(_) => rust_i18n::t!("note.unstable_path"),
             }
         ),
-        Note::NoCustomShortcut => "No GNOME custom shortcut runs voice-input toggle.".to_string(),
-        Note::CustomShortcutRemoved => "Removed the GNOME custom shortcut.".to_string(),
+        Note::NoCustomShortcut => rust_i18n::t!("note.no_custom").to_string(),
+        Note::CustomShortcutRemoved => rust_i18n::t!("note.removed").to_string(),
         Note::CustomShortcutDisabled(path) => {
-            format!("Disabled the GNOME custom shortcut at {path}; it stays otherwise.")
+            format!("{}: {path}", rust_i18n::t!("note.disabled"))
         }
     }
 }

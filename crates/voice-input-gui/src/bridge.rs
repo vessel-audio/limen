@@ -8,8 +8,9 @@ use futures_util::{Stream, TryStreamExt};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use voice_input_core::{
-    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Paths, Push, Report,
-    SetupError, Shortcut, clear, edit, set, setup, spawn_daemon, subscribe, terminate_daemon, v1,
+    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths, Push,
+    Report, SetupError, Shortcut, clear, edit, set, setup, spawn_daemon, subscribe,
+    terminate_daemon, v1,
 };
 
 use crate::model::{Msg, Toast};
@@ -49,8 +50,15 @@ pub enum ShortcutRequest {
 pub enum BridgeEvent {
     Msg(Msg),
     OfferTerminate,
-    ShortcutReport(Result<Report, String>),
+    ShortcutReport(Result<Report, ShortcutFailure>),
     Toast(Toast),
+}
+
+/// A failed shortcut operation and the effects completed before the failure.
+#[derive(Debug)]
+pub struct ShortcutFailure {
+    pub report: Report,
+    pub message: String,
 }
 
 /// Start a current-thread Tokio runtime on a dedicated native thread.
@@ -418,16 +426,22 @@ async fn handle_command(
     }
 }
 
-async fn run_shortcut(paths: &Paths, request: ShortcutRequest) -> Result<Report, String> {
+async fn run_shortcut(paths: &Paths, request: ShortcutRequest) -> Result<Report, ShortcutFailure> {
     let result = match request {
-        ShortcutRequest::Setup { backend, keys } => setup(paths, backend, keys).await,
+        ShortcutRequest::Setup { backend, keys } => setup(paths, backend, keys, Launch::Gui).await,
         ShortcutRequest::Set { action, keys } => set(paths, action, keys).await,
         ShortcutRequest::Clear { action } => clear(paths, action).await,
         ShortcutRequest::Edit => edit(paths).await,
     };
-    result.map_err(|error| match error {
-        SetupError::Usage { message, .. } => message,
-        SetupError::Runtime { error, .. } => format!("{error:#}"),
+    result.map_err(|error| {
+        let message = match &error {
+            SetupError::Usage { message, .. } => message.clone(),
+            SetupError::Runtime { error, .. } => format!("{error:#}"),
+        };
+        ShortcutFailure {
+            report: error.report().clone(),
+            message,
+        }
     })
 }
 

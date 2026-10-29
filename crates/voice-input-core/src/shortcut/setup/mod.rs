@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
 
+use super::desktop_entry::Launch;
 use super::program::Program;
 use super::status::ShortcutStatus;
 use super::{Action, Backend, Shortcut};
@@ -116,7 +117,12 @@ impl From<anyhow::Error> for SetupError {
 }
 
 /// Choose a shortcut backend and optionally replace its preferred keys.
-pub async fn setup(paths: &Paths, backend: Backend, keys: Keys) -> Result<Report, SetupError> {
+pub async fn setup(
+    paths: &Paths,
+    backend: Backend,
+    keys: Keys,
+    launch: Launch,
+) -> Result<Report, SetupError> {
     let mut report = Report::default();
     let result = match configured(paths) {
         Err(error) => Err(error),
@@ -124,7 +130,7 @@ pub async fn setup(paths: &Paths, backend: Backend, keys: Keys) -> Result<Report
             (Backend::GnomeKeybinding, Some(_)) => Err(SetupError::usage(
                 "--hold is only used by the portal backend",
             )),
-            (Backend::Portal, _) => portal::setup(paths, current, keys, &mut report).await,
+            (Backend::Portal, _) => portal::setup(paths, current, keys, &mut report, launch).await,
             (Backend::GnomeKeybinding, None) => {
                 let toggle = keys.toggle.unwrap_or(current.toggle);
                 match check_distinct(toggle, current.hold) {

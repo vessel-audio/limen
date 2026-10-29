@@ -28,7 +28,7 @@ pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, request, send, subscribe, v1};
 pub use provider::probe;
-pub use shortcut::desktop_entry::APP_ID;
+pub use shortcut::desktop_entry::{APP_ID, Launch};
 pub use shortcut::program::Program;
 pub use shortcut::setup::{GnomeBinding, GnomeStatus, configured as shortcut_config};
 pub use shortcut::setup::{

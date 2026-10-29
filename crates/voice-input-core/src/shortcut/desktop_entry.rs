@@ -19,6 +19,24 @@ pub const APP_ID: &str = "io.github.Emin017.VoiceInput";
 /// The entry as it is kept in the repository.
 const ENTRY: &str = include_str!("../../../../data/io.github.Emin017.VoiceInput.desktop");
 
+/// Which command a non-Nix desktop entry launches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Launch {
+    /// Open the graphical control panel.
+    Gui,
+    /// Run the resident daemon.
+    Daemon,
+}
+
+impl Launch {
+    fn subcommand(self) -> &'static str {
+        match self {
+            Self::Gui => "gui",
+            Self::Daemon => "daemon",
+        }
+    }
+}
+
 /// Where the entry was found or put.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Install {
@@ -27,8 +45,8 @@ pub(crate) enum Install {
 }
 
 /// Make sure an entry for [`APP_ID`] is installed, writing one that runs
-/// `program daemon` when none is found.
-pub(crate) fn ensure_installed(program: &Path) -> Result<Install> {
+/// `program` with the selected subcommand when none is found.
+pub(crate) fn ensure_installed(program: &Path, launch: Launch) -> Result<Install> {
     let home = dirs::data_dir().context("cannot find the user's data directory")?;
     let system = std::env::var_os("XDG_DATA_DIRS")
         .filter(|dirs| !dirs.is_empty())
@@ -37,10 +55,11 @@ pub(crate) fn ensure_installed(program: &Path) -> Result<Install> {
         &home,
         &std::env::split_paths(&system).collect::<Vec<_>>(),
         program,
+        launch,
     )
 }
 
-fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
+fn install(home: &Path, system: &[PathBuf], program: &Path, launch: Launch) -> Result<Install> {
     let name = format!("{APP_ID}.desktop");
     let found = std::iter::once(home)
         .chain(system.iter().map(PathBuf::as_path))
@@ -74,7 +93,7 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
                 .create_new(true)
                 .open(&temp)
                 .and_then(|mut file| {
-                    file.write_all(entry_for(program).as_bytes())?;
+                    file.write_all(entry_for(program, launch).as_bytes())?;
                     file.sync_all()
                 })
                 .and_then(|()| match fs::hard_link(&temp, &path) {
@@ -90,9 +109,13 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
     }
 }
 
-/// The entry, with `Exec` running `program daemon`.
-fn entry_for(program: &Path) -> String {
-    let exec = format!("Exec={} daemon", exec_arg(&program.to_string_lossy()));
+/// The entry, with `Exec` running `program` with the selected subcommand.
+fn entry_for(program: &Path, launch: Launch) -> String {
+    let exec = format!(
+        "Exec={} {}",
+        exec_arg(&program.to_string_lossy()),
+        launch.subcommand()
+    );
     ENTRY
         .lines()
         .map(|line| match line.starts_with("Exec=") {
@@ -151,18 +174,25 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::{APP_ID, ENTRY, Install, entry_for, exec_arg, install};
+    use super::{APP_ID, ENTRY, Install, Launch, entry_for, exec_arg, install};
 
     #[test]
     fn the_entry_runs_the_daemon_and_stays_visible() {
         assert_eq!(
-            entry_for(Path::new("/home/me/bin/voice-input")),
+            entry_for(Path::new("/home/me/bin/voice-input"), Launch::Daemon),
             ENTRY.replace(
                 "Exec=voice-input daemon",
                 "Exec=/home/me/bin/voice-input daemon"
             )
         );
         assert!(!ENTRY.contains("NoDisplay"));
+        assert_eq!(
+            entry_for(Path::new("/home/me/bin/voice-input"), Launch::Gui),
+            ENTRY.replace(
+                "Exec=voice-input daemon",
+                "Exec=/home/me/bin/voice-input gui"
+            )
+        );
     }
 
     #[test]
@@ -192,8 +222,20 @@ mod tests {
         let program = Path::new("/home/me/bin/voice-input");
         let name = format!("{APP_ID}.desktop");
 
-        let installed = install(&home, std::slice::from_ref(&system), program).unwrap();
-        let again = install(&home, std::slice::from_ref(&system), program).unwrap();
+        let installed = install(
+            &home,
+            std::slice::from_ref(&system),
+            program,
+            Launch::Daemon,
+        )
+        .unwrap();
+        let again = install(
+            &home,
+            std::slice::from_ref(&system),
+            program,
+            Launch::Daemon,
+        )
+        .unwrap();
         assert_eq!(
             (installed, again),
             (
@@ -209,7 +251,8 @@ mod tests {
             install(
                 &home,
                 &[PathBuf::from("/nonexistent"), system.clone()],
-                program
+                program,
+                Launch::Daemon,
             )
             .unwrap(),
             Install::Present(system.join("applications").join(&name))
@@ -232,12 +275,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            install(&root.join("home"), &[], Path::new("/bin/voice-input")).unwrap(),
+            install(
+                &root.join("home"),
+                &[],
+                Path::new("/bin/voice-input"),
+                Launch::Daemon
+            )
+            .unwrap(),
             Install::Installed(applications.join(&name))
         );
         assert_eq!(
             fs::read_to_string(applications.join(&name)).unwrap(),
-            entry_for(Path::new("/bin/voice-input"))
+            entry_for(Path::new("/bin/voice-input"), Launch::Daemon)
         );
     }
 
@@ -253,7 +302,13 @@ mod tests {
         let path = applications.join(format!("{APP_ID}.desktop"));
         symlink(root.join("missing.desktop"), &path).unwrap();
 
-        let error = install(&root.join("home"), &[], Path::new("/bin/voice-input")).unwrap_err();
+        let error = install(
+            &root.join("home"),
+            &[],
+            Path::new("/bin/voice-input"),
+            Launch::Daemon,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("dangling symlink"), "{error:#}");
         assert!(
             fs::symlink_metadata(&path)

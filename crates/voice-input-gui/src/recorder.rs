@@ -52,7 +52,10 @@ impl RecorderState {
         match event {
             Event::Start => (Self::Recording { previous }, None),
             Event::Escape => (Self::Idle { current: previous }, None),
-            Event::Backspace => (Self::Idle { current: None }, Some(Action::Clear)),
+            Event::Backspace => match self {
+                Self::Recording { .. } => (Self::Idle { current: None }, Some(Action::Clear)),
+                Self::Idle { .. } | Self::Invalid { .. } => (self, None),
+            },
             Event::Manual(text) => match text.parse::<Shortcut>().and_then(Shortcut::validate) {
                 Ok(shortcut) => (
                     Self::Idle {
@@ -269,6 +272,21 @@ mod tests {
         assert_eq!(
             (state, action),
             (RecorderState::Idle { current: None }, Some(Action::Clear))
+        );
+    }
+
+    #[test]
+    fn backspace_outside_recording_does_not_clear_or_block_manual_editing() {
+        let (state, action) = RecorderState::Idle {
+            current: Some(Shortcut::DEFAULT_TOGGLE),
+        }
+        .apply(Event::Backspace);
+        assert_eq!(action, None);
+        assert_eq!(
+            state,
+            RecorderState::Idle {
+                current: Some(Shortcut::DEFAULT_TOGGLE),
+            }
         );
     }
 

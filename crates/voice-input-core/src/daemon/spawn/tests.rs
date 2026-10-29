@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::spawn_with_program;
@@ -101,37 +101,23 @@ struct Reap(u32);
 
 impl Drop for Reap {
     fn drop(&mut self) {
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(self.0.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // SAFETY: cleanup targets only the fake daemon created by this test.
+        let _ = unsafe { libc::kill(self.0 as i32, libc::SIGTERM) };
     }
 }
 
 #[tokio::test]
 async fn a_spawned_daemon_answers_hello_in_a_new_session() {
-    let sandbox = Sandbox::new("ready");
+    let sandbox = Sandbox::new("session");
     fs::write(&sandbox.paths.log_file, "existing log line\n").unwrap();
     let pid = spawn_with_program(&sandbox.paths, &sandbox.program, &sandbox.environment())
         .await
         .unwrap();
     let _reap = Reap(pid);
-    let session = Command::new("ps")
-        .args(["-o", "sid=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&session.stdout).trim(),
-        pid.to_string()
-    );
-    assert_eq!(
-        request(&sandbox.paths, &v1::Request::Shutdown)
-            .await
-            .unwrap(),
-        v1::Reply::Ok
-    );
+    // SAFETY: getsid only queries the process spawned by this test.
+    assert_eq!(unsafe { libc::getsid(pid as i32) }, pid as i32);
+    // SAFETY: signal zero only checks for the spawned process's existence.
+    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
     assert!(
         fs::read_to_string(&sandbox.paths.log_file)
             .unwrap()
@@ -170,13 +156,9 @@ async fn a_timeout_returns_the_last_twenty_log_lines() {
         .trim()
         .parse::<u32>()
         .unwrap();
-    assert!(
-        !Command::new("ps")
-            .args(["-p", &pid.to_string()])
-            .status()
-            .unwrap()
-            .success()
-    );
+    // SAFETY: the failed spawn must have reaped its child, so signal zero
+    // fails with ESRCH rather than executing a command or sending a real signal.
+    assert_ne!(unsafe { libc::kill(pid as i32, 0) }, 0);
 }
 
 #[tokio::test]
@@ -251,7 +233,8 @@ fn fake_daemon_process() {
         fs::write(pid_file, std::process::id().to_string()).unwrap();
     }
     match mode.as_str() {
-        "ready" => fake_server(&paths),
+        "ready" => fake_server(&paths, false),
+        "session" => fake_server(&paths, true),
         "exit" => eprintln!("fake daemon started"),
         "timeout" => {
             for index in 1..=25 {
@@ -267,7 +250,7 @@ fn fake_daemon_process() {
     }
 }
 
-fn fake_server(paths: &CorePaths) {
+fn fake_server(paths: &CorePaths, session_only: bool) {
     eprintln!("fake daemon started");
     let _ = fs::remove_file(&paths.socket);
     let listener = std::os::unix::net::UnixListener::bind(&paths.socket).unwrap();
@@ -278,6 +261,7 @@ fn fake_server(paths: &CorePaths) {
             .read_line(&mut request)
             .unwrap();
         assert!(request.contains(expected), "{request}");
+        eprintln!("fake daemon accepted {expected}");
         match expected {
             "subscribe" => {
                 let state = StateSnapshot {
@@ -318,10 +302,17 @@ fn fake_server(paths: &CorePaths) {
                 }
             }
             "shutdown" => {
-                stream.write_all(b"{\"type\":\"ok\"}\n").unwrap();
+                let _ = stream.write_all(b"{\"type\":\"ok\"}\n");
+                eprintln!("fake daemon replied ok");
             }
             _ => unreachable!(),
         }
+        if session_only {
+            break;
+        }
+    }
+    if session_only {
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
 }
 

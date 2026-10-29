@@ -184,6 +184,18 @@ impl GuiState {
                 (self, Vec::new())
             }
             Msg::Snapshot(snapshot) => {
+                let new_take = self
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|previous| previous.state.take != snapshot.state.take);
+                if new_take
+                    || !matches!(
+                        snapshot.state.dictation.state,
+                        DictationState::Recording { .. }
+                    )
+                {
+                    self.level = Level::SILENCE;
+                }
                 let actions = self.copy_actions(&snapshot.state);
                 self.snapshot = Some(*snapshot);
                 (self, actions)

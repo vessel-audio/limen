@@ -395,8 +395,13 @@ fn portal_setup_without_a_daemon_defers_and_installs_the_entry() {
             .join("data/applications/io.github.Emin017.VoiceInput.desktop"),
     )
     .unwrap();
+    let launch = if cfg!(feature = "gui") {
+        "gui"
+    } else {
+        "daemon"
+    };
     assert!(entry.contains(&format!(
-        "Exec={} daemon",
+        "Exec={} {launch}",
         env!("CARGO_BIN_EXE_voice-input")
     )));
 }

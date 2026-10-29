@@ -118,14 +118,13 @@ impl Daemon {
     }
 
     fn signal(&mut self, signal: &str) {
-        Command::new("kill")
-            .arg(signal)
-            .arg(self.child.id().to_string())
-            .status()
-            .unwrap()
-            .success()
-            .then_some(())
-            .expect("failed to signal daemon");
+        let signal = match signal {
+            "-TERM" => libc::SIGTERM,
+            other => panic!("unsupported test signal {other}"),
+        };
+        // SAFETY: this targets only the child process created by this test.
+        let result = unsafe { libc::kill(self.child.id() as i32, signal) };
+        assert_eq!(result, 0, "failed to signal daemon");
     }
 }
 
@@ -148,11 +147,17 @@ async fn sigterm_and_shutdown_clean_the_socket_and_allow_immediate_restart() {
     daemon.signal("-TERM");
     assert!(daemon.wait_exit().success());
     assert!(!socket.exists());
-    let children = Command::new("ps")
-        .args(["--ppid", &first_pid.to_string(), "-o", "comm="])
-        .output()
-        .unwrap();
-    assert!(!String::from_utf8_lossy(&children.stdout).contains("pw-record"));
+    let children = fs::read_to_string(format!("/proc/{first_pid}/task/{first_pid}/children"));
+    for child in children
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|pid| fs::read_to_string(format!("/proc/{pid}/comm")).ok())
+    {
+        assert!(
+            !child.contains("pw-record"),
+            "capture child survived: {child}"
+        );
+    }
 
     let mut restarted = sandbox.spawn();
     restarted.wait_ready(&socket);

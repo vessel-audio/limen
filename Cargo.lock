@@ -7146,6 +7146,7 @@ dependencies = [
  "anyhow",
  "clap",
  "futures-util",
+ "libc",
  "tokio",
  "tracing-subscriber",
  "voice-input-core",

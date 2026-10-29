@@ -9,7 +9,7 @@ pub(super) use super::daemon_status;
 use super::gnome;
 use super::{Keys, Note, Report, SetupError, check_config, check_distinct, rebind};
 use crate::config::{self, Paths, ShortcutConfig};
-use crate::shortcut::desktop_entry::{self, APP_ID, Install};
+use crate::shortcut::desktop_entry::{self, APP_ID, Install, Launch};
 use crate::shortcut::program::Program;
 use crate::shortcut::{Action, Backend, Shortcut};
 
@@ -36,6 +36,7 @@ pub(super) async fn setup(
     current: ShortcutConfig,
     keys: Keys,
     report: &mut Report,
+    launch: Launch,
 ) -> Result<(), SetupError> {
     let preferred = move |config: ShortcutConfig| ShortcutConfig {
         backend: Backend::Portal,
@@ -46,7 +47,7 @@ pub(super) async fn setup(
     check_distinct(wanted.toggle, wanted.hold)?;
     check_config(paths, &wanted)?;
     let program = Program::find()?;
-    let installation = desktop_entry::ensure_installed(program.path())?;
+    let installation = desktop_entry::ensure_installed(program.path(), launch)?;
     report
         .notes
         .extend(Report::from((&program, installation)).notes);

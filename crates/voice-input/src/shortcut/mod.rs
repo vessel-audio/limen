@@ -12,8 +12,8 @@ use anyhow::{Result, bail};
 use clap::Subcommand;
 
 use voice_input_core::{
-    Action, Backend, HoldEdge, Keys, Note, Paths, Report, SetupError, Shortcut, ShortcutError,
-    clear, edit, request, set, setup, shortcut_config, v1,
+    Action, Backend, HoldEdge, Keys, Launch, Note, Paths, Report, SetupError, Shortcut,
+    ShortcutError, clear, edit, request, set, setup, shortcut_config, v1,
 };
 
 #[derive(Debug, Subcommand)]
@@ -84,7 +84,17 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
             toggle,
             hold,
         } => {
-            let report = setup(paths, backend, Keys { toggle, hold }).await?;
+            let report = setup(
+                paths,
+                backend,
+                Keys { toggle, hold },
+                if cfg!(feature = "gui") {
+                    Launch::Gui
+                } else {
+                    Launch::Daemon
+                },
+            )
+            .await?;
             render(&report);
             match backend {
                 Backend::Portal => portal::finish_setup(paths).await,

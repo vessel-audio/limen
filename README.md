@@ -50,6 +50,22 @@ The package provides `pw-record` and `notify-send` in its runtime PATH and
 installs the desktop entry that the shortcut portal needs. It does not install
 the Fcitx addon; follow the separate addon setup below.
 
+## GUI control panel
+
+Open the GPUI control panel with `voice-input gui` or the desktop launcher. The
+default Nix package includes it; `nix run .#headless -- daemon` builds and runs
+the headless variant without GPUI. Closing the window never stops the daemon,
+so shortcut dictation keeps working. If the daemon is not running, the GUI starts
+it in the background and keeps its log at the XDG state path.
+
+The dictation, history, and shortcut pages update live from the daemon. Stopping
+a take with the GUI button keeps the polished text in history and copies it to
+the clipboard instead of typing it into the GUI. The level meter and recent
+errors are visible on the dictation page. Use the about page to open the config
+or log, restart the background service, or stop it after confirmation. If an
+upgrade leaves an outdated daemon running, restart it from the GUI so the new
+protocol takes effect.
+
 ## Setup
 
 1. Start your ASR server, e.g. sgl-omni:
@@ -119,6 +135,7 @@ released the key.
 
 ## Commands
 
+- `voice-input gui` — open the graphical control panel (GUI-enabled builds)
 - `voice-input daemon` — resident process (capture, ASR session, text input,
   portal shortcuts)
 - `voice-input toggle` — start/stop dictation (for the desktop shortcut)
