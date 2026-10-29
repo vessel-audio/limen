@@ -113,6 +113,7 @@ impl Drop for Reap {
 #[tokio::test]
 async fn a_spawned_daemon_answers_hello_in_a_new_session() {
     let sandbox = Sandbox::new("ready");
+    fs::write(&sandbox.paths.log_file, "existing log line\n").unwrap();
     let pid = spawn_with_program(&sandbox.paths, &sandbox.program, &sandbox.environment())
         .await
         .unwrap();
@@ -164,6 +165,18 @@ async fn a_timeout_returns_the_last_twenty_log_lines() {
     let message = format!("{error:#}");
     assert!(message.contains("line-25"));
     assert!(!message.contains("line-1\n"));
+    let pid = fs::read_to_string(sandbox.root.join("daemon.pid"))
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert!(
+        !Command::new("ps")
+            .args(["-p", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
 }
 
 #[tokio::test]
