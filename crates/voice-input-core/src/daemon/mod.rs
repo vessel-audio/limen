@@ -13,8 +13,11 @@
 //! even while pw-record is being reaped or a take is being finalized.
 
 mod input;
+mod lifecycle;
 mod projection;
 pub(crate) mod snapshot;
+
+pub use lifecycle::run;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -25,12 +28,11 @@ use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
-use crate::config::{Config, Paths};
+use crate::config::Config;
 use crate::dictation::{self, Control, Dictation, Effect, Event, InputOutcome, Notification};
 use crate::ipc;
-use crate::notify::notify;
 use crate::session::{SessionCommand, SessionHandle};
-use crate::shortcut::portal::{Bus, ShortcutHandle};
+use crate::shortcut::portal::ShortcutHandle;
 use crate::shortcut::{Activation, ActivationReceipt, HoldEdge};
 
 use input::{InputJob, InputReport, MAX_OUTSTANDING_INPUT};
@@ -324,13 +326,30 @@ impl DictationActor {
         }
     }
 
+    /// Run all mailboxes and return owned actors for the common cleanup path.
+    async fn run(mut self, mut mailboxes: Mailboxes) -> lifecycle::ActorExit {
+        let result = self.run_inner(&mut mailboxes).await;
+        lifecycle::ActorExit {
+            result,
+            session: self.session,
+            shortcuts: self.shortcuts,
+        }
+    }
+
     /// Message loop: handle one message at a time until a mailbox closes.
-    async fn run(mut self, mut mailboxes: Mailboxes) -> Result<()> {
+    async fn run_inner(&mut self, mailboxes: &mut Mailboxes) -> Result<()> {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
         loop {
             tokio::select! {
+                _ = terminate.recv() => return Ok(()),
+                _ = interrupt.recv() => return Ok(()),
                 cmd = mailboxes.commands.recv() => {
                     let Some(cmd) = cmd else { anyhow::bail!("ipc accept loop died") };
                     match cmd {
+                        ipc::Command::Shutdown => return Ok(()),
                         ipc::Command::Status(reply) => {
                             let _ = reply.send(self.dictation.label().to_string());
                         }
@@ -420,43 +439,6 @@ fn effective_hold(started: Option<Instant>, released: Instant) -> Duration {
     started.map_or(Duration::ZERO, |started| {
         released.saturating_duration_since(started)
     })
-}
-
-/// Run the resident daemon with the discovered paths and loaded configuration.
-pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
-    let listener = ipc::bind(&paths)?;
-    let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
-    ipc::spawn_accept_loop(listener, cmd_tx);
-
-    let (input_tx, input_reports) = input::spawn(&cfg)?;
-
-    // The session actor holds the only sender, so this mailbox closes exactly
-    // when the actor stops.
-    let (activation_tx, activations) = mpsc::unbounded_channel();
-    let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
-    let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
-    let (projection, _snapshots) = Projection::new(&cfg);
-    let (session, _levels) = SessionHandle::spawn(cfg, session_report_tx);
-    let actor = DictationActor::new(
-        session,
-        input_tx,
-        notify,
-        paths.config_file.clone(),
-        shortcuts,
-        projection,
-    );
-
-    notify("voice-input", "daemon started");
-    tracing::info!(socket = %paths.socket.display(), "daemon listening");
-
-    actor
-        .run(Mailboxes {
-            commands,
-            input_reports,
-            session_reports,
-            activations,
-        })
-        .await
 }
 
 #[cfg(test)]

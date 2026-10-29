@@ -40,6 +40,8 @@ pub enum Delivery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// Stop the daemon after the connection handler acknowledges the request.
+    Shutdown,
     /// Start a take, or queue one behind output that is finishing.
     Start,
     /// Stop the current recording with the requested delivery mode.
@@ -90,13 +92,22 @@ impl<'a> Envelope<'a> {
     }
 }
 
+/// The connection handler's response to a parsed request.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Action {
+    Reply(Box<Reply>),
+    Shutdown,
+}
+
 /// Answer a request; whatever fails becomes an error reply.
-pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Reply {
+pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Action {
     match parse(text) {
-        Err(message) => Reply::Error { message },
+        Err(message) => Action::Reply(Box::new(Reply::Error { message })),
+        Ok(Request::Shutdown) => Action::Shutdown,
         Ok(request) => {
             let (reply, answer) = oneshot::channel();
             let (command, reply_timeout) = match request {
+                Request::Shutdown => unreachable!("shutdown is handled before command dispatch"),
                 Request::Start => (Command::Start(reply), super::CONN_TIMEOUT),
                 Request::Stop { delivery } => {
                     (Command::Stop { delivery, reply }, super::CONN_TIMEOUT)
@@ -105,11 +116,13 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Repl
                 Request::ShortcutRebind => (Command::ShortcutRebind(reply), REBIND_REPLY_TIMEOUT),
                 Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
             };
-            super::forward(commands, command, answer, reply_timeout)
-                .await
-                .unwrap_or_else(|error| Reply::Error {
-                    message: format!("{error:#}"),
-                })
+            Action::Reply(Box::new(
+                super::forward(commands, command, answer, reply_timeout)
+                    .await
+                    .unwrap_or_else(|error| Reply::Error {
+                        message: format!("{error:#}"),
+                    }),
+            ))
         }
     }
 }
@@ -136,7 +149,7 @@ mod tests {
 
     use tokio::sync::mpsc;
 
-    use super::{Delivery, Envelope, Reply, Request, answer, parse};
+    use super::{Action, Delivery, Envelope, Reply, Request, answer, parse};
     use crate::shortcut::HoldEdge;
 
     #[test]
@@ -253,6 +266,6 @@ mod tests {
                 async move { answer(r#"{"v":1,"type":"shortcut_rebind"}"#, &commands).await },
             );
         tokio::time::advance(Duration::from_secs(3)).await;
-        assert_eq!(answered.await.unwrap(), Reply::Ok);
+        assert_eq!(answered.await.unwrap(), Action::Reply(Box::new(Reply::Ok)));
     }
 }

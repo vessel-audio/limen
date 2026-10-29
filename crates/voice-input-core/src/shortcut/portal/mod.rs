@@ -47,6 +47,7 @@ struct Rebind {
 pub(crate) struct ShortcutHandle {
     mailbox: mpsc::UnboundedSender<Rebind>,
     status: watch::Receiver<ShortcutStatus>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl ShortcutHandle {
@@ -75,11 +76,18 @@ impl ShortcutHandle {
             notify,
             rebound: Vec::new(),
         };
-        let handle = Self { mailbox, status };
+        let handle = Self {
+            mailbox,
+            status,
+            task: None,
+        };
         // The daemon's own config is the first rebind; nobody waits for it.
         drop(handle.rebind(config));
-        tokio::spawn(actor.run());
-        handle
+        let task = tokio::spawn(actor.run());
+        Self {
+            task: Some(task),
+            ..handle
+        }
     }
 
     /// Apply `config`. The receiver resolves once the actor has published
@@ -91,6 +99,15 @@ impl ShortcutHandle {
             tracing::warn!(config = ?error.0.config, "shortcut actor is gone");
         }
         rebound
+    }
+
+    /// Close the actor mailbox and join the portal session owner.
+    pub(crate) async fn stop(self) {
+        let Self { mailbox, task, .. } = self;
+        drop(mailbox);
+        if let Some(task) = task {
+            crate::task::join_task("shortcut", task, crate::task::StopMode::Graceful).await;
+        }
     }
 
     pub(crate) fn status(&self) -> ShortcutStatus {
@@ -105,7 +122,11 @@ impl ShortcutHandle {
     pub(crate) fn detached() -> Self {
         let (mailbox, _) = mpsc::unbounded_channel();
         let (_, status) = watch::channel(machine::initial_status(ShortcutConfig::default()));
-        Self { mailbox, status }
+        Self {
+            mailbox,
+            status,
+            task: None,
+        }
     }
 }
 

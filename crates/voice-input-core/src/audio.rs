@@ -128,18 +128,14 @@ pub(crate) async fn reap_capture(
     }
 }
 
-/// Capture PCM and measure it before a back-pressured provider can delay it.
-pub(crate) async fn capture_loop(
-    device: Option<String>,
-    chunk_ms: u32,
+async fn forward_chunks(
     tx: mpsc::Sender<Vec<i16>>,
     level: watch::Sender<Level>,
+    mut read_chunk: impl AsyncFnMut() -> Result<Option<Vec<i16>>>,
 ) -> Result<()> {
     let result = async {
-        let mut capture = Capture::start(device.as_deref())?;
-        let chunk_samples = (SAMPLE_RATE * chunk_ms / 1000) as usize;
         loop {
-            match capture.read_chunk(chunk_samples).await? {
+            match read_chunk().await? {
                 Some(pcm) => {
                     level.send_replace(Level::from_s16(&pcm));
                     // A lagging consumer must not stall the microphone: drop frames.
@@ -154,6 +150,26 @@ pub(crate) async fn capture_loop(
                 None => return Ok(()),
             }
         }
+    }
+    .await;
+    level.send_replace(Level::SILENCE);
+    result
+}
+
+/// Capture PCM and measure it before a back-pressured provider can delay it.
+pub(crate) async fn capture_loop(
+    device: Option<String>,
+    chunk_ms: u32,
+    tx: mpsc::Sender<Vec<i16>>,
+    level: watch::Sender<Level>,
+) -> Result<()> {
+    let result = async {
+        let mut capture = Capture::start(device.as_deref())?;
+        let chunk_samples = (SAMPLE_RATE * chunk_ms / 1000) as usize;
+        forward_chunks(tx, level.clone(), async move || {
+            capture.read_chunk(chunk_samples).await
+        })
+        .await
     }
     .await;
     level.send_replace(Level::SILENCE);
@@ -175,6 +191,9 @@ mod tests {
                 dbfs: 0.0,
             }
         );
+        let square = Level::from_s16(&[i16::MIN, i16::MAX]);
+        assert!(square.rms > 0.999, "{square:?}");
+        assert!(square.dbfs.abs() < 0.001, "{square:?}");
     }
 
     #[test]
@@ -188,5 +207,57 @@ mod tests {
         let level = Level::from_s16(&samples);
         assert!((level.rms - 0.707).abs() < 0.01, "{level:?}");
         assert!((level.dbfs + 3.01).abs() < 0.01, "{level:?}");
+    }
+
+    #[tokio::test]
+    async fn each_chunk_is_published_before_eof_resets_the_level() {
+        use std::collections::VecDeque;
+
+        use tokio::sync::{mpsc, watch};
+
+        let (tx, mut pcm) = mpsc::channel(2);
+        let (level, mut levels) = watch::channel(Level::SILENCE);
+        let (release_tx, mut release_rx) = mpsc::unbounded_channel();
+        let mut chunks = VecDeque::from([vec![i16::MIN], vec![0], vec![]]);
+        let task = tokio::spawn(super::forward_chunks(tx, level, async move || {
+            let chunk = chunks.pop_front();
+            let _ = release_rx.recv().await;
+            Ok(chunk.filter(|chunk| !chunk.is_empty()))
+        }));
+
+        release_tx.send(()).unwrap();
+        levels.changed().await.unwrap();
+        assert_eq!(
+            *levels.borrow(),
+            Level {
+                rms: 1.0,
+                dbfs: 0.0,
+            }
+        );
+        release_tx.send(()).unwrap();
+        levels.changed().await.unwrap();
+        assert_eq!(*levels.borrow(), Level::SILENCE);
+        release_tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+        assert_eq!(pcm.recv().await, Some(vec![i16::MIN]));
+        assert_eq!(pcm.recv().await, Some(vec![0]));
+    }
+
+    #[tokio::test]
+    async fn a_read_error_also_resets_the_level() {
+        use tokio::sync::{mpsc, watch};
+
+        let (tx, _pcm) = mpsc::channel(1);
+        let (level, levels) = watch::channel(Level {
+            rms: 0.5,
+            dbfs: -6.0,
+        });
+        let result = super::forward_chunks(tx, level.clone(), || async {
+            Err(anyhow::anyhow!("read failed"))
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(*levels.borrow(), Level::SILENCE);
     }
 }

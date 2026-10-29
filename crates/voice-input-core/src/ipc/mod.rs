@@ -14,6 +14,7 @@ mod legacy;
 pub mod v1;
 
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -41,6 +42,7 @@ pub enum Command {
         delivery: v1::Delivery,
         reply: oneshot::Sender<v1::Reply>,
     },
+    Shutdown,
     Hold(HoldEdge, oneshot::Sender<v1::Reply>),
     ShortcutRebind(oneshot::Sender<v1::Reply>),
     ShortcutStatus(oneshot::Sender<v1::Reply>),
@@ -64,12 +66,18 @@ pub fn bind(paths: &Paths) -> Result<UnixListener> {
         std::fs::remove_file(&paths.socket)
             .with_context(|| format!("failed to remove stale socket {}", paths.socket.display()))?;
     }
-    UnixListener::bind(&paths.socket)
-        .with_context(|| format!("failed to bind {}", paths.socket.display()))
+    let listener = UnixListener::bind(&paths.socket)
+        .with_context(|| format!("failed to bind {}", paths.socket.display()))?;
+    std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to restrict {}", paths.socket.display()))?;
+    Ok(listener)
 }
 
 /// Accept connections forever, forwarding parsed commands to the main loop.
-pub fn spawn_accept_loop(listener: UnixListener, cmd_tx: mpsc::Sender<Command>) {
+pub fn spawn_accept_loop(
+    listener: UnixListener,
+    cmd_tx: mpsc::Sender<Command>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -82,7 +90,7 @@ pub fn spawn_accept_loop(listener: UnixListener, cmd_tx: mpsc::Sender<Command>) 
                 }
             }
         }
-    });
+    })
 }
 
 async fn handle_conn(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) {
@@ -109,7 +117,15 @@ async fn handle_conn_inner(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) ->
             Ok(text) => {
                 let text = text.trim_ascii();
                 match text.starts_with('{') {
-                    true => v1::answer(text, &cmd_tx).await.to_line(),
+                    true => match v1::answer(text, &cmd_tx).await {
+                        v1::Action::Reply(reply) => reply.to_line(),
+                        v1::Action::Shutdown => {
+                            write.write_all(b"{\"type\":\"ok\"}\n").await?;
+                            write.flush().await?;
+                            let _ = cmd_tx.send(Command::Shutdown).await;
+                            return Ok(());
+                        }
+                    },
                     false => legacy::answer(text, &cmd_tx).await?,
                 }
             }
@@ -191,14 +207,14 @@ pub async fn request(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> 
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
     use tokio::sync::mpsc;
 
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    use super::{Command, MAX_REQUEST_BYTES, NotRunning, handle_conn, send, v1};
+    use super::{Command, MAX_REQUEST_BYTES, NotRunning, bind, handle_conn, send, v1};
     use crate::config::Paths;
 
     /// Answer every command the way an idle daemon would.
@@ -213,6 +229,7 @@ mod tests {
                     Command::Status(reply) => {
                         let _ = reply.send("idle".to_string());
                     }
+                    Command::Shutdown => {}
                     Command::Start(reply)
                     | Command::Stop { reply, .. }
                     | Command::Hold(_, reply)
@@ -348,5 +365,50 @@ mod tests {
 
         assert!(missing.is_err_and(|error| error.downcast_ref::<NotRunning>().is_some()));
         assert!(locked.is_err_and(|error| error.downcast_ref::<NotRunning>().is_none()));
+    }
+
+    #[tokio::test]
+    async fn sockets_are_restricted_to_the_owner() {
+        let dir = std::env::temp_dir().join(format!("voice-input-bind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("voice-input.sock");
+        let paths = Paths {
+            config_file: dir.join("config.toml"),
+            socket: socket.clone(),
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+        };
+
+        let listener = bind(&paths).unwrap();
+        assert_eq!(
+            std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(listener);
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_acknowledged_before_the_command_is_forwarded() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let (commands, mut received) = mpsc::channel(1);
+        tokio::spawn(handle_conn(server, commands));
+        client
+            .write_all(
+                br#"{"v":1,"type":"shutdown"}
+"#,
+            )
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let mut reply = String::new();
+        tokio::io::BufReader::new(client)
+            .read_line(&mut reply)
+            .await
+            .unwrap();
+        assert_eq!(reply, "{\"type\":\"ok\"}\n");
+        assert!(matches!(received.recv().await, Some(Command::Shutdown)));
     }
 }

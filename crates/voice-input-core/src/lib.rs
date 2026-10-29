@@ -14,6 +14,7 @@ mod polish;
 mod provider;
 mod session;
 mod shortcut;
+mod task;
 
 pub use audio::Level;
 pub use config::{Config, Paths, ShortcutConfig};

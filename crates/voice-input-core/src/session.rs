@@ -45,6 +45,7 @@ pub(crate) enum SessionCommand {
 /// closes the mailbox, which tears the take down and stops the actor.
 pub(crate) struct SessionHandle {
     mailbox: mpsc::UnboundedSender<SessionCommand>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl SessionHandle {
@@ -56,7 +57,7 @@ impl SessionHandle {
     ) -> (Self, watch::Receiver<Level>) {
         let (mailbox, commands) = mpsc::unbounded_channel();
         let (level, levels) = watch::channel(Level::SILENCE);
-        tokio::spawn(
+        let task = tokio::spawn(
             SessionActor {
                 cfg,
                 commands,
@@ -66,7 +67,22 @@ impl SessionHandle {
             }
             .run(),
         );
-        (Self { mailbox }, levels)
+        (
+            Self {
+                mailbox,
+                task: Some(task),
+            },
+            levels,
+        )
+    }
+
+    /// Close the actor mailbox and join the capture owner.
+    pub(crate) async fn stop(self) {
+        let Self { mailbox, task } = self;
+        drop(mailbox);
+        if let Some(task) = task {
+            crate::task::join_task("session", task, crate::task::StopMode::Graceful).await;
+        }
     }
 
     /// Fire-and-forget send. A dead actor is noticed by the dictation loop
@@ -82,7 +98,10 @@ impl SessionHandle {
 impl SessionHandle {
     /// A handle whose commands land in `mailbox` instead of a running actor.
     pub(crate) fn from_mailbox(mailbox: mpsc::UnboundedSender<SessionCommand>) -> Self {
-        Self { mailbox }
+        Self {
+            mailbox,
+            task: None,
+        }
     }
 }
 
@@ -249,6 +268,7 @@ impl Active {
                 Ok(()) => None,
                 Err(error) => {
                     tracing::warn!(error = %format!("{error:#}"), "send_audio failed");
+                    let _ = self.reap_capture().await;
                     Some(self.end(Event::AudioBufferFailed(format!("{error:#}"))))
                 }
             },
@@ -354,6 +374,18 @@ mod tests {
                     .push(SinkOperation::Finalized);
                 Ok(())
             })
+        }
+    }
+
+    struct FailingSink;
+
+    impl AudioSink for FailingSink {
+        fn send_audio<'a>(&'a mut self, _pcm: &'a [i16]) -> BoxFuture<'a, anyhow::Result<()>> {
+            Box::pin(async { anyhow::bail!("provider back-pressure failed") })
+        }
+
+        fn finalize(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -519,6 +551,33 @@ mod tests {
 
         active.reap_capture().await;
 
+        assert_eq!(*levels.borrow(), Level::SILENCE);
+    }
+
+    #[tokio::test]
+    async fn a_provider_audio_error_stops_capture_and_resets_level() {
+        let (_tx, pcm) = mpsc::channel(1);
+        let (level, levels) = watch::channel(Level {
+            rms: 0.5,
+            dbfs: -6.0,
+        });
+        let mut active = Active {
+            sink: Box::new(FailingSink),
+            events: Box::new(ScriptedEvents(VecDeque::new())),
+            pcm,
+            capture: None,
+            stage: Stage::Recording,
+            level,
+        };
+
+        let event = active.on_capture(Some(vec![1])).await;
+
+        assert_eq!(
+            event,
+            Some(Event::AudioBufferFailed(
+                "provider back-pressure failed".to_string()
+            ))
+        );
         assert_eq!(*levels.borrow(), Level::SILENCE);
     }
 }

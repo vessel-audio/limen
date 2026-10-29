@@ -98,13 +98,14 @@ pub(crate) fn spawn(
 ) -> Result<(
     mpsc::UnboundedSender<InputJob>,
     mpsc::UnboundedReceiver<InputReport>,
+    tokio::task::JoinHandle<()>,
 )> {
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputJob>();
     let (report_tx, reports) = mpsc::unbounded_channel::<InputReport>();
     let backend = default_backend(config.input_method.backend);
     let polisher = Polisher::from_config(&config.polish)?;
     tracing::info!(?backend, "input method backend");
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let mut input_method = InputMethod::new(backend);
         while let Some(job) = input_rx.recv().await {
             let report = process(job, &input_rx, &mut input_method, &polisher).await;
@@ -113,7 +114,7 @@ pub(crate) fn spawn(
             }
         }
     });
-    Ok((input_tx, reports))
+    Ok((input_tx, reports, task))
 }
 
 #[cfg(test)]
