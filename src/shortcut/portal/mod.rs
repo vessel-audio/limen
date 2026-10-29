@@ -61,7 +61,7 @@ impl ShortcutHandle {
         let (mailbox, rebinds) = mpsc::unbounded_channel();
         let (reports_tx, reports) = mpsc::unbounded_channel();
         let machine = Machine::default();
-        let (status_tx, status) = watch::channel(machine.status().clone());
+        let (status_tx, status) = watch::channel(machine::initial_status(config));
         let actor = ShortcutActor {
             machine,
             bus,
@@ -104,7 +104,7 @@ impl ShortcutHandle {
     /// disabled.
     pub(crate) fn detached() -> Self {
         let (mailbox, _) = mpsc::unbounded_channel();
-        let (_, status) = watch::channel(Machine::default().status().clone());
+        let (_, status) = watch::channel(machine::initial_status(ShortcutConfig::default()));
         Self { mailbox, status }
     }
 }

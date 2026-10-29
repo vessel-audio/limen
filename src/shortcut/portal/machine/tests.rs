@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{FIRST_RETRY, Input, LAST_RETRY, Machine, Output};
+use super::{FIRST_RETRY, Input, LAST_RETRY, Machine, Output, initial_status};
 use crate::config::ShortcutConfig;
 use crate::shortcut::portal::connection::{Call, Generation, Report};
 use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
@@ -426,4 +426,20 @@ fn a_hold_left_down_is_released_when_its_generation_stops() {
     let_go.handle(press);
     let_go.handle(Input::Report(G1, Report::Deactivated("hold".to_string())));
     assert_eq!(let_go.handle(Input::Rebind(portal())), [Output::Stop(G1)]);
+}
+
+#[test]
+fn startup_status_shows_the_pending_portal_binding() {
+    assert_eq!(initial_status(portal()), status(SessionState::Binding));
+    let gnome = ShortcutConfig {
+        backend: Backend::GnomeKeybinding,
+        ..portal()
+    };
+    assert_eq!(
+        initial_status(gnome),
+        ShortcutStatus {
+            backend: Backend::GnomeKeybinding,
+            ..status(SessionState::Disabled)
+        }
+    );
 }

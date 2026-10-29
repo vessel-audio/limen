@@ -129,11 +129,16 @@ fn status(config: &ShortcutConfig, session: SessionState) -> ShortcutStatus {
     }
 }
 
-impl Machine {
-    pub(super) fn status(&self) -> &ShortcutStatus {
-        &self.status
-    }
+/// What clients see while the actor's first rebind is still queued.
+pub(super) fn initial_status(config: ShortcutConfig) -> ShortcutStatus {
+    let session = match config.backend {
+        Backend::Portal => SessionState::Binding,
+        Backend::GnomeKeybinding | Backend::None => SessionState::Disabled,
+    };
+    status(&config, session)
+}
 
+impl Machine {
     pub(super) fn handle(&mut self, input: Input) -> Vec<Output> {
         match input {
             Input::Rebind(config) => {
