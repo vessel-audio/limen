@@ -26,12 +26,15 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             ("backend-none", Backend::None, "none".to_string()),
         ]
         .map(|(id, backend, label)| {
-            Button::new(id)
-                .outline()
-                .label(label)
-                .on_click(cx.listener(move |this, _, _, _| {
-                    this.selected_backend = backend;
-                }))
+            let button = Button::new(id).label(label);
+            match backend == view.selected_backend {
+                true => button.primary(),
+                false => button.outline(),
+            }
+            .on_click(cx.listener(move |this, _, _, _| {
+                this.selected_backend = backend;
+                this.backend_selected = true;
+            }))
         }),
     );
     let body = match view.selected_backend {
@@ -68,6 +71,9 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .gap_3()
         .p_4()
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
+            if event.keystroke.key == "backspace" && (this.toggle_focused || this.hold_focused) {
+                return;
+            }
             let event = match event.keystroke.key.as_str() {
                 "escape" => RecorderEvent::Escape,
                 "backspace" => RecorderEvent::Backspace,

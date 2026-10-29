@@ -18,6 +18,7 @@ en:
   action.start_daemon: Start background service
   hint.keep_delivery: Button-stopped takes are copied, not typed
   hint.release_shortcut: Release the shortcut to finish
+  hint.hold_timeout: Automatically stops at 60 seconds
   hint.no_sound: No sound detected for 3 seconds
   hint.shifted_symbol: Shifted symbols need manual entry
   history.title: History
@@ -30,6 +31,35 @@ en:
   history.dropped: Dropped
   toast.copied: Copied to clipboard
   about.title: About voice-input
+  about.version: Version
+  about.protocol: Protocol
+  about.socket: Socket
+  about.config: Config
+  about.log: Log
+  about.unknown: unknown
+  action.open_config: Open config
+  action.open_log: Open log
+  action.restart_daemon: Restart daemon
+  action.stop_daemon: Stop daemon
+  action.terminate_daemon: Terminate after confirmation
+  action.close: Close
+  action.confirm: Confirm
+  action.cancel: Cancel
+  action.view_history: View history
+  connection.connecting: Connecting
+  connection.starting: Starting background service…
+  connection.not_running: Background service is not running
+  connection.failed_start: Background service failed to start
+  connection.reconnecting: Reconnecting (attempt
+  connection.outdated: Background service is outdated
+  connection.daemon_version: Daemon version
+  connection.gui_expects: GUI expects
+  connection.disconnected: Disconnected
+  connection.stop_confirm: Stop the background service?
+  connection.terminate_confirm: Terminate the outdated background service?
+  connection.closing_hint: Closing the window keeps dictation running
+  history.clear_confirm: Clear completed history?
+  history.pending: pending
   shortcuts.apply: Apply
   shortcuts.gnome_backend: GNOME custom shortcut
   shortcuts.edit: Change in GNOME Settings
@@ -74,6 +104,7 @@ zh-CN:
   action.start_daemon: 启动后台服务
   hint.keep_delivery: 点按钮停止时，文字不打字，改为复制到剪贴板
   hint.release_shortcut: 松开快捷键结束
+  hint.hold_timeout: 60 秒时自动结束
   hint.no_sound: 连续 3 秒未检测到声音
   hint.shifted_symbol: Shift 符号键请使用手动输入
   history.title: 历史
@@ -86,6 +117,35 @@ zh-CN:
   history.dropped: 已丢弃
   toast.copied: 已复制到剪贴板
   about.title: 关于 voice-input
+  about.version: 版本
+  about.protocol: 协议
+  about.socket: Socket
+  about.config: 配置文件
+  about.log: 日志
+  about.unknown: 未知
+  action.open_config: 打开配置文件
+  action.open_log: 打开日志
+  action.restart_daemon: 重启后台服务
+  action.stop_daemon: 停止后台服务
+  action.terminate_daemon: 确认终止后台服务
+  action.close: 关闭
+  action.confirm: 确认
+  action.cancel: 取消
+  action.view_history: 查看历史
+  connection.connecting: 正在连接
+  connection.starting: 正在启动后台服务…
+  connection.not_running: 后台服务未运行
+  connection.failed_start: 后台服务启动失败
+  connection.reconnecting: 正在重连（第
+  connection.outdated: 后台服务版本过旧
+  connection.daemon_version: 后台服务版本
+  connection.gui_expects: GUI 期望版本
+  connection.disconnected: 已断开
+  connection.stop_confirm: 确定停止后台服务吗？
+  connection.terminate_confirm: 确定终止过旧的后台服务吗？
+  connection.closing_hint: 关闭窗口不影响后台识别
+  history.clear_confirm: 确定清空已完成的历史吗？
+  history.pending: 等待中
   shortcuts.apply: 应用
   shortcuts.gnome_backend: GNOME 自定义快捷键
   shortcuts.edit: 在 GNOME 设置中修改

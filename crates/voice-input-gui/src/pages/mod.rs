@@ -7,13 +7,16 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use voice_input_core::{DictationState, HistoryEntry, HistoryOutcome};
 
-use crate::app::AppView;
+use crate::app::{AppView, Page};
 use crate::bridge::BridgeCommand;
-use crate::model::DictationButton;
+use crate::model::{DictationButton, DisabledReason};
 
-pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
+pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
     let (title, detail) = view.model.snapshot.as_ref().map_or(
-        ("Connecting".to_string(), String::new()),
+        (
+            rust_i18n::t!("connection.connecting").to_string(),
+            String::new(),
+        ),
         |snapshot| {
             let detail = snapshot
                 .state
@@ -93,6 +96,17 @@ pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
             ),
         )
     });
+    let hold_timeout = view.model.snapshot.as_ref().and_then(|snapshot| {
+        snapshot.state.dictation.since_ms.and_then(|since| {
+            (matches!(
+                snapshot.state.dictation.state,
+                DictationState::Recording {
+                    control: voice_input_core::Control::Hold,
+                }
+            ) && elapsed(since) >= 45)
+                .then(|| rust_i18n::t!("hint.hold_timeout").to_string())
+        })
+    });
     let latest = view
         .model
         .snapshot
@@ -118,7 +132,14 @@ pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
                 .items_center()
                 .gap_2()
                 .child(format!("{title}{detail}"))
-                .children(error.map(|message| div().child(message))),
+                .children(error.map(|message| {
+                    div().h_flex().gap_2().child(message).child(
+                        Button::new("view-history")
+                            .ghost()
+                            .label(rust_i18n::t!("action.view_history").to_string())
+                            .on_click(cx.listener(|this, _, _, _| this.page = Page::History)),
+                    )
+                })),
         )
         .children(level_meter)
         .child(
@@ -132,7 +153,13 @@ pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
                     }
                 }),
         )
-        .child(rust_i18n::t!("hint.keep_delivery").to_string())
+        .children(hold_timeout)
+        .child(match button {
+            DictationButton::Disabled(DisabledReason::ReleaseShortcut) => {
+                rust_i18n::t!("hint.release_shortcut").to_string()
+            }
+            _ => rust_i18n::t!("hint.keep_delivery").to_string(),
+        })
         .children(latest.map(|entry| history_card(&entry)))
 }
 
@@ -172,7 +199,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         div()
             .h_flex()
             .gap_2()
-            .child("Clear completed history?")
+            .child(rust_i18n::t!("history.clear_confirm").to_string())
             .child(
                 Button::new("confirm-clear")
                     .primary()
@@ -185,7 +212,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             .child(
                 Button::new("cancel-clear")
                     .ghost()
-                    .label("Cancel")
+                    .label(rust_i18n::t!("action.cancel").to_string())
                     .on_click(cx.listener(|this, _, _, _| {
                         this.confirm_clear = false;
                     })),
@@ -212,8 +239,12 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
         .gap_3()
         .p_4()
         .child(rust_i18n::t!("about.title").to_string())
-        .child(format!("Version: {}", env!("CARGO_PKG_VERSION")))
-        .child("Protocol: 1")
+        .child(format!(
+            "{}: {}",
+            rust_i18n::t!("about.version"),
+            env!("CARGO_PKG_VERSION")
+        ))
+        .child(format!("{}: 1", rust_i18n::t!("about.protocol")))
         .child(
             view.model
                 .daemon_version
@@ -221,9 +252,17 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
                 .unwrap_or("unknown")
                 .to_string(),
         )
-        .child(format!("Socket: {}", view.paths.socket.display()))
-        .child(format!("Config: {}", config.display()))
-        .child(format!("Log: {}", log.display()))
+        .child(format!(
+            "{}: {}",
+            rust_i18n::t!("about.socket"),
+            view.paths.socket.display()
+        ))
+        .child(format!(
+            "{}: {}",
+            rust_i18n::t!("about.config"),
+            config.display()
+        ))
+        .child(format!("{}: {}", rust_i18n::t!("about.log"), log.display()))
         .child(
             div()
                 .h_flex()
@@ -231,19 +270,19 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
                 .child(
                     Button::new("open-config")
                         .outline()
-                        .label("Open config")
+                        .label(rust_i18n::t!("action.open_config").to_string())
                         .on_click(move |_, _, cx| cx.open_with_system(&config)),
                 )
                 .child(
                     Button::new("open-log")
                         .outline()
-                        .label("Open log")
+                        .label(rust_i18n::t!("action.open_log").to_string())
                         .on_click(move |_, _, cx| cx.open_with_system(&log)),
                 )
                 .child(
                     Button::new("restart-daemon")
                         .outline()
-                        .label("Restart daemon")
+                        .label(rust_i18n::t!("action.restart_daemon").to_string())
                         .on_click({
                             let commands = view.commands.clone();
                             move |_, _, _| {
@@ -254,7 +293,7 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
                 .child(
                     Button::new("stop-daemon")
                         .outline()
-                        .label("Stop daemon")
+                        .label(rust_i18n::t!("action.stop_daemon").to_string())
                         .on_click(cx.listener(|this, _, _, _| {
                             this.confirm_shutdown = Some(crate::app::ShutdownAction::Stop);
                         })),
@@ -262,7 +301,7 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
                 .child(
                     Button::new("close-about")
                         .ghost()
-                        .label("Close")
+                        .label(rust_i18n::t!("action.close").to_string())
                         .on_click(cx.listener(|this, _, _, _| this.about = false)),
                 ),
         )
@@ -270,7 +309,7 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
 
 fn history_card(entry: &HistoryEntry) -> Div {
     let outcome = match &entry.outcome {
-        HistoryOutcome::Pending => "pending",
+        HistoryOutcome::Pending => "history.pending",
         HistoryOutcome::Committed => "history.committed",
         HistoryOutcome::Kept => "history.kept",
         HistoryOutcome::CommitFailed { .. } => "history.failed",

@@ -23,11 +23,14 @@ pub struct AppView {
     pub paths: Paths,
     pub page: Page,
     pub selected_backend: Backend,
+    pub backend_selected: bool,
     pub recorder: RecorderState,
     pub toggle_input: Entity<InputState>,
     pub hold_input: Entity<InputState>,
     pub toggle_touched: bool,
     pub hold_touched: bool,
+    pub toggle_focused: bool,
+    pub hold_focused: bool,
     _subscriptions: Vec<Subscription>,
     pub about: bool,
     pub confirm_clear: bool,
@@ -72,15 +75,17 @@ impl AppView {
                 .default_value("Super+X")
         });
         let subscriptions = vec![
-            cx.subscribe_in(&toggle_input, window, |this, _, event, _, _| {
-                if matches!(event, InputEvent::Change) {
-                    this.toggle_touched = true;
-                }
+            cx.subscribe_in(&toggle_input, window, |this, _, event, _, _| match event {
+                InputEvent::Change => this.toggle_touched = true,
+                InputEvent::Focus => this.toggle_focused = true,
+                InputEvent::Blur => this.toggle_focused = false,
+                _ => {}
             }),
-            cx.subscribe_in(&hold_input, window, |this, _, event, _, _| {
-                if matches!(event, InputEvent::Change) {
-                    this.hold_touched = true;
-                }
+            cx.subscribe_in(&hold_input, window, |this, _, event, _, _| match event {
+                InputEvent::Change => this.hold_touched = true,
+                InputEvent::Focus => this.hold_focused = true,
+                InputEvent::Blur => this.hold_focused = false,
+                _ => {}
             }),
         ];
         Self {
@@ -89,11 +94,14 @@ impl AppView {
             paths,
             page: Page::Dictation,
             selected_backend: Backend::Portal,
+            backend_selected: false,
             recorder: RecorderState::Idle { current: None },
             toggle_input,
             hold_input,
             toggle_touched: false,
             hold_touched: false,
+            toggle_focused: false,
+            hold_focused: false,
             _subscriptions: subscriptions,
             about: false,
             confirm_clear: false,
@@ -112,6 +120,12 @@ impl AppView {
         if matches!(event, BridgeEvent::Msg(Msg::DaemonReplaced)) {
             self.toggle_touched = false;
             self.hold_touched = false;
+            self.backend_selected = false;
+        }
+        if let BridgeEvent::Msg(Msg::Snapshot(snapshot)) = &event
+            && !self.backend_selected
+        {
+            self.selected_backend = snapshot.shortcut.backend;
         }
         let actions = self.apply_event(event);
         self.update_level_tracking(level_event);
@@ -216,19 +230,20 @@ impl AppView {
     fn banners(&self, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
         match &self.model.connection {
-            Connection::Reconnecting { attempt, reason } => {
-                banners.push(div().child(format!("Reconnecting (attempt {attempt})… · {reason}")))
-            }
+            Connection::Reconnecting { attempt, reason } => banners.push(div().child(format!(
+                "{} {attempt}… · {reason}",
+                rust_i18n::t!("connection.reconnecting")
+            ))),
             Connection::ProtocolMismatch { message } => {
-                let mut banner = div()
-                    .v_flex()
-                    .gap_2()
-                    .child(format!("Background service is outdated: {message}"));
+                let mut banner = div().v_flex().gap_2().child(format!(
+                    "{}: {message}",
+                    rust_i18n::t!("connection.outdated")
+                ));
                 if self.offer_terminate {
                     banner = banner.child(
                         Button::new("terminate-daemon")
                             .outline()
-                            .label("Terminate after confirmation")
+                            .label(rust_i18n::t!("action.terminate_daemon").to_string())
                             .on_click(cx.listener(|this, _, _, _| {
                                 this.confirm_shutdown = Some(ShutdownAction::Terminate);
                             })),
@@ -243,7 +258,11 @@ impl AppView {
             | Connection::SpawnFailed { .. } => {}
         }
         if let Some(Warning::DaemonVersion { running, expected }) = &self.model.warning {
-            banners.push(div().child(format!("Daemon version {running}; GUI expects {expected}")));
+            banners.push(div().child(format!(
+                "{} {running}; {} {expected}",
+                rust_i18n::t!("connection.daemon_version"),
+                rust_i18n::t!("connection.gui_expects")
+            )));
         }
         banners
     }
@@ -251,11 +270,11 @@ impl AppView {
     fn connection_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let (message, log) = match &self.model.connection {
             Connection::Connecting | Connection::Spawning => {
-                ("Starting background service…".to_string(), None)
+                (rust_i18n::t!("connection.starting").to_string(), None)
             }
-            Connection::NotRunning => ("Background service is not running".to_string(), None),
+            Connection::NotRunning => (rust_i18n::t!("connection.not_running").to_string(), None),
             Connection::SpawnFailed { log_tail } => (
-                "Background service failed to start".to_string(),
+                rust_i18n::t!("connection.failed_start").to_string(),
                 Some(log_tail.clone()),
             ),
             Connection::Connected
@@ -276,7 +295,7 @@ impl AppView {
                 .child(
                     Button::new("open-startup-log")
                         .outline()
-                        .label("Open log")
+                        .label(rust_i18n::t!("action.open_log").to_string())
                         .on_click({
                             let log = self.paths.log_file.clone();
                             move |_, _, cx| cx.open_with_system(&log)
@@ -309,17 +328,17 @@ impl AppView {
                         .snapshot
                         .as_ref()
                         .map(|snapshot| snapshot.shortcut.backend.to_string())
-                        .unwrap_or_else(|| "unknown".to_string())
+                        .unwrap_or_else(|| rust_i18n::t!("about.unknown").to_string())
                 )
             })
-            .unwrap_or_else(|| "Disconnected".to_string());
+            .unwrap_or_else(|| rust_i18n::t!("connection.disconnected").to_string());
         div()
             .h_flex()
             .justify_between()
             .p_2()
             .border_t_1()
             .child(config)
-            .child("Closing the window keeps dictation running")
+            .child(rust_i18n::t!("connection.closing_hint").to_string())
     }
 }
 
@@ -328,11 +347,11 @@ impl AppView {
         let action = self.confirm_shutdown?;
         let (message, command) = match action {
             ShutdownAction::Stop => (
-                "Stop the background service?",
+                rust_i18n::t!("connection.stop_confirm").to_string(),
                 BridgeCommand::ShutdownDaemon,
             ),
             ShutdownAction::Terminate => (
-                "Terminate the outdated background service?",
+                rust_i18n::t!("connection.terminate_confirm").to_string(),
                 BridgeCommand::TerminateDaemon,
             ),
         };
@@ -353,7 +372,7 @@ impl AppView {
                         .child(
                             Button::new("confirm-shutdown")
                                 .primary()
-                                .label("Confirm")
+                                .label(rust_i18n::t!("action.confirm").to_string())
                                 .on_click(cx.listener(move |this, _, _, _| {
                                     let _ = this.commands.try_send(command.clone());
                                     this.confirm_shutdown = None;
@@ -362,7 +381,7 @@ impl AppView {
                         .child(
                             Button::new("cancel-shutdown")
                                 .ghost()
-                                .label("Cancel")
+                                .label(rust_i18n::t!("action.cancel").to_string())
                                 .on_click(cx.listener(|this, _, _, _| {
                                     this.confirm_shutdown = None;
                                 })),

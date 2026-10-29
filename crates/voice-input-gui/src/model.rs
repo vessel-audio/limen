@@ -217,6 +217,7 @@ impl GuiState {
                     && !self.copied_entries.contains(&entry.id)
             })
             .filter_map(|entry| entry.text.clone().map(|text| (entry.id, entry.take, text)))
+            .take(1)
             .collect::<Vec<_>>();
         copies
             .into_iter()

@@ -130,7 +130,10 @@ fn protocol_mismatch_is_fatal_but_version_difference_is_only_a_warning() {
 #[test]
 fn only_this_guis_kept_take_is_copied_once_across_reconnects() {
     let (stopped, _) = connected().apply(Msg::StopAccepted { take: 7 });
-    let snapshot = snapshot(DictationState::Idle, vec![kept(10, 7), kept(11, 8)]);
+    let snapshot = snapshot(
+        DictationState::Idle,
+        vec![kept(10, 7), kept(11, 8), kept(12, 7)],
+    );
     let (copied, actions) = stopped.apply(Msg::Snapshot(Box::new(snapshot.clone())));
     assert_eq!(
         actions,
