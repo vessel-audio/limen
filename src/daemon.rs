@@ -34,9 +34,6 @@ use crate::shortcut::{Activation, ActivationReceipt, HoldEdge};
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A press this soon after the previous one is key repeat, not a fresh hold.
-const HOLD_REPEAT_QUIET: Duration = Duration::from_millis(100);
-
 type Deadline = Pin<Box<tokio::time::Sleep>>;
 
 /// State of the dictation actor: business state plus the addresses of the
@@ -54,9 +51,6 @@ struct DictationActor {
     hold_started: Option<Instant>,
     /// When the hold key went down; `Some` until it is released.
     hold_pressed: Option<Instant>,
-    /// The last press edge, including repeats. After a timeout, a fresh press
-    /// is accepted only once no repeats have arrived for HOLD_REPEAT_QUIET.
-    last_hold_press: Option<Instant>,
     /// IPC caller of a shortcut start, answered once the session actor reports
     /// whether the take started.
     start_caller: Option<oneshot::Sender<String>>,
@@ -97,7 +91,6 @@ impl DictationActor {
             hold_deadline: None,
             hold_started: None,
             hold_pressed: None,
-            last_hold_press: None,
             start_caller: None,
             notify,
             config_file,
@@ -192,36 +185,19 @@ impl DictationActor {
         match (edge, self.hold_pressed) {
             // Key repeat while the key is down. Held across the end of a take,
             // it must not start the next one: that takes a new press.
-            (HoldEdge::Press, Some(_)) => {
-                self.last_hold_press = Some(now);
-            }
+            (HoldEdge::Press, Some(_)) => {}
             (HoldEdge::Press, None) => {
-                let repeated = self
-                    .last_hold_press
-                    .is_some_and(|last| now.saturating_duration_since(last) < HOLD_REPEAT_QUIET);
-                self.last_hold_press = Some(now);
-                if !repeated {
-                    self.hold_pressed = Some(now);
-                    self.dispatch(Event::HoldPressed, ReplyTarget::NotRequested);
-                }
+                self.hold_pressed = Some(now);
+                self.dispatch(Event::HoldPressed, ReplyTarget::NotRequested);
             }
             (HoldEdge::Release, pressed) => {
                 self.hold_pressed = None;
-                self.last_hold_press = None;
                 let effective = effective_hold(self.hold_started, now);
                 let held = pressed.map(|pressed| now.saturating_duration_since(pressed));
                 tracing::info!(?effective, ?held, "hold key released");
                 self.dispatch(Event::HoldReleased { effective }, ReplyTarget::NotRequested);
             }
         }
-    }
-
-    /// Stop after a lost release. Keep the last repeat timestamp so a fresh
-    /// press can be told apart from repeats of a key that is still held.
-    fn hold_timed_out(&mut self) {
-        self.hold_pressed = None;
-        tracing::warn!("hold exceeded its maximum duration");
-        self.dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
     }
 
     /// Apply the `[shortcut]` section of the config again. The whole file must
@@ -307,7 +283,8 @@ impl DictationActor {
 
                 _ = async { self.hold_deadline.as_mut().unwrap().await },
                         if self.hold_deadline.is_some() => {
-                    self.hold_timed_out();
+                    tracing::warn!("hold exceeded its maximum duration");
+                    self.dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
                 }
             }
         }
@@ -854,37 +831,6 @@ mod tests {
         assert_eq!(
             [harness.session.recv().await, harness.session.recv().await],
             [Some(SessionCommand::Start), Some(SessionCommand::Teardown)]
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_timeout_allows_a_fresh_press_but_not_key_repeat() {
-        let mut harness = harness();
-        start_hold(&mut harness.actor);
-        harness.actor.hold_timed_out();
-        assert_eq!(
-            sent(&mut harness.session),
-            [SessionCommand::Start, SessionCommand::Stop]
-        );
-
-        // The portal is still repeating the physically held key.
-        harness.actor.hold(HoldEdge::Press);
-        assert_eq!(sent(&mut harness.session), []);
-
-        tokio::time::advance(Duration::from_millis(50)).await;
-        harness.actor.hold(HoldEdge::Press);
-        assert_eq!(sent(&mut harness.session), []);
-
-        // Once repeats stop and the timed-out take has finished, a new press
-        // works without a daemon restart.
-        harness
-            .actor
-            .dispatch(Event::ProviderCompleted, ReplyTarget::NotRequested);
-        tokio::time::advance(Duration::from_millis(100)).await;
-        harness.actor.hold(HoldEdge::Press);
-        assert_eq!(
-            sent(&mut harness.session),
-            [SessionCommand::Teardown, SessionCommand::Start]
         );
     }
 }
