@@ -7145,6 +7145,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures-util",
  "tokio",
  "tracing-subscriber",
  "voice-input-core",
@@ -7161,6 +7162,7 @@ dependencies = [
  "dirs 7.0.0",
  "futures-util",
  "hound",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

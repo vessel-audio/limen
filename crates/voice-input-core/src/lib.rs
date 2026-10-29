@@ -22,6 +22,7 @@ pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, StateSnapshot,
 };
+pub use daemon::spawn_daemon;
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};

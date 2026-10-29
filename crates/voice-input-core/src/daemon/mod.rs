@@ -16,8 +16,10 @@ mod input;
 mod lifecycle;
 mod projection;
 pub(crate) mod snapshot;
+mod spawn;
 
 pub use lifecycle::run;
+pub use spawn::spawn_daemon;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
