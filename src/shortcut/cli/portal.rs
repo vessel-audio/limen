@@ -52,6 +52,13 @@ pub(super) async fn setup(
     check_distinct(wanted.toggle, wanted.hold)?;
     check_config(paths, &current, &wanted)?;
     let program = Program::find()?;
+    if let Program::Unstable(path) = &program {
+        eprintln!(
+            "warning: {} is in the Nix store and stops working after an upgrade or garbage \
+             collection; install voice-input into your profile and run setup again",
+            path.display()
+        );
+    }
     match desktop_entry::ensure_installed(program.path())? {
         Install::Installed(path) => println!("Installed {}.", path.display()),
         Install::Present(_) => {}
@@ -349,20 +356,36 @@ mod tests {
     #[test]
     fn setup_result_explains_cancelled_and_failed_binding() {
         assert_eq!(outcome(check_bound(&status(SessionState::Bound))), Ok(()));
-        for session in [
-            SessionState::Cancelled,
-            SessionState::Failed,
-            SessionState::Disabled,
-            SessionState::Binding,
-        ] {
-            let error = outcome(check_bound(&status(session))).unwrap_err();
-            assert_eq!(error.0, 1, "{session:?}");
-            match session {
-                SessionState::Cancelled | SessionState::Failed => {
-                    assert!(error.1.contains("setup portal"), "{error:?}");
-                }
-                SessionState::Disabled | SessionState::Binding | SessionState::Bound => {}
-            }
-        }
+        assert_eq!(
+            [
+                SessionState::Cancelled,
+                SessionState::Failed,
+                SessionState::Disabled,
+                SessionState::Binding,
+            ]
+            .map(|session| outcome(check_bound(&status(session)))),
+            [
+                Err((
+                    1,
+                    "the GNOME dialog was cancelled; run `voice-input shortcut setup portal` to be asked again"
+                        .to_string(),
+                )),
+                Err((
+                    1,
+                    "no portal; run `voice-input shortcut setup portal` to try again, or use `voice-input shortcut setup gnome-keybinding` without a GlobalShortcuts portal"
+                        .to_string(),
+                )),
+                Err((
+                    1,
+                    "the daemon is not using the portal backend; check `voice-input shortcut status`"
+                        .to_string(),
+                )),
+                Err((
+                    1,
+                    "the daemon is not using the portal backend; check `voice-input shortcut status`"
+                        .to_string(),
+                )),
+            ]
+        );
     }
 }
