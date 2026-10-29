@@ -101,14 +101,28 @@ pub(super) async fn bind(
     );
     // The running daemon can still hold a portal binding even when the
     // config was already edited to this backend, e.g. by home-manager.
-    let daemon_uses_portal = super::portal::daemon_status(paths)
-        .await?
-        .is_some_and(|status| status.backend == Backend::Portal);
+    // Keep its exact config so a failed GNOME write can restore it.
+    let previous_portal = match super::portal::daemon_status(paths).await? {
+        Some(status) if status.backend == Backend::Portal => Some(ShortcutConfig {
+            backend: Backend::Portal,
+            toggle: status.preferred.toggle,
+            hold: status.preferred.hold,
+        }),
+        Some(_) | None if current.backend == Backend::Portal => Some(current),
+        Some(_) | None => None,
+    };
     // The portal must let go before GNOME grabs the same key.
-    if current.backend == Backend::Portal || daemon_uses_portal {
-        apply_backend(paths, toggle).await?;
+    if let Some(previous) = previous_portal
+        && let Err(error) = apply_backend(paths, toggle).await
+    {
+        return Err(restore_portal(paths, previous, error).await);
     }
-    gsettings::apply_setup(&dconf, &before, &plan).await?;
+    if let Err(error) = gsettings::apply_setup(&dconf, &before, &plan).await {
+        if let Some(previous) = previous_portal {
+            return Err(restore_portal(paths, previous, error).await);
+        }
+        return Err(error.into());
+    }
     apply_backend(paths, toggle).await?;
     println!(
         "toggle:   {toggle} → {} ({})",
@@ -137,6 +151,24 @@ async fn apply_backend(paths: &Paths, toggle: Shortcut) -> Result<()> {
         format!("GNOME now runs voice-input on {toggle}, but the config was not updated; run the command again once it can be")
     })?;
     rebind(paths).await
+}
+
+/// Restore `previous` after a failed backend change, keeping the original
+/// error unless the restoration itself fails too.
+async fn restore_portal(paths: &Paths, previous: ShortcutConfig, error: anyhow::Error) -> Failure {
+    let restored = async {
+        config::update_shortcut(&paths.config_file, move |_| previous)?;
+        rebind(paths).await
+    }
+    .await;
+    match restored {
+        Ok(()) => error.into(),
+        Err(restoration) => error
+            .context(format!(
+                "restoring the portal binding also failed: {restoration:#}"
+            ))
+            .into(),
+    }
 }
 
 pub(super) async fn setup_none(paths: &Paths, current: ShortcutConfig) -> Result<(), Failure> {
