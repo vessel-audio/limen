@@ -62,6 +62,37 @@ pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
         DictationButton::Disabled(_) => (title.clone(), None, false),
     };
     let commands = view.commands.clone();
+    let level_meter = view.model.snapshot.as_ref().and_then(|snapshot| {
+        if !matches!(
+            snapshot.state.dictation.state,
+            DictationState::Recording { .. }
+        ) {
+            return None;
+        }
+        let bars = if view.level_history.is_empty() {
+            "▁▁▁▁▁▁▁▁".to_string()
+        } else {
+            view.level_history
+                .iter()
+                .map(|rms| match *rms {
+                    value if value < 0.12 => '▁',
+                    value if value < 0.25 => '▂',
+                    value if value < 0.37 => '▃',
+                    value if value < 0.50 => '▄',
+                    value if value < 0.62 => '▅',
+                    value if value < 0.75 => '▆',
+                    value if value < 0.87 => '▇',
+                    _ => '█',
+                })
+                .collect::<String>()
+        };
+        Some(
+            div().v_flex().items_center().child(bars).children(
+                view.no_sound_detected()
+                    .then(|| rust_i18n::t!("hint.no_sound").to_string()),
+            ),
+        )
+    });
     let latest = view
         .model
         .snapshot
@@ -89,6 +120,7 @@ pub fn dictation(view: &AppView, _: &mut Context<AppView>) -> Div {
                 .child(format!("{title}{detail}"))
                 .children(error.map(|message| div().child(message))),
         )
+        .children(level_meter)
         .child(
             Button::new("dictation-primary")
                 .primary()
@@ -145,12 +177,10 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 Button::new("confirm-clear")
                     .primary()
                     .label(rust_i18n::t!("action.clear").to_string())
-                    .on_click({
-                        let commands = view.commands.clone();
-                        move |_, _, _| {
-                            let _ = commands.try_send(BridgeCommand::ClearHistory);
-                        }
-                    }),
+                    .on_click(cx.listener(|this, _, _, _| {
+                        let _ = this.commands.try_send(BridgeCommand::ClearHistory);
+                        this.confirm_clear = false;
+                    })),
             )
             .child(
                 Button::new("cancel-clear")
@@ -171,20 +201,8 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .children(confirmation)
 }
 
-pub fn shortcuts(view: &AppView, _: &mut Context<AppView>) -> Div {
-    let backend = view
-        .model
-        .snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.shortcut.backend.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    div()
-        .v_flex()
-        .gap_3()
-        .p_4()
-        .child(rust_i18n::t!("nav.shortcuts").to_string())
-        .child(format!("Backend: {backend}"))
-}
+mod shortcuts;
+pub use shortcuts::shortcuts;
 
 pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
     let config = view.paths.config_file.clone();
@@ -237,12 +255,9 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
                     Button::new("stop-daemon")
                         .outline()
                         .label("Stop daemon")
-                        .on_click({
-                            let commands = view.commands.clone();
-                            move |_, _, _| {
-                                let _ = commands.try_send(BridgeCommand::ShutdownDaemon);
-                            }
-                        }),
+                        .on_click(cx.listener(|this, _, _, _| {
+                            this.confirm_shutdown = Some(crate::app::ShutdownAction::Stop);
+                        })),
                 )
                 .child(
                     Button::new("close-about")
@@ -273,7 +288,11 @@ fn history_card(entry: &HistoryEntry) -> Div {
             div()
                 .h_flex()
                 .justify_between()
-                .child(format!("{} · {}", entry.at_ms, rust_i18n::t!(outcome)))
+                .child(format!(
+                    "{} · {}",
+                    format_time(entry.at_ms),
+                    rust_i18n::t!(outcome)
+                ))
                 .child(
                     Button::new(format!("copy-{}", entry.id))
                         .ghost()
@@ -289,6 +308,23 @@ fn history_card(entry: &HistoryEntry) -> Div {
         )
         .child(text)
         .children(original)
+}
+
+fn format_time(at_ms: u64) -> String {
+    let seconds = (at_ms / 1000) as libc::time_t;
+    let mut broken_down = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // SAFETY: localtime_r initializes `broken_down` when it returns a non-null
+    // pointer. The input points to a plain integer and the output is POD.
+    let result = unsafe { libc::localtime_r(&seconds, broken_down.as_mut_ptr()) };
+    if result.is_null() {
+        return "--:--:--".to_string();
+    }
+    // SAFETY: the successful call initialized every field used here.
+    let broken_down = unsafe { broken_down.assume_init() };
+    format!(
+        "{:02}:{:02}:{:02}",
+        broken_down.tm_hour, broken_down.tm_min, broken_down.tm_sec
+    )
 }
 
 fn elapsed(since_ms: u64) -> u64 {

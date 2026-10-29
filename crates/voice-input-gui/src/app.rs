@@ -1,16 +1,20 @@
 //! Root GPUI view and connection/status presentation.
 
 use gpui_kit::component::{
-    StyledExt, TitleBar,
+    ActiveTheme, StyledExt, TitleBar,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::*;
+use std::time::Instant;
 use tokio::sync::mpsc;
-use voice_input_core::Paths;
+
+use voice_input_core::{Backend, DictationState, Paths};
 
 use crate::bridge::{BridgeCommand, BridgeEvent};
-use crate::model::{Action, Connection, GuiState, Warning};
+use crate::model::{Action, Connection, GuiState, Msg, Warning};
 use crate::pages;
+use crate::recorder::RecorderState;
+use gpui_kit::component::input::InputState;
 
 /// Root application state owned by the GPUI thread.
 pub struct AppView {
@@ -18,9 +22,17 @@ pub struct AppView {
     pub commands: mpsc::Sender<BridgeCommand>,
     pub paths: Paths,
     pub page: Page,
+    pub selected_backend: Backend,
+    pub recorder: RecorderState,
+    pub toggle_input: Entity<InputState>,
+    pub hold_input: Entity<InputState>,
     pub about: bool,
     pub confirm_clear: bool,
+    pub confirm_shutdown: Option<ShutdownAction>,
+    pub toast: Option<(String, Instant)>,
     pub offer_terminate: bool,
+    pub level_history: Vec<f32>,
+    pub silent_since: Option<Instant>,
     pub shortcut_report: Option<Result<voice_input_core::Report, String>>,
 }
 
@@ -32,22 +44,57 @@ pub enum Page {
     Shortcuts,
 }
 
+/// Daemon-stop actions that require an explicit confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownAction {
+    Stop,
+    Terminate,
+}
+
 impl AppView {
-    pub fn new(paths: Paths, commands: mpsc::Sender<BridgeCommand>) -> Self {
+    pub fn new(
+        paths: Paths,
+        commands: mpsc::Sender<BridgeCommand>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             model: GuiState::default(),
             commands,
             paths,
             page: Page::Dictation,
+            selected_backend: Backend::Portal,
+            recorder: RecorderState::Idle { current: None },
+            toggle_input: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Super+Z")
+                    .default_value("Super+Z")
+            }),
+            hold_input: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Super+X")
+                    .default_value("Super+X")
+            }),
             about: false,
             confirm_clear: false,
+            confirm_shutdown: None,
+            toast: None,
             offer_terminate: false,
+            level_history: Vec::new(),
+            silent_since: None,
             shortcut_report: None,
         }
     }
 
     /// Apply one bridge event and return GUI-only side effects.
     pub fn apply_bridge_event(&mut self, event: BridgeEvent) -> Vec<Action> {
+        let level_event = matches!(event, BridgeEvent::Msg(Msg::Level(_)));
+        let actions = self.apply_event(event);
+        self.update_level_tracking(level_event);
+        actions
+    }
+
+    fn apply_event(&mut self, event: BridgeEvent) -> Vec<Action> {
         match event {
             BridgeEvent::Msg(msg) => {
                 let (next, actions) = std::mem::take(&mut self.model).apply(msg);
@@ -64,6 +111,37 @@ impl AppView {
             }
             BridgeEvent::Toast(_) => Vec::new(),
         }
+    }
+
+    fn update_level_tracking(&mut self, level_event: bool) {
+        let recording = self.model.snapshot.as_ref().is_some_and(|snapshot| {
+            matches!(
+                snapshot.state.dictation.state,
+                DictationState::Recording { .. }
+            )
+        });
+        if !recording {
+            self.level_history.clear();
+            self.silent_since = None;
+            return;
+        }
+        if level_event {
+            self.level_history.push(self.model.level.rms);
+            if self.level_history.len() > 24 {
+                self.level_history.remove(0);
+            }
+        }
+        if self.model.level.dbfs < -50.0 {
+            self.silent_since.get_or_insert_with(Instant::now);
+        } else {
+            self.silent_since = None;
+        }
+    }
+
+    /// Whether silence has stayed below the hint threshold for three seconds.
+    pub fn no_sound_detected(&self) -> bool {
+        self.silent_since
+            .is_some_and(|since| since.elapsed() >= std::time::Duration::from_secs(3))
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -110,7 +188,7 @@ impl AppView {
         )
     }
 
-    fn banners(&self) -> Vec<Div> {
+    fn banners(&self, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
         match &self.model.connection {
             Connection::Reconnecting { attempt, reason } => {
@@ -126,12 +204,9 @@ impl AppView {
                         Button::new("terminate-daemon")
                             .outline()
                             .label("Terminate after confirmation")
-                            .on_click({
-                                let commands = self.commands.clone();
-                                move |_, _, _| {
-                                    let _ = commands.try_send(BridgeCommand::TerminateDaemon);
-                                }
-                            }),
+                            .on_click(cx.listener(|this, _, _, _| {
+                                this.confirm_shutdown = Some(ShutdownAction::Terminate);
+                            })),
                     );
                 }
                 banners.push(banner);
@@ -148,7 +223,7 @@ impl AppView {
         banners
     }
 
-    fn connection_overlay(&self) -> Option<Div> {
+    fn connection_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let (message, log) = match &self.model.connection {
             Connection::Connecting | Connection::Spawning => {
                 ("Starting background service…".to_string(), None)
@@ -170,9 +245,18 @@ impl AppView {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .bg(rgb(0x202020))
+                .bg(cx.theme().colors.background)
                 .child(message)
                 .children(log.map(|log| div().child(log)))
+                .child(
+                    Button::new("open-startup-log")
+                        .outline()
+                        .label("Open log")
+                        .on_click({
+                            let log = self.paths.log_file.clone();
+                            move |_, _, cx| cx.open_with_system(&log)
+                        }),
+                )
                 .child(
                     Button::new("start-daemon")
                         .primary()
@@ -215,6 +299,66 @@ impl AppView {
 }
 
 impl AppView {
+    fn shutdown_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let action = self.confirm_shutdown?;
+        let (message, command) = match action {
+            ShutdownAction::Stop => (
+                "Stop the background service?",
+                BridgeCommand::ShutdownDaemon,
+            ),
+            ShutdownAction::Terminate => (
+                "Terminate the outdated background service?",
+                BridgeCommand::TerminateDaemon,
+            ),
+        };
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .bg(cx.theme().colors.background)
+                .child(message)
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("confirm-shutdown")
+                                .primary()
+                                .label("Confirm")
+                                .on_click(cx.listener(move |this, _, _, _| {
+                                    let _ = this.commands.try_send(command.clone());
+                                    this.confirm_shutdown = None;
+                                })),
+                        )
+                        .child(
+                            Button::new("cancel-shutdown")
+                                .ghost()
+                                .label("Cancel")
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.confirm_shutdown = None;
+                                })),
+                        ),
+                ),
+        )
+    }
+
+    /// Show a GUI-owned toast for three seconds.
+    pub fn show_toast(&mut self) {
+        self.toast = Some((rust_i18n::t!("toast.copied").to_string(), Instant::now()));
+    }
+
+    fn toast_overlay(&self) -> Option<Div> {
+        let (message, at) = self.toast.as_ref()?;
+        if at.elapsed() >= std::time::Duration::from_secs(3) {
+            return None;
+        }
+        Some(div().absolute().bottom_4().right_4().child(message.clone()))
+    }
+
     fn snapshot_config(&self) -> Option<voice_input_core::ConfigSummary> {
         self.model
             .snapshot
@@ -234,7 +378,7 @@ impl Render for AppView {
             .v_flex()
             .size_full()
             .child(self.title_bar(cx))
-            .children(self.banners())
+            .children(self.banners(cx))
             .child(page)
             .child(self.footer())
             .children(self.about.then(|| {
@@ -244,9 +388,11 @@ impl Render for AppView {
                     .v_flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgb(0x202020))
+                    .bg(cx.theme().colors.background)
                     .child(pages::about(self, cx))
             }))
-            .children(self.connection_overlay())
+            .children(self.shutdown_overlay(cx))
+            .children(self.toast_overlay())
+            .children(self.connection_overlay(cx))
     }
 }

@@ -7181,6 +7181,7 @@ dependencies = [
  "anyhow",
  "futures-util",
  "gpui-kit",
+ "libc",
  "rust-i18n",
  "tokio",
  "tracing",

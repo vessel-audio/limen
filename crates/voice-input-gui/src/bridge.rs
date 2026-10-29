@@ -9,8 +9,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use voice_input_core::{
     Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Paths, Push, Report,
-    SetupError, Shortcut, clear, edit, request, set, setup, spawn_daemon, subscribe,
-    terminate_daemon, v1,
+    SetupError, Shortcut, clear, edit, set, setup, spawn_daemon, subscribe, terminate_daemon, v1,
 };
 
 use crate::model::{Msg, Toast};
@@ -175,7 +174,7 @@ async fn run(
                     Ok(()) => {
                         stopped = false;
                         next_connect = tokio::time::Instant::now();
-                        let _ = events.send(BridgeEvent::Msg(Msg::Connecting)).await;
+                        let _ = events.send(BridgeEvent::Msg(Msg::DaemonReplaced)).await;
                     }
                     Err(StartError::Outdated(message)) => {
                         stopped = true;
@@ -190,18 +189,20 @@ async fn run(
             }
             _ = tokio::time::sleep_until(next_connect), if stream.is_none() && spawn.task.is_none() && !stopped => {
                 match subscribe(&paths).await {
-                    Ok(mut candidate) => match candidate.try_next().await {
+                    Ok(mut candidate) => match tokio::time::timeout(Duration::from_secs(3), candidate.try_next()).await.unwrap_or_else(|_| Err(anyhow::anyhow!("subscription hello timed out"))) {
                         Ok(Some(Push::Hello { protocol, daemon_version })) => {
                             let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version })).await;
                             backoff.reset();
                             stream = Some(Box::pin(candidate));
                         }
                         Ok(Some(Push::Error { message })) => {
-                            let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message: message.clone() })).await;
                             if is_outdated(&message) {
+                                stopped = true;
+                                let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message: message.clone() })).await;
                                 let _ = events.send(BridgeEvent::OfferTerminate).await;
+                            } else {
+                                let _ = events.send(BridgeEvent::Msg(Msg::CommandError { message })).await;
                             }
-                            stopped = is_outdated(&message);
                             next_connect = tokio::time::Instant::now() + backoff.next();
                         }
                         Ok(Some(_)) | Ok(None) | Err(_) => {
@@ -235,7 +236,8 @@ async fn run(
                             let _ = events.send(BridgeEvent::Msg(Msg::DaemonError { message })).await;
                             let _ = events.send(BridgeEvent::OfferTerminate).await;
                         } else {
-                            let _ = events.send(BridgeEvent::Msg(Msg::CommandError { message })).await;
+                            let _ = events.send(BridgeEvent::Msg(Msg::CommandError { message: message.clone() })).await;
+                            let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: message })).await;
                             next_connect = tokio::time::Instant::now() + backoff.next();
                         }
                         stream = None;
@@ -277,13 +279,30 @@ async fn handle_command(
     stopped: &mut bool,
 ) {
     match command {
-        BridgeCommand::Start => {
-            let _ = request(paths, &v1::Request::Start)
-                .await
-                .map_err(|error| error.to_string());
-        }
+        BridgeCommand::Start => match request_with_timeout(paths, &v1::Request::Start).await {
+            Ok(v1::Reply::Accepted { .. }) => {}
+            Ok(v1::Reply::Error { message }) => {
+                let _ = events
+                    .send(BridgeEvent::Msg(Msg::CommandError { message }))
+                    .await;
+            }
+            Ok(_) => {
+                let _ = events
+                    .send(BridgeEvent::Msg(Msg::CommandError {
+                        message: "unexpected start reply".to_string(),
+                    }))
+                    .await;
+            }
+            Err(error) => {
+                let _ = events
+                    .send(BridgeEvent::Msg(Msg::CommandError {
+                        message: format!("{error:#}"),
+                    }))
+                    .await;
+            }
+        },
         BridgeCommand::Stop => {
-            match request(
+            match request_with_timeout(
                 paths,
                 &v1::Request::Stop {
                     delivery: Delivery::Keep,
@@ -301,7 +320,13 @@ async fn handle_command(
                         .send(BridgeEvent::Msg(Msg::CommandError { message }))
                         .await;
                 }
-                Ok(_) => {}
+                Ok(_) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: "unexpected stop reply".to_string(),
+                        }))
+                        .await;
+                }
                 Err(error) => {
                     let _ = events
                         .send(BridgeEvent::Msg(Msg::CommandError {
@@ -312,7 +337,28 @@ async fn handle_command(
             }
         }
         BridgeCommand::ClearHistory => {
-            let _ = request(paths, &v1::Request::ClearHistory).await;
+            match request_with_timeout(paths, &v1::Request::ClearHistory).await {
+                Ok(v1::Reply::Ok) => {}
+                Ok(v1::Reply::Error { message }) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError { message }))
+                        .await;
+                }
+                Ok(_) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: "unexpected clear_history reply".to_string(),
+                        }))
+                        .await;
+                }
+                Err(error) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: format!("{error:#}"),
+                        }))
+                        .await;
+                }
+            }
         }
         BridgeCommand::SpawnDaemon => {
             *stopped = false;
@@ -322,20 +368,35 @@ async fn handle_command(
             *stopped = false;
             spawn.start(paths, StartMode::Restart);
         }
-        BridgeCommand::ShutdownDaemon => match request(paths, &v1::Request::Shutdown).await {
-            Ok(v1::Reply::Ok) => {
-                *stopped = true;
-                *stream = None;
-                let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+        BridgeCommand::ShutdownDaemon => {
+            match request_with_timeout(paths, &v1::Request::Shutdown).await {
+                Ok(v1::Reply::Ok) => {
+                    *stopped = true;
+                    *stream = None;
+                    let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+                }
+                Ok(v1::Reply::Error { message }) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::DaemonError { message }))
+                        .await;
+                    let _ = events.send(BridgeEvent::OfferTerminate).await;
+                }
+                Ok(_) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: "unexpected shutdown reply".to_string(),
+                        }))
+                        .await;
+                }
+                Err(error) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError {
+                            message: format!("{error:#}"),
+                        }))
+                        .await;
+                }
             }
-            Ok(v1::Reply::Error { message }) => {
-                let _ = events
-                    .send(BridgeEvent::Msg(Msg::DaemonError { message }))
-                    .await;
-                let _ = events.send(BridgeEvent::OfferTerminate).await;
-            }
-            Ok(_) | Err(_) => {}
-        },
+        }
         BridgeCommand::TerminateDaemon => match terminate_daemon(paths).await {
             Ok(()) => {
                 *stopped = true;
@@ -370,8 +431,17 @@ async fn run_shortcut(paths: &Paths, request: ShortcutRequest) -> Result<Report,
     })
 }
 
+async fn request_with_timeout(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> {
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        voice_input_core::request(paths, request),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("daemon request timed out"))?
+}
+
 async fn restart(paths: &Paths) -> StartResult {
-    match request(paths, &v1::Request::Shutdown).await {
+    match request_with_timeout(paths, &v1::Request::Shutdown).await {
         Ok(v1::Reply::Ok) => {
             wait_for_socket_close(paths).await?;
             spawn_daemon(paths)

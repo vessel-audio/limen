@@ -217,3 +217,18 @@ fn command_errors_stay_verbatim_and_an_intentional_stop_does_not_spawn() {
     assert_eq!(stopped.connection, Connection::NotRunning);
     assert!(actions.is_empty());
 }
+
+#[test]
+fn replacing_the_daemon_resets_ids_without_spawning_again() {
+    let (stopped, _) = connected().apply(Msg::StopAccepted { take: 7 });
+    let (copied, _) = stopped.apply(Msg::Snapshot(Box::new(snapshot(
+        DictationState::Idle,
+        vec![kept(10, 7)],
+    ))));
+    let (replaced, actions) = copied.apply(Msg::DaemonReplaced);
+    assert!(actions.is_empty());
+    assert_eq!(replaced.connection, Connection::Connecting);
+    assert!(replaced.copied_entries.is_empty());
+    assert!(replaced.pending_copies.is_empty());
+    assert!(replaced.snapshot.is_none());
+}

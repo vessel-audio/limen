@@ -78,6 +78,7 @@ pub enum Msg {
         message: String,
     },
     DaemonStopped,
+    DaemonReplaced,
     StopAccepted {
         take: u64,
     },
@@ -170,6 +171,13 @@ impl GuiState {
             Msg::DaemonStopped => {
                 self.connection = Connection::NotRunning;
                 (self, Vec::new())
+            }
+            Msg::DaemonReplaced => {
+                let fresh = Self {
+                    connection: Connection::Connecting,
+                    ..Self::default()
+                };
+                (fresh, Vec::new())
             }
             Msg::StopAccepted { take } => {
                 self.pending_copies.insert(take);

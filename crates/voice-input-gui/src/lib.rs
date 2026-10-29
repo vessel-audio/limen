@@ -51,9 +51,9 @@ pub fn run(paths: Paths) -> Result<()> {
                 ..TitleBar::window_options()
             },
             cx,
-            |_, cx| {
+            |window, cx| {
                 cx.new(|cx| {
-                    let app = app::AppView::new(paths.clone(), commands.clone());
+                    let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
                     let window_commands = commands.clone();
                     cx.spawn(async move |this, cx| {
                         while let Some(event) = events.recv().await {
@@ -67,7 +67,8 @@ pub fn run(paths: Paths) -> Result<()> {
                                             let _ = window_commands
                                                 .try_send(BridgeCommand::SpawnDaemon);
                                         }
-                                        Action::Reconnect | Action::Toast(_) => {}
+                                        Action::Reconnect => {}
+                                        Action::Toast(_) => window.show_toast(),
                                     }
                                 }
                                 cx.notify();
@@ -77,7 +78,9 @@ pub fn run(paths: Paths) -> Result<()> {
                     .detach();
                     cx.spawn(async move |this, cx| {
                         loop {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            cx.background_executor()
+                                .timer(Duration::from_millis(200))
+                                .await;
                             let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
                         }
                     })
