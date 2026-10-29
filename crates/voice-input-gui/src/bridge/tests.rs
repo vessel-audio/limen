@@ -228,3 +228,51 @@ async fn termination_does_not_remove_a_replacement_socket() {
     assert!(paths.socket.exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn hello_protocol_mismatch_offers_termination_without_keeping_the_stream() {
+    use std::io::{BufRead, Write};
+    use voice_input_core::Paths;
+
+    let root = std::env::temp_dir().join(format!(
+        "voice-input-bridge-protocol-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("voice-input.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    let listener = std::os::unix::net::UnixListener::bind(&paths.socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = String::new();
+        std::io::BufReader::new(&mut stream)
+            .read_line(&mut request)
+            .unwrap();
+        assert!(request.contains("subscribe"));
+        stream
+            .write_all(b"{\"type\":\"hello\",\"protocol\":2,\"daemon_version\":\"future\"}\n")
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+    });
+    let (commands, mut events, bridge) = super::start(paths);
+    let first = events.blocking_recv();
+    commands.blocking_send(super::BridgeCommand::Quit).unwrap();
+    let _ = bridge.join();
+    server.join().unwrap();
+
+    assert!(matches!(
+        first,
+        Some(super::BridgeEvent::Msg(crate::model::Msg::DaemonError { message }))
+            if message.contains("protocol 2")
+    ));
+    assert!(matches!(
+        events.blocking_recv(),
+        Some(super::BridgeEvent::OfferTerminate)
+    ));
+    std::fs::remove_dir_all(root).unwrap();
+}

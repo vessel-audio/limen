@@ -214,6 +214,13 @@ async fn run(
             _ = tokio::time::sleep_until(next_connect), if stream.is_none() && spawn.task.is_none() && !stopped => {
                 match subscribe(&paths).await {
                     Ok(mut candidate) => match tokio::time::timeout(Duration::from_secs(3), candidate.try_next()).await.unwrap_or_else(|_| Err(anyhow::anyhow!("subscription hello timed out"))) {
+                        Ok(Some(Push::Hello { protocol, .. })) if protocol != 1 => {
+                            stopped = true;
+                            let _ = events.send(BridgeEvent::Msg(Msg::DaemonError {
+                                message: format!("unsupported protocol {protocol}; supported: 1"),
+                            })).await;
+                            let _ = events.send(BridgeEvent::OfferTerminate).await;
+                        }
                         Ok(Some(Push::Hello { protocol, daemon_version })) => {
                             match daemon_peer_pid(&paths).await {
                                 Ok(daemon_pid) => {
