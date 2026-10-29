@@ -1,5 +1,7 @@
 //! Tokio bridge for subscriptions, daemon lifecycle, and shortcut operations.
 
+mod lifecycle;
+
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -14,6 +16,9 @@ use voice_input_core::{
 };
 
 use crate::model::{Msg, Toast};
+use lifecycle::{
+    StartError, StartResult, is_outdated, request_with_timeout, restart, wait_for_socket_removal,
+};
 
 /// Commands sent from the GPUI thread to the bridge.
 #[derive(Debug, Clone)]
@@ -99,14 +104,6 @@ impl Backoff {
         self.0 = (self.0 * 2).min(Duration::from_secs(5));
         current
     }
-}
-
-type StartResult = Result<(), StartError>;
-
-#[derive(Debug)]
-enum StartError {
-    Outdated(String),
-    Failed(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -374,11 +371,18 @@ async fn handle_command(
         }
         BridgeCommand::ShutdownDaemon => {
             match request_with_timeout(paths, &v1::Request::Shutdown).await {
-                Ok(v1::Reply::Ok) => {
-                    *stopped = true;
-                    *stream = None;
-                    let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
-                }
+                Ok(v1::Reply::Ok) => match wait_for_socket_removal(paths).await {
+                    Ok(()) => {
+                        *stopped = true;
+                        *stream = None;
+                        let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+                    }
+                    Err(StartError::Outdated(message) | StartError::Failed(message)) => {
+                        let _ = events
+                            .send(BridgeEvent::Msg(Msg::CommandError { message }))
+                            .await;
+                    }
+                },
                 Ok(v1::Reply::Error { message }) => {
                     let _ = events
                         .send(BridgeEvent::Msg(Msg::DaemonError { message }))
@@ -402,11 +406,18 @@ async fn handle_command(
             }
         }
         BridgeCommand::TerminateDaemon => match terminate_daemon(paths).await {
-            Ok(()) => {
-                *stopped = true;
-                *stream = None;
-                let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
-            }
+            Ok(()) => match wait_for_socket_removal(paths).await {
+                Ok(()) => {
+                    *stopped = true;
+                    *stream = None;
+                    let _ = events.send(BridgeEvent::Msg(Msg::DaemonStopped)).await;
+                }
+                Err(StartError::Outdated(message) | StartError::Failed(message)) => {
+                    let _ = events
+                        .send(BridgeEvent::Msg(Msg::CommandError { message }))
+                        .await;
+                }
+            },
             Err(error) => {
                 let _ = events
                     .send(BridgeEvent::Msg(Msg::CommandError {
@@ -439,60 +450,6 @@ async fn run_shortcut(paths: &Paths, request: ShortcutRequest) -> Result<Report,
             message,
         }
     })
-}
-
-async fn request_with_timeout(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> {
-    tokio::time::timeout(
-        Duration::from_secs(3),
-        voice_input_core::request(paths, request),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("daemon request timed out"))?
-}
-
-async fn restart(paths: &Paths) -> StartResult {
-    match request_with_timeout(paths, &v1::Request::Shutdown).await {
-        Ok(v1::Reply::Ok) => {
-            wait_for_socket_close(paths).await?;
-            spawn_daemon(paths)
-                .await
-                .map_err(|error| StartError::Failed(format!("{error:#}")))
-        }
-        Ok(v1::Reply::Error { message }) if is_outdated(&message) => {
-            Err(StartError::Outdated(message))
-        }
-        Ok(v1::Reply::Error { message }) => Err(StartError::Failed(message)),
-        Ok(_) => Err(StartError::Failed("unexpected shutdown reply".to_string())),
-        Err(error) => Err(StartError::Failed(format!("{error:#}"))),
-    }
-}
-
-async fn wait_for_socket_close(paths: &Paths) -> Result<(), StartError> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match tokio::net::UnixStream::connect(&paths.socket).await {
-                Ok(stream) => {
-                    drop(stream);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                    ) =>
-                {
-                    return Ok(());
-                }
-                Err(error) => return Err(StartError::Failed(error.to_string())),
-            }
-        }
-    })
-    .await
-    .map_err(|_| StartError::Failed("daemon did not stop within 5s".to_string()))?
-}
-
-fn is_outdated(message: &str) -> bool {
-    message.contains("invalid request") || message.contains("unknown variant")
 }
 
 #[cfg(test)]
