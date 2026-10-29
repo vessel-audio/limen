@@ -17,7 +17,7 @@ mod shortcut;
 
 pub use config::{Config, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
-pub use dictation::MIN_HOLD;
+pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::{request, send, v1};
 pub use provider::probe;
 pub use shortcut::desktop_entry::APP_ID;

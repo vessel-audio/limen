@@ -11,12 +11,16 @@
 
 mod hold;
 mod output;
+mod view;
 
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 pub(crate) use hold::MAX_HOLD;
 pub use hold::MIN_HOLD;
 use output::{OutputTracker, TerminalOutcome};
+pub use view::{DictationState, DictationView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Phase {
@@ -30,20 +34,14 @@ enum Phase {
     Draining,
 }
 
-impl Phase {
-    fn label(self) -> &'static str {
-        match self {
-            Phase::Idle => "idle",
-            Phase::Recording(_) => "recording",
-            Phase::Finalizing | Phase::Draining => "finalizing",
-        }
-    }
-}
-
 /// Which input ends the take: a second toggle or the release of the hold key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Control {
+/// The input mode that controls and ends a recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Control {
+    /// Press once to start and again to stop.
     Toggle,
+    /// Hold while talking and release to stop.
     Hold,
 }
 
@@ -153,7 +151,11 @@ pub(crate) struct Dictation {
 
 impl Dictation {
     pub(crate) fn label(self) -> &'static str {
-        self.phase.label()
+        match self.view().state {
+            DictationState::Idle | DictationState::Starting { .. } => "idle",
+            DictationState::Recording { .. } => "recording",
+            DictationState::Transcribing | DictationState::Committing => "finalizing",
+        }
     }
 }
 
