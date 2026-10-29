@@ -1,10 +1,14 @@
 //! Optional GPUI control panel for the voice-input daemon.
 
+mod app;
 mod bridge;
+mod instance;
 mod locale;
 mod model;
+mod pages;
 mod recorder;
 
+pub use bridge::{BridgeCommand, BridgeEvent, ShortcutRequest};
 pub use model::{
     Action, Connection, DictationButton, DisabledReason, GuiState, Msg, Toast, Warning,
 };
@@ -12,74 +16,58 @@ pub use recorder::{
     Action as RecorderAction, Event as RecorderEvent, RecorderError, RecorderState,
 };
 
-pub use bridge::{BridgeCommand, BridgeEvent, ShortcutRequest};
-
 rust_i18n::i18n!("locales");
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::Result;
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use voice_input_core::Paths;
 
 /// Run the control panel on the calling thread.
 pub fn run(paths: Paths) -> Result<()> {
-    struct Window {
-        model: model::GuiState,
-    }
-
-    impl Render for Window {
-        fn render(&mut self, _: &mut gpui_kit::Window, _: &mut Context<Self>) -> impl IntoElement {
-            let _ = self.model.button();
-            div()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .child("voice-input")
-        }
-    }
-
+    let _instance = match instance::acquire(&paths)? {
+        Some(file) => file,
+        None => return Ok(()),
+    };
     locale::initialize();
-    let (model, _) = model::GuiState::default().apply(model::Msg::Connecting);
-    let (commands, mut events, bridge_thread) = bridge::start(paths);
+    let (commands, mut events, bridge_thread) = bridge::start(paths.clone());
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
         match gpui_kit::open_window(
             WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(0.0), px(0.0)),
+                    size: size(px(720.0), px(520.0)),
+                })),
+                window_min_size: Some(size(px(560.0), px(420.0))),
                 app_id: Some("io.github.Emin017.VoiceInput".to_string()),
-                ..WindowOptions::default()
+                ..TitleBar::window_options()
             },
             cx,
             |_, cx| {
                 cx.new(|cx| {
+                    let app = app::AppView::new(paths.clone(), commands.clone());
                     let window_commands = commands.clone();
                     cx.spawn(async move |this, cx| {
                         while let Some(event) = events.recv().await {
-                            let _ = this.update(cx, |window: &mut Window, cx| {
-                                let (next, actions) = match event {
-                                    bridge::BridgeEvent::Msg(msg) => {
-                                        std::mem::take(&mut window.model).apply(msg)
-                                    }
-                                    bridge::BridgeEvent::OfferTerminate
-                                    | bridge::BridgeEvent::ShortcutReport(_)
-                                    | bridge::BridgeEvent::Toast(_) => {
-                                        (window.model.clone(), Vec::new())
-                                    }
-                                };
-                                window.model = next;
-                                for action in actions {
+                            let _ = this.update(cx, |window: &mut app::AppView, cx| {
+                                for action in window.apply_bridge_event(event) {
                                     match action {
-                                        model::Action::CopyToClipboard(text) => {
+                                        Action::CopyToClipboard(text) => {
                                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                                         }
-                                        model::Action::SpawnDaemon => {
+                                        Action::SpawnDaemon => {
                                             let _ = window_commands
-                                                .try_send(bridge::BridgeCommand::SpawnDaemon);
+                                                .try_send(BridgeCommand::SpawnDaemon);
                                         }
-                                        model::Action::Reconnect | model::Action::Toast(_) => {}
+                                        Action::Reconnect | Action::Toast(_) => {}
                                     }
                                 }
                                 cx.notify();
@@ -87,9 +75,14 @@ pub fn run(paths: Paths) -> Result<()> {
                         }
                     })
                     .detach();
-                    Window {
-                        model: model.clone(),
-                    }
+                    cx.spawn(async move |this, cx| {
+                        loop {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
+                        }
+                    })
+                    .detach();
+                    app
                 })
             },
         ) {

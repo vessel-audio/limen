@@ -16,7 +16,7 @@ use voice_input_core::{
 use crate::model::{Msg, Toast};
 
 /// Commands sent from the GPUI thread to the bridge.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BridgeCommand {
     Start,
     Stop,
@@ -29,7 +29,7 @@ pub enum BridgeCommand {
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ShortcutRequest {
     Setup {
         backend: Backend,
