@@ -20,6 +20,25 @@ pub struct Capture {
     child: Child,
 }
 
+impl Drop for Capture {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        let deadline = std::time::Instant::now() + CAPTURE_REAP_TIMEOUT;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    tracing::warn!("pw-record did not exit within the reap timeout");
+                    return;
+                }
+            }
+        }
+    }
+}
+
 impl Capture {
     /// Start recording from the given pw-record target (`None` = default).
     pub fn start(device: Option<&str>) -> Result<Self> {

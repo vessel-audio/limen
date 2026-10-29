@@ -81,7 +81,7 @@ impl SessionHandle {
         let Self { mailbox, task } = self;
         drop(mailbox);
         if let Some(task) = task {
-            crate::task::join_task("session", task, crate::task::StopMode::Graceful).await;
+            crate::task::join_task("session", task, crate::task::StopMode::Abort).await;
         }
     }
 
@@ -225,6 +225,14 @@ enum Stage {
     Finalizing,
     /// A terminal report was sent; read nothing until `Teardown`.
     Ended,
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        if let Some(handle) = self.capture.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl Active {

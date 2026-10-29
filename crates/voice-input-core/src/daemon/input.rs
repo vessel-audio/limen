@@ -64,7 +64,10 @@ async fn process(
     let original = job.text;
     // Cloud work is optional; queued originals take priority.
     let corrected = polisher
-        .polish_when_idle(original.clone(), input_rx.is_empty())
+        .polish_when_idle(
+            original.clone(),
+            input_rx.is_empty() || matches!(job.delivery, Delivery::Keep),
+        )
         .await;
     let (text, outcome) = match job.delivery {
         Delivery::Input => {
@@ -231,7 +234,8 @@ mod tests {
         // Dotool rejects any Unicode commit before spawning a process. A
         // compatibility fallback would return the original and fail the test.
         let mut input_method = InputMethod::new(Backend::Dotool);
-        let (_jobs, input_rx) = mpsc::unbounded_channel();
+        let (jobs, input_rx) = mpsc::unbounded_channel();
+        jobs.send(job("backlog", Delivery::Input)).unwrap();
 
         let report = process(
             InputJob {

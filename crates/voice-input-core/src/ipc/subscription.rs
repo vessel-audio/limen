@@ -110,6 +110,7 @@ pub(super) async fn run(
     let mut seq = 1;
     push_snapshot(&mut write, &mut snapshots, &mut shortcuts, &mut seq).await?;
     let mut level_tick = tokio::time::interval(LEVEL_INTERVAL);
+    level_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_level = Level::SILENCE;
     let mut buffer = [0; 1024];
     loop {

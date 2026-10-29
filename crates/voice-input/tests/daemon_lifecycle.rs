@@ -7,7 +7,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+static NEXT_SANDBOX: AtomicUsize = AtomicUsize::new(0);
 
 struct Sandbox {
     root: PathBuf,
@@ -16,11 +19,12 @@ struct Sandbox {
 impl Sandbox {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "voice-input-daemon-lifecycle-{}",
-            std::process::id()
+            "voice-input-daemon-lifecycle-{}-{}",
+            std::process::id(),
+            NEXT_SANDBOX.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
-        for directory in ["config/voice-input", "run", "state", "data", "cache"] {
+        for directory in ["config/voice-input", "run", "state", "data", "cache", "bin"] {
             fs::create_dir_all(root.join(directory)).unwrap();
         }
         fs::write(
@@ -39,7 +43,14 @@ impl Sandbox {
         let child = Command::new(env!("CARGO_BIN_EXE_voice-input"))
             .arg("daemon")
             .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.root.join("bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .env("HOME", &self.root)
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
@@ -56,6 +67,54 @@ impl Sandbox {
             child,
             finished: false,
         }
+    }
+}
+
+impl Sandbox {
+    fn fake_capture(&self) {
+        let program = self.root.join("bin/pw-record");
+        let script = format!(
+            "#!/bin/sh\necho $$ > {}\nwhile :; do\n  dd if=/dev/zero bs=3200 count=1 2>/dev/null\n  sleep 1\ndone\n",
+            self.root.join("capture.pid").display()
+        );
+        fs::write(&program, script).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn wait_capture(&self) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(pid) = fs::read_to_string(self.root.join("capture.pid")) {
+                let pid = pid.trim().parse::<u32>().unwrap();
+                // SAFETY: signal zero only checks for the fake capture process.
+                assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "capture did not start");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn toggle(&self, socket: &PathBuf) {
+        let mut stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .write_all(
+                b"toggle
+",
+            )
+            .unwrap();
+        let mut reply = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut reply)
+            .unwrap();
+        assert_eq!(
+            reply,
+            "recording
+"
+        );
     }
 }
 
@@ -120,6 +179,7 @@ impl Daemon {
     fn signal(&mut self, signal: &str) {
         let signal = match signal {
             "-TERM" => libc::SIGTERM,
+            "-INT" => libc::SIGINT,
             other => panic!("unsupported test signal {other}"),
         };
         // SAFETY: this targets only the child process created by this test.
@@ -189,4 +249,23 @@ async fn sigterm_and_shutdown_clean_the_socket_and_allow_immediate_restart() {
     assert_eq!(reply, voice_input_core::v1::Reply::Ok);
     assert!(restarted.wait_exit().success());
     assert!(!socket.exists());
+}
+
+#[test]
+fn sigint_reaps_an_active_capture() {
+    let sandbox = Sandbox::new();
+    sandbox.fake_capture();
+    let socket = sandbox.socket();
+    let mut daemon = sandbox.spawn();
+    daemon.wait_ready(&socket);
+    sandbox.toggle(&socket);
+    let capture_pid = sandbox.wait_capture();
+
+    daemon.signal("-INT");
+
+    assert!(daemon.wait_exit().success());
+    assert!(!socket.exists());
+    // SAFETY: the fake capture must have been killed and waited for, not
+    // merely detached. Signal zero must fail with ESRCH after reaping.
+    assert_ne!(unsafe { libc::kill(capture_pid as i32, 0) }, 0);
 }
