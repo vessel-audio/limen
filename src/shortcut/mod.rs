@@ -21,6 +21,7 @@ pub(crate) mod desktop_entry;
 pub(crate) mod gnome;
 pub(crate) mod portal;
 pub(crate) mod program;
+pub(crate) mod setup;
 pub(crate) mod status;
 
 use std::fmt;

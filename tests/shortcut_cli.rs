@@ -304,6 +304,22 @@ fn portal_setup_without_a_daemon_defers_and_installs_the_entry() {
 }
 
 #[test]
+fn portal_set_without_a_daemon_defers_without_claiming_confirmation() {
+    let sandbox = Sandbox::new("portal-set-no-daemon");
+    sandbox.write_config("portal");
+    let (code, stdout, stderr) =
+        strings(&sandbox.run("KDE", &["shortcut", "set", "toggle", "Super+Y"]));
+    assert_eq!(
+        (code, stdout, stderr),
+        (
+            0,
+            "The daemon is not running; the change takes effect when it starts.\n".to_string(),
+            String::new(),
+        )
+    );
+}
+
+#[test]
 fn portal_setup_reports_a_cancelled_dialog_from_the_daemon() {
     let sandbox = Sandbox::new("portal-cancelled");
     let status = r#"{"type":"shortcut_status","backend":"portal","session":"cancelled","preferred":{"toggle":"Super+Z","hold":"Super+X"},"actual":{"toggle":null,"hold":null},"last_error":null}"#.to_string();

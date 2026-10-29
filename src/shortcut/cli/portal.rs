@@ -4,24 +4,22 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use tokio::process::Command;
+use anyhow::{Context, Result, anyhow};
 
-use super::{Failure, check_config, check_distinct, gnome, rebind};
-use crate::config::{self, Paths, ShortcutConfig};
+use super::SetupError;
+use crate::config::{Paths, ShortcutConfig};
 use crate::dictation::MIN_HOLD;
-use crate::ipc::{self, v1};
-use crate::shortcut::desktop_entry::{self, APP_ID, Install};
-use crate::shortcut::program::Program;
+use crate::shortcut::desktop_entry::APP_ID;
+use crate::shortcut::setup::daemon_status;
 use crate::shortcut::status::{SessionState, ShortcutStatus, Trigger};
-use crate::shortcut::{Action, Backend, Shortcut};
+use crate::shortcut::{Action, Shortcut};
 
 /// How long setup waits for GNOME, which may be waiting for the user.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(120);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
-pub(super) async fn status(paths: &Paths, configured: ShortcutConfig) -> Result<(), Failure> {
+pub(super) async fn status(paths: &Paths, configured: ShortcutConfig) -> Result<(), SetupError> {
     match daemon_status(paths).await? {
         Some(status) => print_status(&status),
         None => {
@@ -34,41 +32,9 @@ pub(super) async fn status(paths: &Paths, configured: ShortcutConfig) -> Result<
     Ok(())
 }
 
-/// `setup portal`: record the backend and the keys GNOME should suggest,
-/// make the app known to the portal, and wait for GNOME to bind.
-pub(super) async fn setup(
-    paths: &Paths,
-    current: ShortcutConfig,
-    toggle: Option<Shortcut>,
-    hold: Option<Shortcut>,
-) -> Result<(), Failure> {
-    // Keys left out keep what the config says when it is written.
-    let keys = move |config: ShortcutConfig| ShortcutConfig {
-        backend: Backend::Portal,
-        toggle: toggle.unwrap_or(config.toggle),
-        hold: hold.unwrap_or(config.hold),
-    };
-    let wanted = keys(current);
-    check_distinct(wanted.toggle, wanted.hold)?;
-    check_config(paths, &wanted)?;
-    let program = Program::find()?;
-    match desktop_entry::ensure_installed(program.path())? {
-        Install::Installed(path) => {
-            println!("Installed {}.", path.display());
-            if let Program::Unstable(program) = &program {
-                eprintln!(
-                    "warning: {} is in the Nix store and stops working after an upgrade or garbage \
-                     collection; install voice-input into your profile and run setup again",
-                    program.display()
-                );
-            }
-        }
-        Install::Present(_) => {}
-    }
-    // A GNOME custom shortcut on the same key would fire next to the portal's.
-    gnome::clear_ours().await?;
-    config::update_shortcut(&paths.config_file, keys)?;
-    match apply(paths).await? {
+/// Wait for GNOME after the operation layer has requested a rebind.
+pub(super) async fn finish_setup(paths: &Paths) -> Result<(), SetupError> {
+    match wait_for_status(paths).await? {
         Some(status) => {
             print_status(&status);
             check_bound(&status)
@@ -77,38 +43,13 @@ pub(super) async fn setup(
     }
 }
 
-/// `set <action> <KEYS>`: suggest new keys and bind again. GNOME offers
-/// a suggestion only for a shortcut it has not saved yet; otherwise it keeps
-/// what it saved, which `edit` changes.
-pub(super) async fn set(
+/// Wait for GNOME and check that it kept the requested key.
+pub(super) async fn finish_set(
     paths: &Paths,
-    current: ShortcutConfig,
     action: Action,
     keys: Shortcut,
-) -> Result<(), Failure> {
-    let wanted = match action {
-        Action::Toggle => ShortcutConfig {
-            toggle: keys,
-            ..current
-        },
-        Action::Hold => ShortcutConfig {
-            hold: keys,
-            ..current
-        },
-    };
-    check_distinct(wanted.toggle, wanted.hold)?;
-    check_config(paths, &wanted)?;
-    config::update_shortcut(&paths.config_file, |latest| match action {
-        Action::Toggle => ShortcutConfig {
-            toggle: keys,
-            ..latest
-        },
-        Action::Hold => ShortcutConfig {
-            hold: keys,
-            ..latest
-        },
-    })?;
-    let Some(status) = apply(paths).await? else {
+) -> Result<(), SetupError> {
+    let Some(status) = wait_for_status(paths).await? else {
         return Ok(());
     };
     check_bound(&status)?;
@@ -122,7 +63,11 @@ pub(super) async fn set(
 }
 
 /// Check that the binding GNOME actually kept is the one just requested.
-fn confirm_binding(action: Action, keys: Shortcut, actual: Option<Trigger>) -> Result<(), Failure> {
+fn confirm_binding(
+    action: Action,
+    keys: Shortcut,
+    actual: Option<Trigger>,
+) -> Result<(), SetupError> {
     match actual {
         Some(Trigger { shortcuts, .. }) if shortcuts.contains(&keys) => Ok(()),
         Some(Trigger {
@@ -148,34 +93,8 @@ fn confirm_binding(action: Action, keys: Shortcut, actual: Option<Trigger>) -> R
     }
 }
 
-/// `edit`: open the app's page in GNOME Settings, where its keys change.
-pub(super) async fn edit() -> Result<(), Failure> {
-    let mut child = Command::new("gnome-control-center")
-        .args(["applications", APP_ID])
-        .kill_on_drop(true)
-        .spawn()
-        .context("cannot open GNOME Settings; change the keys under Apps → voice-input")?;
-    let status = child
-        .wait()
-        .await
-        .context("cannot wait for GNOME Settings")?;
-    if !status.success() {
-        return Err(anyhow!("gnome-control-center exited with {status}").into());
-    }
-    Ok(())
-}
-
-pub(super) fn clear() -> Result<(), Failure> {
-    Err(anyhow!(
-        "GNOME decides the portal's keys; clear them in GNOME Settings with `voice-input shortcut edit`"
-    )
-    .into())
-}
-
-/// Have the daemon bind again and wait for its answer: the status once it
-/// is no longer binding, or `None` when no daemon runs.
-async fn apply(paths: &Paths) -> Result<Option<ShortcutStatus>> {
-    rebind(paths).await?;
+/// Poll the daemon until GNOME finishes its binding dialog.
+async fn wait_for_status(paths: &Paths) -> Result<Option<ShortcutStatus>, SetupError> {
     let wait = async {
         loop {
             match daemon_status(paths).await? {
@@ -197,19 +116,8 @@ async fn apply(paths: &Paths) -> Result<Option<ShortcutStatus>> {
         })?
 }
 
-/// The daemon's shortcut status, or `None` when it is not running.
-pub(super) async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
-    match ipc::request(paths, &v1::Request::ShortcutStatus).await {
-        Ok(v1::Reply::ShortcutStatus(status)) => Ok(Some(status)),
-        Ok(v1::Reply::Error { message }) => bail!("the daemon could not tell: {message}"),
-        Ok(v1::Reply::Ok) => bail!("the daemon answered something else"),
-        Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 /// Fail unless both actions are bound, saying what to do.
-fn check_bound(status: &ShortcutStatus) -> Result<(), Failure> {
+fn check_bound(status: &ShortcutStatus) -> Result<(), SetupError> {
     match status.session {
         SessionState::Bound
             if status.actual.toggle.is_some() && status.actual.hold.is_some() =>
@@ -287,14 +195,15 @@ fn either(shortcuts: &[Shortcut]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, check_bound, confirm_binding};
+    use super::{check_bound, confirm_binding};
+    use crate::shortcut::setup::SetupError;
     use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
     use crate::shortcut::{Action, Backend, Shortcut};
 
-    fn outcome(result: Result<(), Failure>) -> Result<(), (u8, String)> {
+    fn outcome(result: Result<(), SetupError>) -> Result<(), (u8, String)> {
         result.map_err(|failure| match failure {
-            Failure::Usage(message) => (2, message),
-            Failure::Runtime(error) => (1, format!("{error:#}")),
+            SetupError::Usage { message, .. } => (2, message),
+            SetupError::Runtime { error, .. } => (1, format!("{error:#}")),
         })
     }
 
