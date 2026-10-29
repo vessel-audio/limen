@@ -17,6 +17,25 @@
   vulkan-loader,
 }:
 
+let
+  runtimePipewire =
+    if withGui then
+      pipewire
+    else
+      (pipewire.override {
+        vulkanSupport = false;
+        x11Support = false;
+      }).overrideAttrs
+        (previous: {
+          mesonFlags = previous.mesonFlags ++ [
+            (lib.mesonEnable "ffmpeg" false)
+            (lib.mesonEnable "pw-cat-ffmpeg" false)
+            (lib.mesonEnable "gstreamer" false)
+            (lib.mesonEnable "gstreamer-device-provider" false)
+            (lib.mesonEnable "libcamera" false)
+          ];
+        });
+in
 rustPlatform.buildRustPackage {
   pname = "voice-input";
   version = "0.1.0";
@@ -85,7 +104,7 @@ rustPlatform.buildRustPackage {
     wrapProgram $out/bin/voice-input \
       --prefix PATH : ${
         lib.makeBinPath [
-          pipewire
+          runtimePipewire
           libnotify
         ]
       }       ${lib.optionalString withGui "--prefix LD_LIBRARY_PATH : ${

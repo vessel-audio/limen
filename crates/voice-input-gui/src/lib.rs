@@ -25,15 +25,20 @@ pub fn run(_paths: Paths) -> Result<()> {
     let result = Rc::clone(&opened);
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        *result.borrow_mut() = gpui_kit::open_window(
+        match gpui_kit::open_window(
             WindowOptions {
                 app_id: Some("io.github.Emin017.VoiceInput".to_string()),
                 ..WindowOptions::default()
             },
             cx,
             |_, cx| cx.new(|_| Window),
-        )
-        .err();
+        ) {
+            Ok(_) => {}
+            Err(error) => {
+                *result.borrow_mut() = Some(error);
+                cx.quit();
+            }
+        }
     });
     match opened.borrow_mut().take() {
         Some(error) => Err(error),
