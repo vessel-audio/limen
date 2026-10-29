@@ -61,9 +61,17 @@ pub enum Command {
 #[error("cannot connect to {}; is `voice-input daemon` running?", .0.display())]
 pub struct NotRunning(PathBuf, #[source] std::io::Error);
 
+/// A bound listener whose path is removed if its owner exits early.
 pub(crate) struct BoundSocket {
-    pub listener: UnixListener,
+    pub listener: Option<UnixListener>,
     pub identity: SocketIdentity,
+    paths: Paths,
+}
+
+impl Drop for BoundSocket {
+    fn drop(&mut self) {
+        let _ = self.identity.remove_if_owned(&self.paths);
+    }
 }
 
 /// Filesystem identity of the socket created by one daemon process.
@@ -125,12 +133,14 @@ pub fn bind(paths: &Paths) -> Result<BoundSocket> {
     }
     let listener = UnixListener::bind(&paths.socket)
         .with_context(|| format!("failed to bind {}", paths.socket.display()))?;
+    let socket = BoundSocket {
+        listener: Some(listener),
+        identity: SocketIdentity::for_path(paths)?,
+        paths: paths.clone(),
+    };
     std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to restrict {}", paths.socket.display()))?;
-    Ok(BoundSocket {
-        listener,
-        identity: SocketIdentity::for_path(paths)?,
-    })
+    Ok(socket)
 }
 
 /// Accept connections forever, forwarding parsed commands to the main loop.
@@ -437,7 +447,7 @@ mod tests {
             0o600
         );
         drop(listener);
-        std::fs::remove_file(socket).unwrap();
+        assert!(!socket.exists());
     }
 
     #[tokio::test]
@@ -452,9 +462,9 @@ mod tests {
             log_file: dir.join("daemon.log"),
             cache_dir: dir.join("cache"),
         };
-        let old = bind(&paths).unwrap();
+        let mut old = bind(&paths).unwrap();
         let identity = old.identity;
-        drop(old.listener);
+        drop(old.listener.take());
         let _replacement = bind(&paths).unwrap();
 
         identity.remove_if_owned(&paths).unwrap();

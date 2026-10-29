@@ -40,6 +40,10 @@ impl Sandbox {
     }
 
     fn spawn(&self) -> Daemon {
+        self.spawn_with_environment(&[])
+    }
+
+    fn spawn_with_environment(&self, environment: &[(&str, &str)]) -> Daemon {
         let child = Command::new(env!("CARGO_BIN_EXE_voice-input"))
             .arg("daemon")
             .env_clear()
@@ -61,6 +65,7 @@ impl Sandbox {
             .envs(
                 std::env::var_os("SSL_CERT_FILE").map(|certificate| ("SSL_CERT_FILE", certificate)),
             )
+            .envs(environment.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -271,4 +276,26 @@ fn sigint_reaps_an_active_capture() {
     // SAFETY: the fake capture must have been killed and waited for, not
     // merely detached. Signal zero must fail with ESRCH after reaping.
     assert_ne!(unsafe { libc::kill(capture_pid as i32, 0) }, 0);
+}
+
+#[test]
+fn input_worker_startup_failure_removes_the_socket() {
+    let sandbox = Sandbox::new();
+    fs::write(
+        sandbox.root.join("config/voice-input/config.toml"),
+        "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"test\"\n\n[polish]\nenabled = true\nurl = \"https://127.0.0.1/chat/completions\"\nmodel = \"test\"\napi_key_env = \"DEEPSEEK_API_KEY\"\ntimeout_ms = 5000\n\n[shortcut]\nbackend = \"none\"\ntoggle = \"Super+Z\"\nhold = \"Super+X\"\n",
+    )
+    .unwrap();
+    let empty_certificate = sandbox.root.join("empty-ca.pem");
+    fs::write(&empty_certificate, "").unwrap();
+    let empty_certificate_dir = sandbox.root.join("empty-ca-dir");
+    fs::create_dir(&empty_certificate_dir).unwrap();
+    let mut daemon = sandbox.spawn_with_environment(&[
+        ("DEEPSEEK_API_KEY", "test"),
+        ("SSL_CERT_FILE", empty_certificate.to_str().unwrap()),
+        ("SSL_CERT_DIR", empty_certificate_dir.to_str().unwrap()),
+    ]);
+
+    assert!(!daemon.wait_exit().success());
+    assert!(!sandbox.socket().exists(), "failed startup left a socket");
 }

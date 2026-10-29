@@ -295,37 +295,43 @@ fn apply(view: &mut AppView, _: &ClickEvent, _: &mut Window, cx: &mut Context<Ap
         ),
         false => Ok(preferred.map_or(Shortcut::DEFAULT_HOLD, |keys| keys.hold)),
     };
-    let result = match (toggle, hold) {
-        (Err(error), _) | (_, Err(error)) => Err(error),
-        (Ok(toggle), Ok(hold)) => {
-            let keys = match view.selected_backend {
-                Backend::Portal => Keys {
-                    toggle: Some(toggle),
-                    hold: Some(hold),
-                },
-                Backend::GnomeKeybinding => Keys {
-                    toggle: Some(toggle),
-                    hold: None,
-                },
-                Backend::None => Keys {
-                    toggle: None,
-                    hold: None,
-                },
-            };
-            let _ = view
-                .commands
-                .try_send(BridgeCommand::Shortcut(ShortcutRequest::Setup {
-                    backend: view.selected_backend,
-                    keys,
-                }));
-            Ok(())
-        }
-    };
+    let result = keys_for_backend(view.selected_backend, toggle, hold).map(|keys| {
+        let _ = view
+            .commands
+            .try_send(BridgeCommand::Shortcut(ShortcutRequest::Setup {
+                backend: view.selected_backend,
+                keys,
+            }));
+    });
     if let Err(error) = result {
         view.shortcut_report = Some(Err(crate::bridge::ShortcutFailure {
             report: Default::default(),
             message: error,
         }));
+    }
+}
+
+fn keys_for_backend(
+    backend: Backend,
+    toggle: Result<Shortcut, String>,
+    hold: Result<Shortcut, String>,
+) -> Result<Keys, String> {
+    match backend {
+        Backend::None => Ok(Keys {
+            toggle: None,
+            hold: None,
+        }),
+        Backend::GnomeKeybinding => toggle.map(|toggle| Keys {
+            toggle: Some(toggle),
+            hold: None,
+        }),
+        Backend::Portal => match (toggle, hold) {
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            (Ok(toggle), Ok(hold)) => Ok(Keys {
+                toggle: Some(toggle),
+                hold: Some(hold),
+            }),
+        },
     }
 }
 
@@ -382,5 +388,36 @@ fn format_note(note: &Note) -> String {
         Note::CustomShortcutDisabled(path) => {
             format!("{}: {path}", rust_i18n::t!("note.disabled"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use voice_input_core::{Backend, Keys, Shortcut};
+
+    use super::keys_for_backend;
+
+    #[test]
+    fn backends_ignore_invalid_keys_they_do_not_use() {
+        let invalid = || Err("invalid key".to_string());
+        assert_eq!(
+            keys_for_backend(Backend::None, invalid(), invalid()),
+            Ok(Keys {
+                toggle: None,
+                hold: None,
+            })
+        );
+        assert_eq!(
+            keys_for_backend(
+                Backend::GnomeKeybinding,
+                Ok(Shortcut::DEFAULT_TOGGLE),
+                invalid(),
+            ),
+            Ok(Keys {
+                toggle: Some(Shortcut::DEFAULT_TOGGLE),
+                hold: None,
+            })
+        );
+        assert!(keys_for_backend(Backend::Portal, invalid(), invalid()).is_err());
     }
 }

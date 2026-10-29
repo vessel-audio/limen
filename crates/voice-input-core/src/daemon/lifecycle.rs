@@ -21,7 +21,7 @@ pub(crate) struct ActorExit {
 
 /// Run the resident daemon with the discovered paths and loaded configuration.
 pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
-    let socket = ipc::bind(&paths)?;
+    let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (input_tx, input_reports, input_worker) = input::spawn(&cfg)?;
 
@@ -44,7 +44,11 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
 
     // Do not accept until every actor and snapshot exists.
     let watchers = ipc::Watchers::new(snapshots, shortcut_watch, levels);
-    let accept = ipc::spawn_accept_loop(socket.listener, cmd_tx.clone(), watchers);
+    let accept = ipc::spawn_accept_loop(
+        socket.listener.take().expect("bound socket listener"),
+        cmd_tx.clone(),
+        watchers,
+    );
     notify("voice-input", "daemon started");
     tracing::info!(socket = %paths.socket.display(), "daemon listening");
 
