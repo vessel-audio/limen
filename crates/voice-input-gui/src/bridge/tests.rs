@@ -19,7 +19,7 @@ fn reconnect_backoff_doubles_to_a_cap_and_resets_after_hello() {
         ]
     );
     assert_eq!(backoff.next(), Duration::from_secs(5));
-    backoff.reset();
+    backoff = Backoff::default();
     assert_eq!(backoff.next(), Duration::from_millis(500));
 }
 

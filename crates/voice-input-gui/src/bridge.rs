@@ -99,10 +99,6 @@ impl Backoff {
         self.0 = (self.0 * 2).min(Duration::from_secs(5));
         current
     }
-
-    fn reset(&mut self) {
-        self.0 = Duration::from_millis(500);
-    }
 }
 
 type StartResult = Result<(), StartError>;
@@ -200,7 +196,7 @@ async fn run(
                     Ok(mut candidate) => match tokio::time::timeout(Duration::from_secs(3), candidate.try_next()).await.unwrap_or_else(|_| Err(anyhow::anyhow!("subscription hello timed out"))) {
                         Ok(Some(Push::Hello { protocol, daemon_version })) => {
                             let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version })).await;
-                            backoff.reset();
+                            backoff = Backoff::default();
                             stream = Some(Box::pin(candidate));
                         }
                         Ok(Some(Push::Error { message })) => {

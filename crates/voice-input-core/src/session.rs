@@ -229,6 +229,7 @@ enum Stage {
 
 impl Drop for Active {
     fn drop(&mut self) {
+        self.level.send_replace(Level::SILENCE);
         if let Some(handle) = self.capture.take() {
             handle.abort();
         }
@@ -558,6 +559,23 @@ mod tests {
         });
 
         active.reap_capture().await;
+
+        assert_eq!(*levels.borrow(), Level::SILENCE);
+    }
+
+    #[test]
+    fn dropping_an_active_take_resets_the_level() {
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        let (_tx, pcm) = mpsc::channel(1);
+        let mut active = recording_take(&operations, pcm, []);
+        let (level, levels) = watch::channel(Level::SILENCE);
+        active.level = level;
+        active.level.send_replace(Level {
+            rms: 0.5,
+            dbfs: -6.0,
+        });
+
+        drop(active);
 
         assert_eq!(*levels.borrow(), Level::SILENCE);
     }
