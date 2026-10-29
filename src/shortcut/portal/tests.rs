@@ -89,6 +89,10 @@ struct Script {
     register_error: Option<String>,
     /// The code BindShortcuts responds with; `None` keeps its dialog open.
     bind_response: Option<u32>,
+    /// Hand out request handles that do not follow the portal's path convention.
+    alternate_handles: bool,
+    /// How long BindShortcuts waits before its method returns.
+    bind_delay: Option<Duration>,
 }
 
 impl Default for Script {
@@ -96,6 +100,8 @@ impl Default for Script {
         Self {
             register_error: None,
             bind_response: Some(0),
+            alternate_handles: false,
+            bind_delay: None,
         }
     }
 }
@@ -138,7 +144,7 @@ impl GlobalShortcuts {
     ) -> fdo::Result<OwnedObjectPath> {
         let sender = header.sender().unwrap().to_string();
         let token = |key: &str| String::try_from(options[key].clone()).unwrap();
-        let request = request_path(&sender, &token("handle_token"));
+        let request = self.request_path(&sender, &token("handle_token"));
         let session = format!(
             "{PORTAL_PATH}/session/{}/{}",
             sender.trim_start_matches(':').replace('.', "_"),
@@ -171,7 +177,7 @@ impl GlobalShortcuts {
     ) -> fdo::Result<OwnedObjectPath> {
         let sender = header.sender().unwrap().to_string();
         let token = String::try_from(options["handle_token"].clone()).unwrap();
-        let request = request_path(&sender, &token);
+        let request = self.request_path(&sender, &token);
         self.serve(connection, &request, "").await;
         let ids: Vec<String> = shortcuts.iter().map(|(id, _)| id.clone()).collect();
         self.log
@@ -199,6 +205,10 @@ impl GlobalShortcuts {
                 HashMap::from([("shortcuts", Variant::from(bound))]),
             )
             .await;
+        }
+        let delay = self.script.lock().unwrap().bind_delay;
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
         }
         Ok(OwnedObjectPath::try_from(request).unwrap())
     }
@@ -230,6 +240,13 @@ impl GlobalShortcuts {
 }
 
 impl GlobalShortcuts {
+    fn request_path(&self, sender: &str, token: &str) -> String {
+        match self.script.lock().unwrap().alternate_handles {
+            true => format!("{PORTAL_PATH}/request/elsewhere/{token}"),
+            false => request_path(sender, token),
+        }
+    }
+
     /// Serve the Request at `request` and, unless empty, the Session at
     /// `session`.
     async fn serve(&self, connection: &Connection, request: &str, session: &str) {
@@ -716,4 +733,52 @@ async fn a_bus_that_never_answers_does_not_hold_up_a_rebind() {
         .unwrap();
     assert_eq!(handle.status().session, SessionState::Disabled);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn responses_on_unexpected_request_paths_are_heard() {
+    let bus = PrivateBus::start("alternate").await;
+    let (log, script) = setup();
+    script.lock().unwrap().alternate_handles = true;
+    let _portal = FakePortal::start(&bus, &log, &script).await;
+    let client = Client::start(&bus);
+    // The portal responds on its own path, before the method returns.
+    client.reaches(SessionState::Bound).await;
+}
+
+#[tokio::test]
+async fn a_rebind_during_a_slow_call_closes_the_request_and_the_session() {
+    let bus = PrivateBus::start("slow-call").await;
+    let (log, script) = setup();
+    script.lock().unwrap().bind_delay = Some(Duration::from_secs(3));
+    let _portal = FakePortal::start(&bus, &log, &script).await;
+    let client = Client::start(&bus);
+    logs(&log, "BindShortcuts ", 1).await;
+    let request = logged(&log, "BindShortcuts ")[0]
+        .rsplit(' ')
+        .next()
+        .unwrap()
+        .to_string();
+    let session = session(&log, 0);
+
+    script.lock().unwrap().bind_delay = None;
+    let config = ShortcutConfig {
+        backend: Backend::Portal,
+        ..ShortcutConfig::default()
+    };
+    tokio::time::timeout(WAIT, client.handle.rebind(config))
+        .await
+        .unwrap()
+        .unwrap();
+    client.reaches(SessionState::Bound).await;
+    assert_eq!(
+        [
+            logged(&log, "Request.Close "),
+            logged(&log, "Session.Close ")
+        ],
+        [
+            vec![format!("Request.Close {request}")],
+            vec![format!("Session.Close {session}")]
+        ]
+    );
 }

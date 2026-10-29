@@ -34,26 +34,23 @@ pub(super) fn describe(error: &anyhow::Error) -> String {
     causes.join(": ")
 }
 
-/// A request in flight, and the subscription to its response.
+/// A request in flight, registered before its call so that a stop can
+/// close it even when the call is cancelled.
 pub(super) struct Pending {
     path: OwnedObjectPath,
     kind: Request,
-    pub(super) responses: MessageStream,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum Request {
-    /// `session`: the path the session will have.
-    CreateSession {
-        session: String,
-    },
+    CreateSession,
     BindShortcuts,
 }
 
 impl Request {
     fn method(&self) -> &'static str {
         match self {
-            Self::CreateSession { .. } => "CreateSession",
+            Self::CreateSession => "CreateSession",
             Self::BindShortcuts => "BindShortcuts",
         }
     }
@@ -67,8 +64,10 @@ pub(super) struct Link {
     owner: Option<String>,
     pub(super) owners: Option<MessageStream>,
     pub(super) signals: Option<MessageStream>,
+    /// Every `Response` of the portal, matched to the pending request by path.
+    pub(super) responses: Option<MessageStream>,
     pub(super) session: Option<OwnedObjectPath>,
-    /// `Closed` of the session, once there is one.
+    /// Every session `Closed`, matched to the session by path.
     pub(super) closed: Option<MessageStream>,
     pub(super) pending: Option<Pending>,
     tokens: u32,
@@ -118,14 +117,35 @@ impl Link {
                 .path(PORTAL_PATH),
         )
         .await?;
+        // Without a path filter: a portal that does not follow the request path
+        // convention still has its responses heard, and before the call is made.
+        let responses = subscribe(
+            &connection,
+            MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(PORTAL)
+                .interface(REQUEST)
+                .member("Response"),
+        )
+        .await?;
+        let closed = subscribe(
+            &connection,
+            MatchRule::builder()
+                .msg_type(Type::Signal)
+                .sender(PORTAL)
+                .interface(SESSION)
+                .member("Closed"),
+        )
+        .await?;
         Ok(Self {
             connection,
             unique_name,
             owner,
             owners: Some(owners),
             signals: Some(signals),
+            responses: Some(responses),
             session: None,
-            closed: None,
+            closed: Some(closed),
             pending: None,
             tokens: 0,
         })
@@ -148,19 +168,13 @@ impl Link {
             }
             Call::CreateSession => {
                 let session_token = self.token();
-                let session = protocol::session_path(&self.unique_name, &session_token);
-                // Like a response, a session closed right away must not be missed.
-                self.closed = Some(self.closed_signal(&session).await?);
-                self.request(
-                    Request::CreateSession { session },
-                    |proxy, token| async move {
-                        let options = HashMap::from([
-                            ("handle_token", Variant::from(token)),
-                            ("session_handle_token", Variant::from(session_token)),
-                        ]);
-                        proxy.call("CreateSession", &(options,)).await
-                    },
-                )
+                self.request(Request::CreateSession, |proxy, token| async move {
+                    let options = HashMap::from([
+                        ("handle_token", Variant::from(token)),
+                        ("session_handle_token", Variant::from(session_token)),
+                    ]);
+                    proxy.call("CreateSession", &(options,)).await
+                })
                 .await?;
                 Ok(None)
             }
@@ -193,89 +207,59 @@ impl Link {
         let method = kind.method();
         let token = self.token();
         let path = protocol::request_path(&self.unique_name, &token);
-        let responses = self.responses(&path).await?;
+        // Registered before the call: a stop that cancels the call still closes
+        // the request the portal created for it.
+        self.pending = Some(Pending {
+            path: OwnedObjectPath::try_from(path)?,
+            kind,
+        });
         let proxy = self.proxy(PORTAL_PATH, GLOBAL_SHORTCUTS).await?;
         let handle = tokio::time::timeout(CALL_TIMEOUT, call(proxy, token))
             .await
             .with_context(|| format!("the portal did not answer {method}"))?
             .with_context(|| format!("{method} failed"))?;
-        // A portal older than the request path convention responds elsewhere.
-        let responses = match handle.as_str() == path {
-            true => responses,
-            false => self.responses(handle.as_str()).await?,
-        };
-        self.pending = Some(Pending {
-            path: handle,
-            kind,
-            responses,
-        });
+        // A portal older than the request path convention responds elsewhere:
+        // the subscription has no path filter, so only the pending path moves.
+        self.pending.as_mut().unwrap().path = handle;
         Ok(())
     }
 
-    async fn closed_signal(&self, path: &str) -> Result<MessageStream> {
-        subscribe(
-            &self.connection,
-            MatchRule::builder()
-                .msg_type(Type::Signal)
-                .sender(PORTAL)
-                .interface(SESSION)
-                .member("Closed")
-                .path(path),
-        )
-        .await
-    }
-
-    async fn responses(&self, path: &str) -> Result<MessageStream> {
-        subscribe(
-            &self.connection,
-            MatchRule::builder()
-                .msg_type(Type::Signal)
-                .sender(PORTAL)
-                .interface(REQUEST)
-                .member("Response")
-                .path(path),
-        )
-        .await
-    }
-
-    /// What the response to the pending request says.
-    pub(super) async fn response(&mut self, message: Option<zbus::Result<Message>>) -> Report {
-        let Some(pending) = self.pending.take() else {
-            return Report::Failed("a response without a request".to_string());
-        };
-        let body = match message {
-            Some(Ok(message)) => message.body().deserialize::<(u32, Vardict)>(),
-            Some(Err(_)) | None => return Report::Failed(LOST.to_string()),
-        };
-        let Ok((code, results)) = body else {
-            return Report::Failed(format!(
+    /// What the response to the pending request says; responses of other
+    /// objects are not ours.
+    pub(super) fn response(&mut self, message: &Message) -> Option<Report> {
+        let pending = self.pending.as_ref()?;
+        if message.header().path().map(|path| path.as_str()) != Some(pending.path.as_str()) {
+            return None;
+        }
+        let pending = self.pending.take().unwrap();
+        let Ok((code, results)) = message.body().deserialize::<(u32, Vardict)>() else {
+            return Some(Report::Failed(format!(
                 "the portal sent a malformed {} response",
                 pending.kind.method()
-            ));
+            )));
         };
-        match pending.kind {
-            Request::CreateSession { session: expected } => {
-                match protocol::created_session(code, &results) {
-                    Outcome::Done(session) => {
-                        // A portal older than the path convention put it elsewhere.
-                        if session.as_str() != expected {
-                            match self.closed_signal(session.as_str()).await {
-                                Ok(closed) => self.closed = Some(closed),
-                                Err(error) => return Report::Failed(describe(&error)),
-                            }
-                        }
-                        self.session = Some(session);
-                        Report::SessionCreated
-                    }
-                    Outcome::Cancelled => Report::Cancelled,
-                    Outcome::Failed(error) => Report::Failed(error),
+        Some(match pending.kind {
+            Request::CreateSession => match protocol::created_session(code, &results) {
+                Outcome::Done(session) => {
+                    self.session = Some(session);
+                    Report::SessionCreated
                 }
-            }
+                Outcome::Cancelled => Report::Cancelled,
+                Outcome::Failed(error) => Report::Failed(error),
+            },
             Request::BindShortcuts => match protocol::bound(code, &results) {
                 Outcome::Done(triggers) => Report::Bound(triggers),
                 Outcome::Cancelled => Report::Cancelled,
                 Outcome::Failed(error) => Report::Failed(error),
             },
+        })
+    }
+
+    /// Whether a session `Closed` signal is about our session.
+    pub(super) fn session_closed(&self, message: &Message) -> bool {
+        match (&self.session, message.header().path()) {
+            (Some(session), Some(path)) => path.as_str() == session.as_str(),
+            (Some(_), None) | (None, _) => false,
         }
     }
 
@@ -321,15 +305,13 @@ impl Link {
     /// Close the request in flight, then the session; dropping the
     /// connection afterwards releases whatever is left.
     pub(super) async fn close(self) {
-        let close = async {
-            if let Some(pending) = &self.pending {
-                let _ = self.close_object(&pending.path, REQUEST).await;
-            }
-            if let Some(session) = &self.session {
-                let _ = self.close_object(session, SESSION).await;
-            }
-        };
-        let _ = tokio::time::timeout(CLOSE_TIMEOUT, close).await;
+        if let Some(pending) = &self.pending {
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.close_object(&pending.path, REQUEST))
+                .await;
+        }
+        if let Some(session) = &self.session {
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.close_object(session, SESSION)).await;
+        }
     }
 
     async fn close_object(&self, path: &OwnedObjectPath, interface: &str) -> Result<()> {

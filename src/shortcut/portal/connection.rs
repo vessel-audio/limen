@@ -127,9 +127,17 @@ pub(super) async fn run(
                 }
                 Some(Command::Stop) | None => return link.close().await,
             },
-            message = next(link.pending.as_mut().map(|pending| &mut pending.responses)) => {
-                report(link.response(message).await);
-            }
+            message = next(link.responses.as_mut()) => match message {
+                Some(Ok(message)) => {
+                    if let Some(done) = link.response(&message) {
+                        report(done);
+                    }
+                }
+                Some(Err(_)) | None => {
+                    link.responses = None;
+                    report(Report::Failed(LOST.to_string()));
+                }
+            },
             message = next(link.signals.as_mut()) => match message {
                 Some(Ok(message)) => {
                     if let Some(signal) = link.signal(&message) {
@@ -152,11 +160,18 @@ pub(super) async fn run(
                     report(Report::Failed(LOST.to_string()));
                 }
             },
-            _ = next(link.closed.as_mut()) => {
-                link.closed = None;
-                link.session = None;
-                report(Report::Failed("the portal closed the session".to_string()));
-            }
+            message = next(link.closed.as_mut()) => match message {
+                Some(Ok(message)) => {
+                    if link.session_closed(&message) {
+                        link.session = None;
+                        report(Report::Failed("the portal closed the session".to_string()));
+                    }
+                }
+                Some(Err(_)) | None => {
+                    link.closed = None;
+                    report(Report::Failed(LOST.to_string()));
+                }
+            },
         }
     }
 }

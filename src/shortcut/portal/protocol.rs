@@ -29,12 +29,6 @@ pub(super) fn request_path(unique_name: &str, token: &str) -> String {
     object_path("request", unique_name, token)
 }
 
-/// The path of the Session object that `CreateSession` creates with
-/// `session_handle_token`, by the same convention as [`request_path`].
-pub(super) fn session_path(unique_name: &str, token: &str) -> String {
-    object_path("session", unique_name, token)
-}
-
 fn object_path(kind: &str, unique_name: &str, token: &str) -> String {
     let sender = unique_name.trim_start_matches(':').replace('.', "_");
     format!("{PORTAL_PATH}/{kind}/{sender}/{token}")
@@ -157,7 +151,7 @@ mod tests {
 
     use super::{
         Outcome, OwnerChange, Vardict, bind_argument, bound, created_session, owner_change,
-        request_path, session_path, triggers,
+        request_path, triggers,
     };
     use crate::shortcut::Shortcut;
     use crate::shortcut::status::{PerAction, Trigger};
@@ -182,14 +176,8 @@ mod tests {
     #[test]
     fn request_paths_follow_the_sender_and_token() {
         assert_eq!(
-            [
-                request_path(":1.123", "vi_3"),
-                session_path(":1.123", "vi_2")
-            ],
-            [
-                "/org/freedesktop/portal/desktop/request/1_123/vi_3",
-                "/org/freedesktop/portal/desktop/session/1_123/vi_2",
-            ]
+            request_path(":1.123", "vi_3"),
+            "/org/freedesktop/portal/desktop/request/1_123/vi_3"
         );
     }
 
