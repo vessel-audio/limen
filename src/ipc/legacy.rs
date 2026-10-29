@@ -14,5 +14,5 @@ pub(super) async fn answer(line: &str, commands: &mpsc::Sender<Command>) -> Resu
         "status" => Command::Status(reply),
         other => bail!("unknown request {other:?}"),
     };
-    super::forward(commands, command, answer).await
+    super::forward(commands, command, answer, super::CONN_TIMEOUT).await
 }

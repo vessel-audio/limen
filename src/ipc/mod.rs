@@ -140,12 +140,13 @@ async fn forward<T>(
     cmd_tx: &mpsc::Sender<Command>,
     command: Command,
     answer: oneshot::Receiver<T>,
+    reply_timeout: Duration,
 ) -> Result<T> {
     tokio::time::timeout(CONN_TIMEOUT, cmd_tx.send(command))
         .await
         .context("daemon command queue full")?
         .context("daemon not accepting commands")?;
-    tokio::time::timeout(CONN_TIMEOUT, answer)
+    tokio::time::timeout(reply_timeout, answer)
         .await
         .context("reply timeout")?
         .context("daemon dropped the reply channel")

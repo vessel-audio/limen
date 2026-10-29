@@ -9,6 +9,8 @@
 //! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
 //! | anything that fails                      | `{"type":"error","message":"..."}`       |
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -19,6 +21,9 @@ use crate::shortcut::status::ShortcutStatus;
 
 /// The protocol version this daemon speaks.
 pub(crate) const VERSION: u64 = 1;
+
+/// A rebind may wait for the old portal request and session to close.
+const REBIND_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A request, without its version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,12 +76,12 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Repl
         Err(message) => Reply::Error { message },
         Ok(request) => {
             let (reply, answer) = oneshot::channel();
-            let command = match request {
-                Request::Hold { edge } => Command::Hold(edge, reply),
-                Request::ShortcutRebind => Command::ShortcutRebind(reply),
-                Request::ShortcutStatus => Command::ShortcutStatus(reply),
+            let (command, reply_timeout) = match request {
+                Request::Hold { edge } => (Command::Hold(edge, reply), super::CONN_TIMEOUT),
+                Request::ShortcutRebind => (Command::ShortcutRebind(reply), REBIND_REPLY_TIMEOUT),
+                Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
             };
-            super::forward(commands, command, answer)
+            super::forward(commands, command, answer, reply_timeout)
                 .await
                 .unwrap_or_else(|error| Reply::Error {
                     message: format!("{error:#}"),
@@ -103,7 +108,11 @@ fn parse(text: &str) -> Result<Request, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Envelope, Reply, Request, parse};
+    use std::time::Duration;
+
+    use tokio::sync::mpsc;
+
+    use super::{Envelope, Reply, Request, answer, parse};
     use crate::shortcut::HoldEdge;
 
     #[test]
@@ -180,5 +189,25 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rebind_waits_for_portal_cleanup() {
+        let (commands, mut received) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let Some(super::Command::ShortcutRebind(reply)) = received.recv().await else {
+                panic!("expected a rebind");
+            };
+            // Closing an unanswered request and then the session can take over
+            // the ordinary two-second reply budget.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = reply.send(Reply::Ok);
+        });
+        let answered =
+            tokio::spawn(
+                async move { answer(r#"{"v":1,"type":"shortcut_rebind"}"#, &commands).await },
+            );
+        tokio::time::advance(Duration::from_secs(3)).await;
+        assert_eq!(answered.await.unwrap(), Reply::Ok);
     }
 }
