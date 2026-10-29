@@ -10,10 +10,15 @@
 //! Daemon side spawns one task per connection: a garbage or stalled client
 //! can neither block nor kill the daemon's main loop.
 
+mod client;
 mod legacy;
+mod subscription;
 pub mod v1;
 
-use std::io::ErrorKind;
+pub use client::{request, send, subscribe};
+pub(crate) use subscription::Watchers;
+pub(crate) mod wire;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -43,6 +48,7 @@ pub enum Command {
         reply: oneshot::Sender<v1::Reply>,
     },
     Shutdown,
+    ClearHistory(oneshot::Sender<v1::Reply>),
     Hold(HoldEdge, oneshot::Sender<v1::Reply>),
     ShortcutRebind(oneshot::Sender<v1::Reply>),
     ShortcutStatus(oneshot::Sender<v1::Reply>),
@@ -77,31 +83,46 @@ pub fn bind(paths: &Paths) -> Result<UnixListener> {
 pub fn spawn_accept_loop(
     listener: UnixListener,
     cmd_tx: mpsc::Sender<Command>,
+    watchers: subscription::Watchers,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    tokio::spawn(handle_conn(stream, cmd_tx.clone()));
+            tokio::select! {
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, _)) => {
+                            connections.spawn(handle_conn(stream, cmd_tx.clone(), watchers.clone()));
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "accept failed");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "accept failed");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+                _ = connections.join_next(), if !connections.is_empty() => {}
             }
         }
     })
 }
 
-async fn handle_conn(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) {
-    if let Err(e) = handle_conn_inner(stream, cmd_tx).await {
+async fn handle_conn(
+    stream: UnixStream,
+    cmd_tx: mpsc::Sender<Command>,
+    watchers: subscription::Watchers,
+) {
+    if let Err(e) = handle_conn_inner(stream, cmd_tx, watchers).await {
         tracing::debug!(error = %format!("{e:#}"), "ipc connection failed");
     }
 }
 
-async fn handle_conn_inner(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) -> Result<()> {
-    let (read, mut write) = stream.into_split();
-    let request = tokio::time::timeout(CONN_TIMEOUT, read_request(read))
+async fn handle_conn_inner(
+    stream: UnixStream,
+    cmd_tx: mpsc::Sender<Command>,
+    watchers: subscription::Watchers,
+) -> Result<()> {
+    let (mut read, mut write) = stream.into_split();
+    let request = tokio::time::timeout(CONN_TIMEOUT, read_request(&mut read))
         .await
         .context("read timeout")??;
     let reply = match request {
@@ -119,6 +140,9 @@ async fn handle_conn_inner(stream: UnixStream, cmd_tx: mpsc::Sender<Command>) ->
                 match text.starts_with('{') {
                     true => match v1::answer(text, &cmd_tx).await {
                         v1::Action::Reply(reply) => reply.to_line(),
+                        v1::Action::Subscribe => {
+                            return subscription::run(read, write, watchers).await;
+                        }
                         v1::Action::Shutdown => {
                             write.write_all(b"{\"type\":\"ok\"}\n").await?;
                             write.flush().await?;
@@ -176,35 +200,6 @@ async fn forward<T>(
         .context("daemon dropped the reply channel")
 }
 
-/// Client side of the legacy protocol (`toggle` / `status` subcommands).
-pub async fn send(paths: &Paths, request: &str) -> Result<String> {
-    let stream = UnixStream::connect(&paths.socket)
-        .await
-        .map_err(|error| match error.kind() {
-            ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
-                anyhow::Error::new(NotRunning(paths.socket.clone(), error))
-            }
-            _ => anyhow::Error::new(error)
-                .context(format!("cannot connect to {}", paths.socket.display())),
-        })?;
-    let (read, mut write) = stream.into_split();
-    write.write_all(request.as_bytes()).await?;
-    write.write_all(b"\n").await?;
-    let mut line = String::new();
-    let n = BufReader::new(read).read_line(&mut line).await?;
-    if n == 0 {
-        bail!("daemon closed the connection without a reply");
-    }
-    Ok(line.trim().to_string())
-}
-
-/// Client side of protocol v1.
-pub async fn request(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> {
-    let line = serde_json::to_string(&v1::Envelope::new(request))?;
-    let reply = send(paths, &line).await?;
-    serde_json::from_str(&reply).with_context(|| format!("invalid reply from the daemon: {reply}"))
-}
-
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -214,6 +209,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+    use super::subscription::Watchers;
     use super::{Command, MAX_REQUEST_BYTES, NotRunning, bind, handle_conn, send, v1};
     use crate::config::Paths;
 
@@ -230,7 +226,8 @@ mod tests {
                         let _ = reply.send("idle".to_string());
                     }
                     Command::Shutdown => {}
-                    Command::Start(reply)
+                    Command::ClearHistory(reply)
+                    | Command::Start(reply)
                     | Command::Stop { reply, .. }
                     | Command::Hold(_, reply)
                     | Command::ShortcutRebind(reply)
@@ -247,7 +244,7 @@ mod tests {
     /// wrote back before closing it.
     async fn exchange(request: &[u8]) -> String {
         let (mut client, server) = UnixStream::pair().unwrap();
-        tokio::spawn(handle_conn(server, idle_daemon()));
+        tokio::spawn(handle_conn(server, idle_daemon(), Watchers::idle()));
         client.write_all(request).await.unwrap();
         client.shutdown().await.unwrap();
         let mut reply = String::new();
@@ -393,7 +390,7 @@ mod tests {
     async fn shutdown_is_acknowledged_before_the_command_is_forwarded() {
         let (mut client, server) = UnixStream::pair().unwrap();
         let (commands, mut received) = mpsc::channel(1);
-        tokio::spawn(handle_conn(server, commands));
+        tokio::spawn(handle_conn(server, commands, Watchers::idle()));
         client
             .write_all(
                 br#"{"v":1,"type":"shutdown"}

@@ -30,8 +30,9 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let (activation_tx, activations) = mpsc::unbounded_channel();
     let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
-    let (projection, _snapshots) = Projection::new(&cfg);
+    let (projection, snapshots) = Projection::new(&cfg);
     let (session, levels) = SessionHandle::spawn(cfg, session_report_tx);
+    let shortcut_watch = shortcuts.subscribe();
     let actor = DictationActor::new(
         session,
         input_tx,
@@ -42,7 +43,8 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     );
 
     // Do not accept until every actor and snapshot exists.
-    let accept = ipc::spawn_accept_loop(listener, cmd_tx.clone());
+    let watchers = ipc::Watchers::new(snapshots, shortcut_watch, levels);
+    let accept = ipc::spawn_accept_loop(listener, cmd_tx.clone(), watchers);
     notify("voice-input", "daemon started");
     tracing::info!(socket = %paths.socket.display(), "daemon listening");
 
@@ -75,6 +77,5 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
                 .with_context(|| format!("failed to remove socket {}", paths.socket.display()));
         }
     }
-    drop(levels);
     exit.result
 }

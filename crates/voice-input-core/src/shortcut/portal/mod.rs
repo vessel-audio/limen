@@ -110,6 +110,10 @@ impl ShortcutHandle {
         }
     }
 
+    pub(crate) fn subscribe(&self) -> watch::Receiver<ShortcutStatus> {
+        self.status.clone()
+    }
+
     pub(crate) fn status(&self) -> ShortcutStatus {
         self.status.borrow().clone()
     }

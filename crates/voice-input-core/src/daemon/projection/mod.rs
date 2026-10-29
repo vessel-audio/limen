@@ -172,7 +172,6 @@ impl Projection {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn clear_history(&mut self) {
         self.snapshot
             .history

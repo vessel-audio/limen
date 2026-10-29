@@ -24,7 +24,8 @@ pub use daemon::snapshot::{
 };
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
-pub use ipc::{request, send, v1};
+pub use ipc::wire::{Push, WireSnapshot};
+pub use ipc::{request, send, subscribe, v1};
 pub use provider::probe;
 pub use shortcut::desktop_entry::APP_ID;
 pub use shortcut::program::Program;

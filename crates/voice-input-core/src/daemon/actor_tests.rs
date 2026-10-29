@@ -1,9 +1,13 @@
 use super::input::{InputJob, InputReport};
+use super::projection::Completion;
 use super::snapshot::HistoryOutcome;
 use super::tests::{Senders, harness, mailboxes, spawn_loop, status};
 use super::{DictationActor, ReplyTarget};
 use crate::dictation::{Event, InputOutcome};
-use crate::ipc::v1::{Delivery, Reply};
+use crate::ipc::{
+    self,
+    v1::{Delivery, Reply},
+};
 use tokio::sync::oneshot;
 
 async fn wait_for_status(senders: &Senders, expected: &str) {
@@ -377,4 +381,35 @@ async fn keep_does_not_leak_into_the_next_shortcut_stopped_take() {
         harness._snapshots.borrow().history[1].outcome,
         HistoryOutcome::Committed
     ));
+}
+
+#[tokio::test]
+async fn clear_history_removes_completed_entries_and_replies_ok() {
+    let mut harness = harness();
+    start_recording(&mut harness.actor);
+    harness
+        .actor
+        .dispatch(Event::Toggle, ReplyTarget::NotRequested);
+    harness.actor.dispatch(
+        Event::Transcript("first".to_string()),
+        ReplyTarget::NotRequested,
+    );
+    harness
+        .actor
+        .projection
+        .complete(Some(1), "first".to_string(), Completion::Committed);
+    harness.actor.projection.queue("pending", 2);
+    let senders = spawn_loop(harness.actor);
+    let (reply, answer) = oneshot::channel();
+    senders
+        .commands
+        .send(ipc::Command::ClearHistory(reply))
+        .await
+        .unwrap();
+
+    assert_eq!(answer.await.unwrap(), Reply::Ok);
+    let history = &harness._snapshots.borrow().history;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, 2);
+    assert!(matches!(history[0].outcome, HistoryOutcome::Pending));
 }

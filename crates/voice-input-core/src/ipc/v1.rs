@@ -5,6 +5,11 @@
 //! |------------------------------------------|------------------------------------------|
 //! | `{"v":1,"type":"hold","edge":"press"}`   | `{"type":"ok"}`, before the take starts  |
 //! | `{"v":1,"type":"hold","edge":"release"}` | `{"type":"ok"}`                          |
+//! | `{"v":1,"type":"start"}`                 | `{"type":"accepted","take":N}`          |
+//! | `{"v":1,"type":"stop","delivery":...}`   | `{"type":"accepted","take":N}`          |
+//! | `{"v":1,"type":"clear_history"}`         | `{"type":"ok"}`                          |
+//! | `{"v":1,"type":"shutdown"}`              | `{"type":"ok"}`, then stop               |
+//! | `{"v":1,"type":"subscribe"}`             | hello, snapshots, and levels             |
 //! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` once the new state shows |
 //! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
 //! | anything that fails                      | `{"type":"error","message":"..."}`       |
@@ -40,8 +45,12 @@ pub enum Delivery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// Subscribe to hello, coalesced snapshots, and recording levels.
+    Subscribe,
     /// Stop the daemon after the connection handler acknowledges the request.
     Shutdown,
+    /// Remove completed history while retaining pending entries.
+    ClearHistory,
     /// Start a take, or queue one behind output that is finishing.
     Start,
     /// Stop the current recording with the requested delivery mode.
@@ -96,6 +105,7 @@ impl<'a> Envelope<'a> {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Reply(Box<Reply>),
+    Subscribe,
     Shutdown,
 }
 
@@ -103,11 +113,15 @@ pub(super) enum Action {
 pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Action {
     match parse(text) {
         Err(message) => Action::Reply(Box::new(Reply::Error { message })),
+        Ok(Request::Subscribe) => Action::Subscribe,
         Ok(Request::Shutdown) => Action::Shutdown,
         Ok(request) => {
             let (reply, answer) = oneshot::channel();
             let (command, reply_timeout) = match request {
-                Request::Shutdown => unreachable!("shutdown is handled before command dispatch"),
+                Request::Subscribe | Request::Shutdown => {
+                    unreachable!("long-lived requests are handled before command dispatch")
+                }
+                Request::ClearHistory => (Command::ClearHistory(reply), super::CONN_TIMEOUT),
                 Request::Start => (Command::Start(reply), super::CONN_TIMEOUT),
                 Request::Stop { delivery } => {
                     (Command::Stop { delivery, reply }, super::CONN_TIMEOUT)
@@ -239,6 +253,7 @@ mod tests {
     fn invalid_requests_are_errors() {
         for text in [
             r#"{"v":1,"type":"dance"}"#,
+            r#"{"v":1,"type":"toggle"}"#,
             r#"{"v":1,"type":"hold","edge":"down"}"#,
             r#"{"v":1,"type":"hold""#,
         ] {

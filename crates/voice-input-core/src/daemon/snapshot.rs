@@ -8,7 +8,6 @@ use crate::dictation::DictationState;
 pub(crate) const FIELD_CAP: usize = 64 * 1024;
 pub(crate) const ERROR_CAP: usize = 4 * 1024;
 pub(crate) const CONFIG_CAP: usize = 256;
-#[cfg(test)]
 pub(crate) const MAX_PUSH_BYTES: usize = 8 * 1024 * 1024;
 
 /// A complete view of the daemon at one actor-message boundary.

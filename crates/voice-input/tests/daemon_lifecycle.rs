@@ -1,5 +1,6 @@
 //! Real-daemon shutdown coverage with no desktop portal or user state.
 
+use futures_util::TryStreamExt as _;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -161,6 +162,22 @@ async fn sigterm_and_shutdown_clean_the_socket_and_allow_immediate_restart() {
         log_file: sandbox.root.join("state/voice-input/daemon.log"),
         cache_dir: sandbox.root.join("cache/voice-input"),
     };
+    let mut subscription = voice_input_core::subscribe(&paths).await.unwrap();
+    assert!(matches!(
+        subscription.try_next().await.unwrap(),
+        Some(voice_input_core::Push::Hello { protocol: 1, .. })
+    ));
+    assert!(matches!(
+        subscription.try_next().await.unwrap(),
+        Some(voice_input_core::Push::Snapshot(snapshot))
+            if snapshot.seq == 1
+                && matches!(
+                    snapshot.state.dictation.state,
+                    voice_input_core::DictationState::Idle
+                )
+    ));
+    drop(subscription);
+
     let reply = voice_input_core::request(&paths, &voice_input_core::v1::Request::Shutdown)
         .await
         .unwrap();

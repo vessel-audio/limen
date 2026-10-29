@@ -350,6 +350,11 @@ impl DictationActor {
                     let Some(cmd) = cmd else { anyhow::bail!("ipc accept loop died") };
                     match cmd {
                         ipc::Command::Shutdown => return Ok(()),
+                        ipc::Command::ClearHistory(reply) => {
+                            self.projection.clear_history();
+                            self.projection.publish(self.dictation.view(), unix_ms());
+                            let _ = reply.send(ipc::v1::Reply::Ok);
+                        }
                         ipc::Command::Status(reply) => {
                             let _ = reply.send(self.dictation.label().to_string());
                         }
