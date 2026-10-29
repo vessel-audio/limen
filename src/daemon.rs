@@ -840,24 +840,44 @@ mod tests {
     async fn after_a_timeout_only_a_real_release_reenables_holding() {
         let mut harness = harness();
         start_hold(&mut harness.actor);
-        harness
-            .actor
-            .dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
+        let senders = spawn_loop(harness.actor);
+        // The actual deadline branch stops the take.
         assert_eq!(
-            sent(&mut harness.session),
-            [SessionCommand::Start, SessionCommand::Stop]
+            [harness.session.recv().await, harness.session.recv().await],
+            [Some(SessionCommand::Start), Some(SessionCommand::Stop)]
         );
+        senders
+            .session_reports
+            .send(Event::ProviderCompleted)
+            .unwrap();
+        assert_eq!(harness.session.recv().await, Some(SessionCommand::Teardown));
 
         // A repeated or fresh press cannot be distinguished safely after the
         // release was lost, so it must not start another take.
-        harness
-            .actor
-            .dispatch(Event::ProviderCompleted, ReplyTarget::NotRequested);
-        harness.actor.hold(HoldEdge::Press);
-        assert_eq!(sent(&mut harness.session), [SessionCommand::Teardown]);
+        senders
+            .activations
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Press),
+                received_at: Instant::now(),
+            })
+            .unwrap();
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(sent(&mut harness.session), []);
 
-        harness.actor.hold(HoldEdge::Release);
-        harness.actor.hold(HoldEdge::Press);
-        assert_eq!(sent(&mut harness.session), [SessionCommand::Start]);
+        senders
+            .activations
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Release),
+                received_at: Instant::now(),
+            })
+            .unwrap();
+        senders
+            .activations
+            .send(ActivationReceipt {
+                activation: Activation::Hold(HoldEdge::Press),
+                received_at: Instant::now(),
+            })
+            .unwrap();
+        assert_eq!(harness.session.recv().await, Some(SessionCommand::Start));
     }
 }
