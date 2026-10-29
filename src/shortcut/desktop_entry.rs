@@ -11,7 +11,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// The app ID the portal knows the daemon by.
 pub(crate) const APP_ID: &str = "io.github.Emin017.VoiceInput";
@@ -45,9 +45,19 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
     let found = std::iter::once(home)
         .chain(system.iter().map(PathBuf::as_path))
         .map(|dir| dir.join("applications").join(&name))
-        .find(|path| path.exists());
+        .find_map(|path| match fs::symlink_metadata(&path) {
+            Ok(_) if path.is_file() => Some(Ok(Install::Present(path))),
+            Ok(_) => Some(Err(anyhow!(
+                "{} exists but is not a desktop file (dangling symlink or non-file); move it aside and run setup again",
+                path.display()
+            ))),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => Some(Err(error).with_context(|| {
+                format!("failed to inspect {}", path.display())
+            })),
+        });
     match found {
-        Some(path) => Ok(Install::Present(path)),
+        Some(result) => result,
         None => {
             let dir = home.join("applications");
             fs::create_dir_all(&dir)
@@ -69,7 +79,7 @@ fn install(home: &Path, system: &[PathBuf], program: &Path) -> Result<Install> {
                 })
                 .and_then(|()| match fs::hard_link(&temp, &path) {
                     Ok(()) => Ok(Install::Installed(path.clone())),
-                    Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => {
                         Ok(Install::Present(path.clone()))
                     }
                     Err(error) => Err(error),
@@ -138,6 +148,7 @@ fn exec_arg(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
     use super::{APP_ID, ENTRY, Install, entry_for, exec_arg, install};
@@ -227,6 +238,28 @@ mod tests {
         assert_eq!(
             fs::read_to_string(applications.join(&name)).unwrap(),
             entry_for(Path::new("/bin/voice-input"))
+        );
+    }
+
+    #[test]
+    fn a_dangling_entry_symlink_is_an_error_not_an_installation() {
+        let root = std::env::temp_dir().join(format!(
+            "voice-input-desktop-dangling-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let applications = root.join("home").join("applications");
+        fs::create_dir_all(&applications).unwrap();
+        let path = applications.join(format!("{APP_ID}.desktop"));
+        symlink(root.join("missing.desktop"), &path).unwrap();
+
+        let error = install(&root.join("home"), &[], Path::new("/bin/voice-input")).unwrap_err();
+        assert!(error.to_string().contains("dangling symlink"), "{error:#}");
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
         );
     }
 }
