@@ -17,7 +17,7 @@ use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Variant, fdo, 
 use super::protocol::{PORTAL, PORTAL_PATH, request_path};
 use super::{Bus, ShortcutHandle};
 use crate::config::ShortcutConfig;
-use crate::shortcut::status::{PerAction, SessionState, Trigger};
+use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
 use crate::shortcut::{Activation, ActivationReceipt, Backend, HoldEdge};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -484,6 +484,23 @@ async fn logs(log: &Log, prefix: &str, count: usize) {
         .unwrap_or_else(|_| panic!("{prefix} logged fewer than {count} times: {log:?}"));
 }
 
+fn expected_status(
+    backend: Backend,
+    session: SessionState,
+    actual: PerAction<Option<Trigger>>,
+) -> ShortcutStatus {
+    ShortcutStatus {
+        backend,
+        session,
+        preferred: PerAction {
+            toggle: ShortcutConfig::default().toggle,
+            hold: ShortcutConfig::default().hold,
+        },
+        actual,
+        last_error: None,
+    }
+}
+
 fn setup() -> (Log, Arc<Mutex<Script>>) {
     (Log::default(), Arc::new(Mutex::new(Script::default())))
 }
@@ -496,11 +513,15 @@ async fn a_response_sent_before_the_call_returns_still_binds() {
     let mut client = Client::start(&bus);
     client.reaches(SessionState::Bound).await;
     assert_eq!(
-        client.handle.status().actual,
-        PerAction {
-            toggle: Some(Trigger::new("Press <Super>z".to_string())),
-            hold: Some(Trigger::new("Press <Super>x".to_string())),
-        }
+        client.handle.status(),
+        expected_status(
+            Backend::Portal,
+            SessionState::Bound,
+            PerAction {
+                toggle: Some(Trigger::new("Press <Super>z".to_string())),
+                hold: Some(Trigger::new("Press <Super>x".to_string())),
+            }
+        )
     );
     assert_eq!(
         calls(&log),
@@ -730,7 +751,10 @@ async fn a_bus_that_never_answers_does_not_hold_up_a_rebind() {
         .await
         .expect("the rebind waited for the bus")
         .unwrap();
-    assert_eq!(handle.status().session, SessionState::Disabled);
+    assert_eq!(
+        handle.status(),
+        expected_status(Backend::None, SessionState::Disabled, PerAction::default())
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
