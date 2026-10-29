@@ -15,6 +15,7 @@
   libxcb,
   wayland,
   vulkan-loader,
+  libGL,
 }:
 
 let
@@ -111,6 +112,7 @@ rustPlatform.buildRustPackage {
         lib.makeLibraryPath [
           wayland
           vulkan-loader
+          libGL
         ]
       }"}
   '';
