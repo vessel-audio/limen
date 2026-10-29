@@ -40,7 +40,7 @@ impl Polisher {
         Self::new(config.clone(), api_key)
     }
 
-    fn new(config: PolishConfig, api_key: String) -> Result<Self> {
+    pub(crate) fn new(config: PolishConfig, api_key: String) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
             .redirect(reqwest::redirect::Policy::none())
