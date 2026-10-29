@@ -135,7 +135,7 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), Failure
             (Backend::None, _) => Err(not_set_up()),
         },
         ShortcutCommand::Edit => match current.backend {
-            Backend::Portal => portal::edit(),
+            Backend::Portal => portal::edit().await,
             Backend::GnomeKeybinding => {
                 Err(anyhow!("change the key with `voice-input shortcut set toggle <KEYS>`").into())
             }

@@ -107,11 +107,15 @@ pub(super) async fn set(
         Action::Toggle => status.actual.toggle,
         Action::Hold => status.actual.hold,
     };
+    confirm_binding(action, keys, actual)?;
+    println!("{}: {keys}", action.id());
+    Ok(())
+}
+
+/// Check that the binding GNOME actually kept is the one just requested.
+fn confirm_binding(action: Action, keys: Shortcut, actual: Option<Trigger>) -> Result<(), Failure> {
     match actual {
-        Some(Trigger { shortcuts, .. }) if shortcuts.contains(&keys) => {
-            println!("{}: {keys}", action.id());
-            Ok(())
-        }
+        Some(Trigger { shortcuts, .. }) if shortcuts.contains(&keys) => Ok(()),
         Some(Trigger {
             description,
             shortcuts,
@@ -136,11 +140,19 @@ pub(super) async fn set(
 }
 
 /// `edit`: open the app's page in GNOME Settings, where its keys change.
-pub(super) fn edit() -> Result<(), Failure> {
-    Command::new("gnome-control-center")
+pub(super) async fn edit() -> Result<(), Failure> {
+    let mut child = Command::new("gnome-control-center")
         .args(["applications", APP_ID])
+        .kill_on_drop(true)
         .spawn()
         .context("cannot open GNOME Settings; change the keys under Apps → voice-input")?;
+    let status = child
+        .wait()
+        .await
+        .context("cannot wait for GNOME Settings")?;
+    if !status.success() {
+        return Err(anyhow!("gnome-control-center exited with {status}").into());
+    }
     Ok(())
 }
 
@@ -221,6 +233,16 @@ fn print_status(status: &ShortcutStatus) {
     if let Some(error) = &status.last_error {
         println!("error:    {error}");
     }
+    match status.session {
+        SessionState::Failed => println!(
+            "next:     retry with `voice-input shortcut setup portal`, or use \
+             `voice-input shortcut setup gnome-keybinding` if GlobalShortcuts is unavailable"
+        ),
+        SessionState::Disabled
+        | SessionState::Binding
+        | SessionState::Bound
+        | SessionState::Cancelled => {}
+    }
     let key = |actual: &Option<Trigger>, preferred: Shortcut| match actual {
         Some(Trigger { shortcuts, .. }) if !shortcuts.is_empty() => either(shortcuts),
         Some(Trigger { description, .. }) => description.clone(),
@@ -244,4 +266,103 @@ fn either(shortcuts: &[Shortcut]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(" or ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Failure, check_bound, confirm_binding};
+    use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
+    use crate::shortcut::{Action, Backend, Shortcut};
+
+    fn outcome(result: Result<(), Failure>) -> Result<(), (u8, String)> {
+        result.map_err(|failure| match failure {
+            Failure::Usage(message) => (2, message),
+            Failure::Runtime(error) => (1, format!("{error:#}")),
+        })
+    }
+
+    fn keys(text: &str) -> Shortcut {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn set_accepts_only_the_binding_gnome_actually_kept() {
+        let requested = keys("Super+Y");
+        assert_eq!(
+            outcome(confirm_binding(
+                Action::Toggle,
+                requested,
+                Some(Trigger::new("Press <Super>y or <Control>F9".to_string())),
+            )),
+            Ok(())
+        );
+        assert_eq!(
+            outcome(confirm_binding(
+                Action::Toggle,
+                requested,
+                Some(Trigger::new("Press <Super>z".to_string())),
+            )),
+            Err((
+                1,
+                "GNOME kept the saved binding Super+Z; change it with `voice-input shortcut edit`"
+                    .to_string(),
+            ))
+        );
+        assert_eq!(
+            outcome(confirm_binding(
+                Action::Hold,
+                requested,
+                Some(Trigger::new("<Super>yni bosing".to_string())),
+            )),
+            Err((
+                1,
+                "GNOME bound hold as \"<Super>yni bosing\", which could not be confirmed as \
+                 Super+Y; check it with `voice-input shortcut edit`"
+                    .to_string(),
+            ))
+        );
+        assert_eq!(
+            outcome(confirm_binding(Action::Hold, requested, None)),
+            Err((
+                1,
+                "GNOME did not bind hold; check it with `voice-input shortcut edit`".to_string(),
+            ))
+        );
+    }
+
+    fn status(session: SessionState) -> ShortcutStatus {
+        ShortcutStatus {
+            backend: Backend::Portal,
+            session,
+            preferred: PerAction {
+                toggle: Shortcut::DEFAULT_TOGGLE,
+                hold: Shortcut::DEFAULT_HOLD,
+            },
+            actual: PerAction::default(),
+            last_error: match session {
+                SessionState::Failed => Some("no portal".to_string()),
+                _ => None,
+            },
+        }
+    }
+
+    #[test]
+    fn setup_result_explains_cancelled_and_failed_binding() {
+        assert_eq!(outcome(check_bound(&status(SessionState::Bound))), Ok(()));
+        for session in [
+            SessionState::Cancelled,
+            SessionState::Failed,
+            SessionState::Disabled,
+            SessionState::Binding,
+        ] {
+            let error = outcome(check_bound(&status(session))).unwrap_err();
+            assert_eq!(error.0, 1, "{session:?}");
+            match session {
+                SessionState::Cancelled | SessionState::Failed => {
+                    assert!(error.1.contains("setup portal"), "{error:?}");
+                }
+                SessionState::Disabled | SessionState::Binding | SessionState::Bound => {}
+            }
+        }
+    }
 }
