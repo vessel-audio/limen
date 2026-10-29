@@ -118,13 +118,6 @@ pub(super) async fn bind(
         return Err(restore_portal(paths, previous, error).await);
     }
     if let Err(error) = gsettings::apply_setup(&dconf, &before, &plan).await {
-        if let Err(rollback_error) = gsettings::rollback_setup(&dconf, &before, &plan).await {
-            return Err(error
-                .context(format!(
-                    "rolling back the GNOME shortcut also failed: {rollback_error:#}"
-                ))
-                .into());
-        }
         if let Some(previous) = previous_portal {
             return Err(restore_portal(paths, previous, error).await);
         }

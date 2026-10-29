@@ -156,39 +156,49 @@ async fn check_list(dconf: &impl Dconf, expected: &[String]) -> Result<()> {
     }
 }
 
-/// Write `setup`, planned from `read`.
+/// Write `setup`, planned from `read`. If anything fails after the first
+/// field write, its partial changes are rolled back before returning the
+/// error. A failure of the pre-write list check writes and rolls back nothing.
 pub(crate) async fn apply_setup(
     dconf: &impl Dconf,
     read: &Keybindings,
     setup: &Setup,
 ) -> Result<()> {
     check_list(dconf, &read.list).await?;
-    let schema = entry_schema(&setup.path);
-    if let Some(name) = &setup.name {
-        dconf.set(&schema, "name", &gvariant::string(name)).await?;
+    let written = async {
+        let schema = entry_schema(&setup.path);
+        if let Some(name) = &setup.name {
+            dconf.set(&schema, "name", &gvariant::string(name)).await?;
+        }
+        dconf
+            .set(&schema, "command", &gvariant::string(&setup.command))
+            .await?;
+        dconf
+            .set(&schema, "binding", &gvariant::string(&setup.binding))
+            .await?;
+        // Also for an entry already listed: it must still be listed now.
+        check_list(dconf, &read.list).await?;
+        match &setup.list {
+            Some(list) => dconf.set(MEDIA_KEYS, LIST, &gvariant::strings(list)).await,
+            None => Ok(()),
+        }
     }
-    dconf
-        .set(&schema, "command", &gvariant::string(&setup.command))
-        .await?;
-    dconf
-        .set(&schema, "binding", &gvariant::string(&setup.binding))
-        .await?;
-    // Also for an entry already listed: it must still be listed now.
-    check_list(dconf, &read.list).await?;
-    match &setup.list {
-        Some(list) => dconf.set(MEDIA_KEYS, LIST, &gvariant::strings(list)).await,
-        None => Ok(()),
+    .await;
+    match written {
+        Ok(()) => Ok(()),
+        Err(error) => match rollback_setup(dconf, read, setup).await {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(error.context(format!(
+                "rolling back the GNOME shortcut also failed: {rollback_error:#}"
+            ))),
+        },
     }
 }
 
 /// Undo the parts of `setup` that may have been written before a failure.
 /// Other applications' list changes are preserved. A new entry is disabled
 /// before removing only its path; an existing entry gets its old fields back.
-pub(crate) async fn rollback_setup(
-    dconf: &impl Dconf,
-    read: &Keybindings,
-    setup: &Setup,
-) -> Result<()> {
+async fn rollback_setup(dconf: &impl Dconf, read: &Keybindings, setup: &Setup) -> Result<()> {
     let schema = entry_schema(&setup.path);
     match read.entries.iter().find(|entry| entry.path == setup.path) {
         Some(original) => {
@@ -280,7 +290,7 @@ mod tests {
 
     use super::{
         CUSTOM_KEYBINDING, Dconf, KEYBINDING_SCHEMAS, Keybindings, LIST, MEDIA_KEYS, apply_clear,
-        apply_setup, find_conflicts, read, rollback_setup,
+        apply_setup, find_conflicts, read,
     };
     use crate::shortcut::gnome::tests::{PREFIX, paths, wechat};
     use crate::shortcut::gnome::{
@@ -451,6 +461,7 @@ mod tests {
                 "set name 'voice-input dictation'",
                 "set command '/bin/voice-input toggle'",
                 "set binding '<Super>z'",
+                "set binding ''",
             ]
         );
     }
@@ -544,8 +555,6 @@ mod tests {
             "/new/voice-input toggle".to_string(),
         );
         assert!(apply_setup(&dconf, &before, &plan).await.is_err());
-
-        rollback_setup(&dconf, &before, &plan).await.unwrap();
 
         assert_eq!(
             dconf.state().await,
