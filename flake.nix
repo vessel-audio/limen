@@ -43,7 +43,8 @@
         in
         {
           packages = rec {
-            voice-input = pkgs.callPackage ./nix/pkgs/voice-input.nix { };
+            voice-input = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = true; };
+            headless = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = false; };
             default = voice-input;
           };
 
@@ -75,11 +76,16 @@
                 ;
             };
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.wayland
+              pkgs.vulkan-loader
+            ];
           };
 
           formatter = treefmtEval.config.build.wrapper;
           checks = {
             package = self'.packages.default;
+            package-headless = self'.packages.headless;
             formatting = treefmtEval.config.build.check self;
           };
         };

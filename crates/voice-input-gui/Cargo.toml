@@ -1,0 +1,9 @@
+[package]
+name = "voice-input-gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui-kit.workspace = true
+voice-input-core.workspace = true

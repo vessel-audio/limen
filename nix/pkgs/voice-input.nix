@@ -1,4 +1,5 @@
 {
+  withGui ? true,
   lib,
   rustPlatform,
   makeWrapper,
@@ -7,6 +8,13 @@
   pipewire,
   libnotify,
   cacert,
+  pkg-config,
+  fontconfig,
+  freetype,
+  libxkbcommon,
+  libxcb,
+  wayland,
+  vulkan-loader,
 }:
 
 rustPlatform.buildRustPackage {
@@ -27,12 +35,31 @@ rustPlatform.buildRustPackage {
       && lib.cleanSourceFilter path type;
   };
   cargoLock.lockFile = ../../Cargo.lock;
-  cargoBuildFlags = [ "-p" "voice-input" ];
-  cargoTestFlags = [ "-p" "voice-input-core" "-p" "voice-input" ];
+  cargoBuildFlags = [
+    "-p"
+    "voice-input"
+  ];
+  cargoTestFlags =
+    if withGui then
+      [ "--workspace" ]
+    else
+      [
+        "-p"
+        "voice-input-core"
+        "-p"
+        "voice-input"
+      ];
+  buildFeatures = lib.optionals withGui [ "voice-input/gui" ];
 
   SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeWrapper ] ++ lib.optionals withGui [ pkg-config ];
+  buildInputs = lib.optionals withGui [
+    fontconfig
+    freetype
+    libxkbcommon
+    libxcb
+  ];
   # The portal tests run a private dbus-daemon.
   nativeCheckInputs = [ dbus ];
   nativeInstallCheckInputs = [ desktop-file-utils ];
@@ -61,7 +88,12 @@ rustPlatform.buildRustPackage {
           pipewire
           libnotify
         ]
-      }
+      }       ${lib.optionalString withGui "--prefix LD_LIBRARY_PATH : ${
+        lib.makeLibraryPath [
+          wayland
+          vulkan-loader
+        ]
+      }"}
   '';
 
   meta = {

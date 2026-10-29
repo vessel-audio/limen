@@ -12,10 +12,40 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  headless:
+    name: Headless Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      - name: Run Clippy
+        run: nix develop --command cargo clippy -p voice-input-core -p voice-input --all-targets -- -D warnings
+      - name: Run tests
+        run: nix develop --command cargo test -p voice-input-core -p voice-input
+  gui:
+    name: GUI Rust checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      - name: Run Clippy
+        run: nix develop --command cargo clippy --workspace --all-targets --features voice-input/gui -- -D warnings
+      - name: Run GUI tests
+        run: nix develop --command cargo test -p voice-input-gui
   nix:
     name: Nix checks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -25,8 +55,6 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
       - name: Run flake checks
         run: nix flake check --print-build-logs
-      - name: Run Clippy
-        run: nix develop --command cargo clippy --all-targets -- -D warnings
       - name: Configure Fcitx addon
         run: |
           nix develop --command cmake \

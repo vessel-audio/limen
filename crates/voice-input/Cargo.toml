@@ -9,3 +9,8 @@ clap.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 voice-input-core.workspace = true
+voice-input-gui = { workspace = true, optional = true }
+
+[features]
+default = []
+gui = ["dep:voice-input-gui"]

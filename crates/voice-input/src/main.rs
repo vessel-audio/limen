@@ -27,6 +27,9 @@ struct Cli {
 enum Command {
     /// Resident daemon: captures audio, drives the ASR session, commits text
     Daemon,
+    /// Open the graphical control panel
+    #[cfg(feature = "gui")]
+    Gui,
     /// Send the start/stop signal to the daemon (bind to a GNOME shortcut)
     Toggle,
     /// Query daemon state
@@ -48,8 +51,7 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<ExitCode> {
+fn main() -> anyhow::Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -59,32 +61,47 @@ async fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let paths = Paths::discover()?;
 
-    let code = match cli.command {
-        Command::Daemon => {
-            let cfg = Config::load_or_create(&paths)?;
-            voice_input_core::run_daemon(paths, cfg).await?;
-            ExitCode::SUCCESS
-        }
-        Command::Toggle => {
-            let reply = voice_input_core::send(&paths, "toggle").await?;
-            println!("{reply}");
-            ExitCode::SUCCESS
-        }
-        Command::Status => {
-            let reply = voice_input_core::send(&paths, "status").await?;
-            println!("{reply}");
-            ExitCode::SUCCESS
-        }
-        Command::Shortcut { command } => shortcut::run(&paths, command).await?,
-        Command::Hold { edge } => {
-            shortcut::hold(&paths, edge).await?;
-            ExitCode::SUCCESS
-        }
-        Command::Probe { wav } => {
-            let cfg = Config::load_or_create(&paths)?;
-            voice_input_core::probe(&cfg, &wav).await?;
-            ExitCode::SUCCESS
-        }
-    };
-    Ok(code)
+    match cli.command {
+        #[cfg(feature = "gui")]
+        Command::Gui => voice_input_gui::run(paths).map(|()| ExitCode::SUCCESS),
+        command => run_async(command, paths),
+    }
+}
+
+fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async move {
+            let code = match command {
+                #[cfg(feature = "gui")]
+                Command::Gui => unreachable!("GUI commands do not use the async runtime"),
+                Command::Daemon => {
+                    let cfg = Config::load_or_create(&paths)?;
+                    voice_input_core::run_daemon(paths, cfg).await?;
+                    ExitCode::SUCCESS
+                }
+                Command::Toggle => {
+                    let reply = voice_input_core::send(&paths, "toggle").await?;
+                    println!("{reply}");
+                    ExitCode::SUCCESS
+                }
+                Command::Status => {
+                    let reply = voice_input_core::send(&paths, "status").await?;
+                    println!("{reply}");
+                    ExitCode::SUCCESS
+                }
+                Command::Shortcut { command } => shortcut::run(&paths, command).await?,
+                Command::Hold { edge } => {
+                    shortcut::hold(&paths, edge).await?;
+                    ExitCode::SUCCESS
+                }
+                Command::Probe { wav } => {
+                    let cfg = Config::load_or_create(&paths)?;
+                    voice_input_core::probe(&cfg, &wav).await?;
+                    ExitCode::SUCCESS
+                }
+            };
+            Ok(code)
+        })
 }
