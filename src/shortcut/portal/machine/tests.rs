@@ -443,3 +443,28 @@ fn startup_status_shows_the_pending_portal_binding() {
         }
     );
 }
+
+#[test]
+fn rebind_after_a_cancelled_dialog_starts_a_new_generation() {
+    let mut machine = Machine::default();
+    machine.handle(Input::Rebind(portal()));
+    machine.handle(Input::Report(G1, Report::Connected));
+    machine.handle(Input::Report(G1, Report::Registered));
+    machine.handle(Input::Report(G1, Report::SessionCreated));
+    assert_eq!(
+        machine.handle(Input::Report(G1, Report::Cancelled)),
+        [
+            Output::Stop(G1),
+            Output::Publish(status(SessionState::Cancelled)),
+        ]
+    );
+    assert_eq!(machine.handle(Input::Rebind(portal())), []);
+    assert_eq!(
+        machine.handle(Input::Ended(G1)),
+        [
+            Output::Connect(G2),
+            Output::Publish(status(SessionState::Binding)),
+            Output::Rebound,
+        ]
+    );
+}
