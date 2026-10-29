@@ -19,7 +19,7 @@ pub(crate) mod snapshot;
 mod spawn;
 
 pub use lifecycle::run;
-pub use spawn::{daemon_peer_pid, spawn_daemon, terminate_daemon};
+pub use spawn::{DaemonTermination, daemon_peer_pid, spawn_daemon, terminate_daemon};
 
 use std::collections::VecDeque;
 use std::path::PathBuf;

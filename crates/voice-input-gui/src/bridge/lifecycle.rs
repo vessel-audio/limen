@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use voice_input_core::{Paths, spawn_daemon, v1};
+use voice_input_core::{DaemonTermination, Paths, spawn_daemon, v1};
 
 pub(super) type StartResult = Result<(), StartError>;
 
@@ -64,7 +64,11 @@ pub(super) fn is_outdated(message: &str) -> bool {
     message.contains("invalid request") || message.contains("unknown variant")
 }
 
-pub(super) async fn wait_for_termination(paths: &Paths, pid: u32) -> Result<(), StartError> {
+pub(super) async fn wait_for_termination(
+    paths: &Paths,
+    termination: DaemonTermination,
+) -> Result<(), StartError> {
+    let pid = termination.pid;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let exited = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
@@ -76,11 +80,12 @@ pub(super) async fn wait_for_termination(paths: &Paths, pid: u32) -> Result<(), 
             };
             match exited {
                 false => tokio::time::sleep(Duration::from_millis(50)).await,
-                true => match std::fs::remove_file(&paths.socket) {
-                    Ok(()) => return Ok(()),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                    Err(error) => return Err(StartError::Failed(error.to_string())),
-                },
+                true => {
+                    return termination
+                        .socket
+                        .remove_if_owned(paths)
+                        .map_err(|error| StartError::Failed(format!("{error:#}")));
+                }
             }
         }
     })

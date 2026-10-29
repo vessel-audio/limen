@@ -117,14 +117,21 @@ async fn termination_removes_a_stale_socket_after_process_exit() {
         cache_dir: root.join("cache"),
     };
     drop(tokio::net::UnixListener::bind(&paths.socket).unwrap());
+    let socket = voice_input_core::SocketIdentity::for_path(&paths).unwrap();
     let mut child = std::process::Command::new("sh")
         .args(["-c", "sleep 0.05"])
         .spawn()
         .unwrap();
 
-    super::wait_for_termination(&paths, child.id())
-        .await
-        .unwrap();
+    super::wait_for_termination(
+        &paths,
+        voice_input_core::DaemonTermination {
+            pid: child.id(),
+            socket,
+        },
+    )
+    .await
+    .unwrap();
 
     child.wait().unwrap();
     assert!(!paths.socket.exists());
@@ -179,4 +186,45 @@ fn quit_stops_the_bridge_while_another_sender_is_alive() {
     drop(retained);
     server.join().unwrap();
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn termination_does_not_remove_a_replacement_socket() {
+    use std::fs;
+    use voice_input_core::Paths;
+
+    let root = std::env::temp_dir().join(format!(
+        "voice-input-bridge-terminate-owner-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("voice-input.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    drop(tokio::net::UnixListener::bind(&paths.socket).unwrap());
+    let socket = voice_input_core::SocketIdentity::for_path(&paths).unwrap();
+    fs::remove_file(&paths.socket).unwrap();
+    let _replacement = tokio::net::UnixListener::bind(&paths.socket).unwrap();
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "sleep 0.05"])
+        .spawn()
+        .unwrap();
+
+    super::wait_for_termination(
+        &paths,
+        voice_input_core::DaemonTermination {
+            pid: child.id(),
+            socket,
+        },
+    )
+    .await
+    .unwrap();
+
+    child.wait().unwrap();
+    assert!(paths.socket.exists());
+    fs::remove_dir_all(root).unwrap();
 }

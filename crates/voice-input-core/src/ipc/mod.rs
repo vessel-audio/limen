@@ -66,13 +66,25 @@ pub(crate) struct BoundSocket {
     pub identity: SocketIdentity,
 }
 
+/// Filesystem identity of the socket created by one daemon process.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SocketIdentity {
+pub struct SocketIdentity {
     device: u64,
     inode: u64,
 }
 
 impl SocketIdentity {
+    /// Capture the current socket path's device and inode.
+    pub fn for_path(paths: &Paths) -> Result<Self> {
+        let metadata = std::fs::metadata(&paths.socket)
+            .with_context(|| format!("failed to inspect {}", paths.socket.display()))?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+
+    /// Remove the path only if it still belongs to this daemon's socket.
     pub fn remove_if_owned(self, paths: &Paths) -> Result<()> {
         let owned = match std::fs::metadata(&paths.socket) {
             Ok(metadata) => metadata.dev() == self.device && metadata.ino() == self.inode,
@@ -115,14 +127,9 @@ pub fn bind(paths: &Paths) -> Result<BoundSocket> {
         .with_context(|| format!("failed to bind {}", paths.socket.display()))?;
     std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to restrict {}", paths.socket.display()))?;
-    let metadata = std::fs::metadata(&paths.socket)
-        .with_context(|| format!("failed to inspect {}", paths.socket.display()))?;
     Ok(BoundSocket {
         listener,
-        identity: SocketIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        },
+        identity: SocketIdentity::for_path(paths)?,
     })
 }
 

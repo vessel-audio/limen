@@ -438,7 +438,7 @@ async fn handle_command(
             }
         }
         BridgeCommand::TerminateDaemon => match terminate_daemon(paths).await {
-            Ok(pid) => match wait_for_termination(paths, pid).await {
+            Ok(termination) => match wait_for_termination(paths, termination).await {
                 Ok(()) => {
                     *stopped = true;
                     *stream = None;

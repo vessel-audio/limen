@@ -11,7 +11,7 @@ use futures_util::TryStreamExt;
 use tokio::process::{Child, Command};
 
 use crate::config::Paths;
-use crate::ipc::{subscribe, wire::Push};
+use crate::ipc::{SocketIdentity, subscribe, wire::Push};
 use crate::shortcut::program::Program;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -139,9 +139,19 @@ pub async fn daemon_peer_pid(paths: &Paths) -> Result<u32> {
     )
 }
 
+/// Validated process and socket identities captured before daemon termination.
+#[derive(Debug, Clone, Copy)]
+pub struct DaemonTermination {
+    /// Same-UID daemon process that received SIGTERM.
+    pub pid: u32,
+    /// Socket path identity captured before signaling that process.
+    pub socket: SocketIdentity,
+}
+
 /// SIGTERM an outdated daemon after the caller has obtained user confirmation.
-/// Return its validated PID so the caller can wait for process exit.
-pub async fn terminate_daemon(paths: &Paths) -> Result<u32> {
+/// Return identities needed to wait and clean up without touching a replacement.
+pub async fn terminate_daemon(paths: &Paths) -> Result<DaemonTermination> {
+    let socket = SocketIdentity::for_path(paths)?;
     let pid = daemon_peer_pid(paths).await?;
     // SAFETY: kill is called with a validated positive PID and SIGTERM, with no
     // pointers or borrowed memory. UID was checked before this call.
@@ -149,7 +159,7 @@ pub async fn terminate_daemon(paths: &Paths) -> Result<u32> {
     if result == -1 {
         return Err(std::io::Error::last_os_error()).context("failed to terminate daemon");
     }
-    Ok(pid)
+    Ok(DaemonTermination { pid, socket })
 }
 
 fn peer_pid(pid: i32, uid: u32) -> Result<u32> {
