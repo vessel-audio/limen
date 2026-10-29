@@ -208,10 +208,18 @@ pub(super) async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus
     }
 }
 
-/// Fail unless the session is bound, saying what to do.
+/// Fail unless both actions are bound, saying what to do.
 fn check_bound(status: &ShortcutStatus) -> Result<(), Failure> {
     match status.session {
-        SessionState::Bound => Ok(()),
+        SessionState::Bound
+            if status.actual.toggle.is_some() && status.actual.hold.is_some() =>
+        {
+            Ok(())
+        }
+        SessionState::Bound => Err(anyhow!(
+            "GNOME did not bind both toggle and hold-to-talk; run `voice-input shortcut setup portal` again or check `voice-input shortcut edit`"
+        )
+        .into()),
         SessionState::Cancelled => Err(anyhow!(
             "the GNOME dialog was cancelled; run `voice-input shortcut setup portal` to be asked again"
         )
@@ -347,7 +355,10 @@ mod tests {
                 toggle: Shortcut::DEFAULT_TOGGLE,
                 hold: Shortcut::DEFAULT_HOLD,
             },
-            actual: PerAction::default(),
+            actual: PerAction {
+                toggle: Some(Trigger::new("Press <Super>z".to_string())),
+                hold: Some(Trigger::new("Press <Super>x".to_string())),
+            },
             last_error: match session {
                 SessionState::Failed => Some("no portal".to_string()),
                 _ => None,
@@ -388,6 +399,25 @@ mod tests {
                         .to_string(),
                 )),
             ]
+        );
+    }
+
+    #[test]
+    fn setup_rejects_an_incomplete_binding() {
+        let incomplete = ShortcutStatus {
+            actual: PerAction {
+                toggle: None,
+                hold: Some(Trigger::new("Press <Super>x".to_string())),
+            },
+            ..status(SessionState::Bound)
+        };
+        assert_eq!(
+            outcome(check_bound(&incomplete)),
+            Err((
+                1,
+                "GNOME did not bind both toggle and hold-to-talk; run `voice-input shortcut setup portal` again or check `voice-input shortcut edit`"
+                    .to_string(),
+            ))
         );
     }
 }
