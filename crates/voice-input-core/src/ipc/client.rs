@@ -54,16 +54,19 @@ pub async fn subscribe(paths: &Paths) -> Result<impl Stream<Item = Result<Push>>
         .await?;
     write.flush().await?;
     let reader = BufReader::new(read);
-    Ok(futures_util::stream::try_unfold(reader, |mut reader| {
-        Box::pin(async move {
-            let Some(line) = read_push_line(&mut reader).await? else {
-                return Ok(None);
-            };
-            let push = serde_json::from_slice(&line)
-                .with_context(|| format!("invalid push from the daemon: {}", line.len()))?;
-            Ok(Some((push, reader)))
-        })
-    }))
+    Ok(futures_util::stream::try_unfold(
+        (reader, write),
+        |(mut reader, write)| {
+            Box::pin(async move {
+                let Some(line) = read_push_line(&mut reader).await? else {
+                    return Ok(None);
+                };
+                let push = serde_json::from_slice(&line)
+                    .with_context(|| format!("invalid push from the daemon: {}", line.len()))?;
+                Ok(Some((push, (reader, write))))
+            })
+        },
+    ))
 }
 
 async fn read_push_line<R>(reader: &mut BufReader<R>) -> Result<Option<Vec<u8>>>
@@ -105,6 +108,19 @@ mod tests {
     use super::{MAX_PUSH_BYTES, read_push_line};
 
     #[tokio::test]
+    async fn subscription_rejections_keep_the_daemon_message() {
+        let rejection =
+            r#"{"type":"error","message":"invalid request: unknown variant `subscribe`"}"#;
+        let push: Push = serde_json::from_str(rejection).unwrap();
+        assert_eq!(
+            push,
+            Push::Error {
+                message: "invalid request: unknown variant `subscribe`".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn push_lines_are_bounded_before_buffering() {
         let bytes = vec![b'x'; MAX_PUSH_BYTES + 1];
         let mut reader = BufReader::new(bytes.as_slice());
@@ -143,6 +159,26 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            let mut byte = [0];
+            let read = tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                tokio::io::AsyncReadExt::read(&mut stream, &mut byte),
+            )
+            .await;
+            assert!(read.is_err(), "client closed the subscription write half");
+            stream
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::to_string(&Push::Error {
+                            message: "still connected".to_string(),
+                        })
+                        .unwrap()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
         });
         let paths = Paths {
             config_file: socket.with_extension("toml"),
@@ -155,6 +191,12 @@ mod tests {
             subscription.try_next().await.unwrap(),
             Some(Push::Hello { protocol: 1, .. })
         ));
+        assert_eq!(
+            subscription.try_next().await.unwrap(),
+            Some(Push::Error {
+                message: "still connected".to_string(),
+            })
+        );
         drop(subscription);
         server.await.unwrap();
         std::fs::remove_file(socket).unwrap();

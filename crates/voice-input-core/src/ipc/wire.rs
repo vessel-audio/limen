@@ -41,6 +41,8 @@ impl WireSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Push {
+    /// A structured rejection, including an outdated daemon or capacity error.
+    Error { message: String },
     /// Protocol and daemon identity sent once at connection start.
     Hello {
         protocol: u64,

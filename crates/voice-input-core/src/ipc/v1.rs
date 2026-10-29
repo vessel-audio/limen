@@ -265,6 +265,40 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn ordinary_requests_fail_after_two_seconds() {
+        let (commands, _received) = mpsc::channel(1);
+        let answered =
+            tokio::spawn(async move { answer(r#"{"v":1,"type":"start"}"#, &commands).await });
+        tokio::time::advance(Duration::from_millis(1999)).await;
+        assert!(!answered.is_finished());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(
+            answered.await.unwrap(),
+            Action::Reply(Box::new(Reply::Error {
+                message: "reply timeout: deadline has elapsed".to_string(),
+            }))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rebind_fails_after_five_seconds() {
+        let (commands, _received) = mpsc::channel(1);
+        let answered =
+            tokio::spawn(
+                async move { answer(r#"{"v":1,"type":"shortcut_rebind"}"#, &commands).await },
+            );
+        tokio::time::advance(Duration::from_millis(4999)).await;
+        assert!(!answered.is_finished());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(
+            answered.await.unwrap(),
+            Action::Reply(Box::new(Reply::Error {
+                message: "reply timeout: deadline has elapsed".to_string(),
+            }))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn rebind_waits_for_portal_cleanup() {
         let (commands, mut received) = mpsc::channel(1);
         tokio::spawn(async move {
