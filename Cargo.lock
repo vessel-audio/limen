@@ -1826,6 +1826,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "tokio",
+ "tracing-subscriber",
+ "voice-input-core",
+]
+
+[[package]]
+name = "voice-input-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
  "directories",
  "dirs",
  "futures-util",
@@ -1838,7 +1849,6 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
- "tracing-subscriber",
  "zbus",
 ]
 

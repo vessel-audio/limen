@@ -7,20 +7,20 @@ use super::{Backend, Shortcut, accelerators_in};
 
 /// The state of the shortcut backend in the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ShortcutStatus {
-    pub(crate) backend: Backend,
-    pub(crate) session: SessionState,
+pub struct ShortcutStatus {
+    pub backend: Backend,
+    pub session: SessionState,
     /// The keys asked for: the prefill of the config.
-    pub(crate) preferred: PerAction<Shortcut>,
+    pub preferred: PerAction<Shortcut>,
     /// What the desktop bound, as it describes it.
-    pub(crate) actual: PerAction<Option<Trigger>>,
-    pub(crate) last_error: Option<String>,
+    pub actual: PerAction<Option<Trigger>>,
+    pub last_error: Option<String>,
 }
 
 /// Where the portal session stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SessionState {
+pub enum SessionState {
     /// The backend is not the portal.
     Disabled,
     /// Registering or binding, possibly waiting for the user's confirmation.
@@ -33,22 +33,22 @@ pub(crate) enum SessionState {
 
 /// One value for each action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct PerAction<T> {
-    pub(crate) toggle: T,
-    pub(crate) hold: T,
+pub struct PerAction<T> {
+    pub toggle: T,
+    pub hold: T,
 }
 
 /// A binding as the desktop describes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Trigger {
+pub struct Trigger {
     /// The portal's `trigger_description`, e.g. `Press <Super>z`.
-    pub(crate) description: String,
+    pub description: String,
     /// The shortcuts named by the description; empty when none can be told.
-    pub(crate) shortcuts: Vec<Shortcut>,
+    pub shortcuts: Vec<Shortcut>,
 }
 
 impl Trigger {
-    pub(crate) fn new(description: String) -> Self {
+    pub fn new(description: String) -> Self {
         let shortcuts = accelerators_in(&description);
         Self {
             description,

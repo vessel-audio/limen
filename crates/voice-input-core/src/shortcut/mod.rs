@@ -16,7 +16,6 @@
 //! Ctrl). Rendering always lists the modifiers in GTK's order: Shift, Ctrl,
 //! Alt, Super.
 
-pub(crate) mod cli;
 pub(crate) mod desktop_entry;
 pub(crate) mod gnome;
 pub(crate) mod portal;
@@ -32,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// What a shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Action {
+pub enum Action {
     /// Press once to start dictation and again to stop.
     Toggle,
     /// Hold to talk; releasing the key stops.
@@ -41,7 +40,7 @@ pub(crate) enum Action {
 
 impl Action {
     /// The ID the portal knows the action's shortcut by.
-    pub(crate) fn id(self) -> &'static str {
+    pub fn id(self) -> &'static str {
         match self {
             Self::Toggle => "toggle",
             Self::Hold => "hold",
@@ -60,7 +59,7 @@ impl Action {
 /// The mechanism that turns system-wide key presses into actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Backend {
+pub enum Backend {
     /// The daemon binds both actions through the GlobalShortcuts portal.
     Portal,
     /// A GNOME custom keybinding runs `voice-input toggle`; toggle only.
@@ -84,7 +83,7 @@ impl fmt::Display for Backend {
 /// Whether the hold-to-talk key went down or came up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HoldEdge {
+pub enum HoldEdge {
     Press,
     Release,
 }
@@ -107,7 +106,7 @@ pub(crate) struct ActivationReceipt {
 
 /// Why a shortcut does not parse or is not allowed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum ShortcutError {
+pub enum ShortcutError {
     #[error("empty shortcut")]
     Empty,
     #[error("expected modifiers and a key, e.g. Super+Z or <Super>z")]
@@ -132,16 +131,16 @@ pub(crate) enum ShortcutError {
 /// A key combination: modifiers held together with one non-modifier key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub(crate) struct Shortcut {
+pub struct Shortcut {
     modifiers: Modifiers,
     key: Key,
 }
 
 impl Shortcut {
     /// `Super+Z`, the default toggle shortcut.
-    pub(crate) const DEFAULT_TOGGLE: Self = Self::with_super(Key::Letter('z'));
+    pub const DEFAULT_TOGGLE: Self = Self::with_super(Key::Letter('z'));
     /// `Super+X`, the default hold-to-talk shortcut.
-    pub(crate) const DEFAULT_HOLD: Self = Self::with_super(Key::Letter('x'));
+    pub const DEFAULT_HOLD: Self = Self::with_super(Key::Letter('x'));
 
     const fn with_super(key: Key) -> Self {
         Self {
@@ -151,7 +150,7 @@ impl Shortcut {
     }
 
     /// Parse the GNOME format only, e.g. `<Control><Alt>w` or `F9`.
-    pub(crate) fn parse_accelerator(text: &str) -> Result<Self, ShortcutError> {
+    pub fn parse_accelerator(text: &str) -> Result<Self, ShortcutError> {
         let mut modifiers = Modifiers::default();
         let mut rest = text;
         while let Some(tail) = rest.strip_prefix('<') {
@@ -182,7 +181,7 @@ impl Shortcut {
 
     /// Check the rules for a global shortcut: it needs Super, Ctrl, or Alt so
     /// that ordinary typing never triggers it; only F1-F24 may stand alone.
-    pub(crate) fn validate(self) -> Result<Self, ShortcutError> {
+    pub fn validate(self) -> Result<Self, ShortcutError> {
         let has_command_modifier = [Modifier::Ctrl, Modifier::Alt, Modifier::Super]
             .into_iter()
             .any(|modifier| self.modifiers.contains(modifier));

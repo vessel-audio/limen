@@ -20,7 +20,7 @@ use crate::shortcut::HoldEdge;
 use crate::shortcut::status::ShortcutStatus;
 
 /// The protocol version this daemon speaks.
-pub(crate) const VERSION: u64 = 1;
+pub const VERSION: u64 = 1;
 
 /// A rebind may wait for the old portal request and session to close.
 const REBIND_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,21 +28,24 @@ const REBIND_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 /// A request, without its version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum Request {
+pub enum Request {
     /// The hold-to-talk key went down or came up.
-    Hold {
-        edge: HoldEdge,
-    },
+    Hold { edge: HoldEdge },
     /// Apply the `[shortcut]` section of the config file again.
     ShortcutRebind,
+    /// Read the live global-shortcut backend and bindings.
     ShortcutStatus,
 }
 
+/// A successful, data-bearing, or error response to a protocol request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum Reply {
+pub enum Reply {
+    /// The request completed without additional data.
     Ok,
+    /// The current global-shortcut state.
     ShortcutStatus(ShortcutStatus),
+    /// The request failed; the message remains English for CLI compatibility.
     Error { message: String },
 }
 

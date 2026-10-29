@@ -11,10 +11,10 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 use clap::Subcommand;
 
-use super::setup::{self, Keys, Note, Report, SetupError};
-use super::{Action, Backend, HoldEdge, Shortcut, ShortcutError};
-use crate::config::Paths;
-use crate::ipc::{self, v1};
+use voice_input_core::{
+    Action, Backend, HoldEdge, Keys, Note, Paths, Report, SetupError, Shortcut, ShortcutError,
+    clear, edit, request, set, setup, shortcut_config, v1,
+};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ShortcutCommand {
@@ -69,7 +69,7 @@ pub(crate) async fn run(paths: &Paths, command: ShortcutCommand) -> Result<ExitC
 }
 
 async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupError> {
-    let current = setup::configured(paths)?;
+    let current = shortcut_config(paths)?;
     match command {
         ShortcutCommand::Status => match current.backend {
             Backend::Portal => portal::status(paths, current).await,
@@ -84,7 +84,7 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
             toggle,
             hold,
         } => {
-            let report = setup::setup(paths, backend, Keys { toggle, hold }).await?;
+            let report = setup(paths, backend, Keys { toggle, hold }).await?;
             render(&report);
             match backend {
                 Backend::Portal => portal::finish_setup(paths).await,
@@ -96,20 +96,20 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
             }
         }
         ShortcutCommand::Set { action, keys } => {
-            let report = setup::set(paths, action, keys).await?;
+            let report = set(paths, action, keys).await?;
             render(&report);
-            match report.backend {
+            match report.backend() {
                 Backend::Portal => portal::finish_set(paths, action, keys).await,
                 Backend::GnomeKeybinding | Backend::None => Ok(()),
             }
         }
         ShortcutCommand::Clear { action } => {
-            let report = setup::clear(paths, action).await?;
+            let report = clear(paths, action).await?;
             render(&report);
             Ok(())
         }
         ShortcutCommand::Edit => {
-            let report = setup::edit(paths).await?;
+            let report = edit(paths).await?;
             render(&report);
             Ok(())
         }
@@ -152,7 +152,7 @@ fn render(report: &Report) {
 
 /// `voice-input hold <press|release>`: report an edge of the hold-to-talk key.
 pub(crate) async fn hold(paths: &Paths, edge: HoldEdge) -> Result<()> {
-    match ipc::request(paths, &v1::Request::Hold { edge }).await? {
+    match request(paths, &v1::Request::Hold { edge }).await? {
         v1::Reply::Ok => Ok(()),
         v1::Reply::Error { message } => bail!("the daemon refused: {message}"),
         v1::Reply::ShortcutStatus(_) => bail!("the daemon answered something else"),

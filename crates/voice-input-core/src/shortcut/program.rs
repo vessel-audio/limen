@@ -16,7 +16,8 @@ const NIX_STORE: &str = "/nix/store";
 
 /// The program path to run, and whether it survives upgrades.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Program {
+pub enum Program {
+    /// A path outside the Nix store that remains valid across upgrades.
     Stable(PathBuf),
     /// Inside the Nix store: breaks after an upgrade or garbage collection.
     Unstable(PathBuf),

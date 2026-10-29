@@ -301,6 +301,7 @@ fn effective_hold(started: Option<Instant>, released: Instant) -> Duration {
     })
 }
 
+/// Run the resident daemon with the discovered paths and loaded configuration.
 pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let listener = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);

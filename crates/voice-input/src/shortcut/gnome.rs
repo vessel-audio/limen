@@ -3,10 +3,7 @@
 use anyhow::Result;
 
 use super::SetupError;
-use crate::shortcut::Shortcut;
-use crate::shortcut::gnome::gsettings::{self, Gsettings};
-use crate::shortcut::gnome::{self as keybinding, CustomKeybinding, Managed};
-use crate::shortcut::program::Program;
+use voice_input_core::{GnomeBinding, Program, Shortcut, gnome_status};
 
 const NO_HOLD: &str =
     "not supported by this backend; for hold-to-talk run `voice-input shortcut setup portal`";
@@ -18,11 +15,11 @@ pub(super) fn status_none() {
 }
 
 pub(super) async fn status() -> Result<(), SetupError> {
-    let bindings = gsettings::read(&Gsettings).await?;
+    let status = gnome_status().await?;
     println!("backend:  gnome-keybinding");
-    match keybinding::managed(&bindings.list, &bindings.entries) {
-        Managed::Own(entry) | Managed::Adopted(entry) => println!("toggle:   {}", describe(entry)),
-        Managed::Absent => {
+    match status.toggle {
+        Some(entry) => println!("toggle:   {}", describe(&entry)),
+        None => {
             println!("toggle:   not bound; run `voice-input shortcut setup gnome-keybinding`")
         }
     }
@@ -30,17 +27,16 @@ pub(super) async fn status() -> Result<(), SetupError> {
     Ok(())
 }
 
-fn describe(entry: &CustomKeybinding) -> String {
+fn describe(entry: &GnomeBinding) -> String {
     let key = match entry.binding.as_str() {
         "" => "disabled".to_string(),
         binding => Shortcut::parse_accelerator(binding)
             .map_or_else(|_| binding.to_string(), |shortcut| shortcut.to_string()),
     };
-    let program = keybinding::program_of(&entry.command).map(Program::of);
     format!(
         "{key} → {} ({})",
         entry.command,
-        stability(program.as_ref())
+        stability(entry.program.as_ref())
     )
 }
 

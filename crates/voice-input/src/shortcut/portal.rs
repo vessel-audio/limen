@@ -7,12 +7,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 
 use super::SetupError;
-use crate::config::{Paths, ShortcutConfig};
-use crate::dictation::MIN_HOLD;
-use crate::shortcut::desktop_entry::APP_ID;
-use crate::shortcut::setup::daemon_status;
-use crate::shortcut::status::{SessionState, ShortcutStatus, Trigger};
-use crate::shortcut::{Action, Shortcut};
+use voice_input_core::APP_ID;
+use voice_input_core::{
+    Action, MIN_HOLD, Paths, SessionState, Shortcut, ShortcutConfig, ShortcutStatus, Trigger,
+    shortcut_status as daemon_status,
+};
 
 /// How long setup waits for GNOME, which may be waiting for the user.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -196,9 +195,9 @@ fn either(shortcuts: &[Shortcut]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{check_bound, confirm_binding};
-    use crate::shortcut::setup::SetupError;
-    use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
-    use crate::shortcut::{Action, Backend, Shortcut};
+    use voice_input_core::SetupError;
+    use voice_input_core::{Action, Backend, Shortcut};
+    use voice_input_core::{PerAction, SessionState, ShortcutStatus, Trigger};
 
     fn outcome(result: Result<(), SetupError>) -> Result<(), (u8, String)> {
         result.map_err(|failure| match failure {

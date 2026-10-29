@@ -6,6 +6,8 @@
 mod gnome;
 mod portal;
 
+pub use gnome::{GnomeBinding, GnomeStatus, gnome_status};
+
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -21,14 +23,16 @@ use crate::ipc::{self, v1};
 /// Keys optionally supplied while choosing a backend. Omitted keys retain
 /// their configured values.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct Keys {
-    pub(crate) toggle: Option<Shortcut>,
-    pub(crate) hold: Option<Shortcut>,
+pub struct Keys {
+    /// A new toggle key, or `None` to retain the configured key.
+    pub toggle: Option<Shortcut>,
+    /// A new hold-to-talk key, or `None` to retain the configured key.
+    pub hold: Option<Shortcut>,
 }
 
 /// A user-visible effect of a shortcut operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Note {
+pub enum Note {
     /// A desktop entry was installed at this path.
     Installed(PathBuf),
     /// The selected executable will not survive a Nix upgrade.
@@ -53,15 +57,16 @@ pub(crate) enum Note {
 
 /// The effects of a completed or partially completed operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Report {
-    pub(crate) notes: Vec<Note>,
+pub struct Report {
+    /// Side effects in the order the operation produced them.
+    pub notes: Vec<Note>,
     pub(super) backend: Backend,
 }
 
 /// Why a shortcut operation failed, together with effects that happened
 /// before the failure.
 #[derive(Debug)]
-pub(crate) enum SetupError {
+pub enum SetupError {
     /// The request or configuration can never work.
     Usage { message: String, report: Report },
     /// An external operation failed.
@@ -69,6 +74,13 @@ pub(crate) enum SetupError {
         error: anyhow::Error,
         report: Report,
     },
+}
+
+impl Report {
+    /// The backend whose live status the caller should observe after `set`.
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
 }
 
 impl SetupError {
@@ -86,7 +98,8 @@ impl SetupError {
         }
     }
 
-    pub(crate) fn report(&self) -> &Report {
+    /// Effects produced before the operation succeeded or failed.
+    pub fn report(&self) -> &Report {
         match self {
             Self::Usage { report, .. } | Self::Runtime { report, .. } => report,
         }
@@ -103,11 +116,7 @@ impl From<anyhow::Error> for SetupError {
 }
 
 /// Choose a shortcut backend and optionally replace its preferred keys.
-pub(crate) async fn setup(
-    paths: &Paths,
-    backend: Backend,
-    keys: Keys,
-) -> Result<Report, SetupError> {
+pub async fn setup(paths: &Paths, backend: Backend, keys: Keys) -> Result<Report, SetupError> {
     let mut report = Report::default();
     let result = match configured(paths) {
         Err(error) => Err(error),
@@ -133,11 +142,7 @@ pub(crate) async fn setup(
 }
 
 /// Change one action's preferred or managed key.
-pub(crate) async fn set(
-    paths: &Paths,
-    action: Action,
-    keys: Shortcut,
-) -> Result<Report, SetupError> {
+pub async fn set(paths: &Paths, action: Action, keys: Shortcut) -> Result<Report, SetupError> {
     let mut report = Report::default();
     let mut backend = Backend::None;
     let result = match configured(paths) {
@@ -167,7 +172,7 @@ pub(crate) async fn set(
 }
 
 /// Remove one action's managed key where the backend supports doing so.
-pub(crate) async fn clear(paths: &Paths, action: Action) -> Result<Report, SetupError> {
+pub async fn clear(paths: &Paths, action: Action) -> Result<Report, SetupError> {
     let mut report = Report::default();
     let mut backend = Backend::None;
     let result = match configured(paths) {
@@ -191,7 +196,7 @@ pub(crate) async fn clear(paths: &Paths, action: Action) -> Result<Report, Setup
 }
 
 /// Open the backend's native key editor.
-pub(crate) async fn edit(paths: &Paths) -> Result<Report, SetupError> {
+pub async fn edit(paths: &Paths) -> Result<Report, SetupError> {
     let mut backend = Backend::None;
     let result = match configured(paths) {
         Err(error) => Err(error),
@@ -230,7 +235,7 @@ fn not_set_up() -> SetupError {
 }
 
 /// Read only the shortcut section, retaining defaults when no config exists.
-pub(super) fn configured(paths: &Paths) -> Result<ShortcutConfig, SetupError> {
+pub fn configured(paths: &Paths) -> Result<ShortcutConfig, SetupError> {
     let path = &paths.config_file;
     match fs::read_to_string(path) {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(ShortcutConfig::default()),
@@ -283,7 +288,7 @@ async fn rebind(paths: &Paths, report: &mut Report) -> Result<()> {
 }
 
 /// Read shortcut status, treating an absent daemon as having no live status.
-pub(crate) async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
+pub async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
     match ipc::request(paths, &v1::Request::ShortcutStatus).await {
         Ok(v1::Reply::ShortcutStatus(status)) => Ok(Some(status)),
         Ok(v1::Reply::Error { message }) => bail!("the daemon could not tell: {message}"),

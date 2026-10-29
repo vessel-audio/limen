@@ -11,7 +11,7 @@
 //! can neither block nor kill the daemon's main loop.
 
 mod legacy;
-pub(crate) mod v1;
+pub mod v1;
 
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -178,7 +178,7 @@ pub async fn send(paths: &Paths, request: &str) -> Result<String> {
 }
 
 /// Client side of protocol v1.
-pub(crate) async fn request(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> {
+pub async fn request(paths: &Paths, request: &v1::Request) -> Result<v1::Reply> {
     let line = serde_json::to_string(&v1::Envelope::new(request))?;
     let reply = send(paths, &line).await?;
     serde_json::from_str(&reply).with_context(|| format!("invalid reply from the daemon: {reply}"))

@@ -8,17 +8,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-mod audio;
-mod config;
-mod daemon;
-mod dictation;
-mod input_method;
-mod ipc;
-mod notify;
-mod polish;
-mod provider;
-mod session;
 mod shortcut;
+
+use voice_input_core::{Config, HoldEdge, Paths};
 
 #[derive(Parser)]
 #[command(
@@ -42,12 +34,12 @@ enum Command {
     /// Show, set up, or change the global shortcuts
     Shortcut {
         #[command(subcommand)]
-        command: shortcut::cli::ShortcutCommand,
+        command: shortcut::ShortcutCommand,
     },
     /// Press or release the hold-to-talk key (for compositor key-release bindings)
     Hold {
         #[arg(value_enum)]
-        edge: shortcut::HoldEdge,
+        edge: HoldEdge,
     },
     /// Dev tool: transcribe a wav file and print the final event flow
     Probe {
@@ -65,32 +57,32 @@ async fn main() -> anyhow::Result<ExitCode> {
         )
         .init();
     let cli = Cli::parse();
-    let paths = config::Paths::discover()?;
+    let paths = Paths::discover()?;
 
     let code = match cli.command {
         Command::Daemon => {
-            let cfg = config::Config::load_or_create(&paths)?;
-            daemon::run(paths, cfg).await?;
+            let cfg = Config::load_or_create(&paths)?;
+            voice_input_core::run_daemon(paths, cfg).await?;
             ExitCode::SUCCESS
         }
         Command::Toggle => {
-            let reply = ipc::send(&paths, "toggle").await?;
+            let reply = voice_input_core::send(&paths, "toggle").await?;
             println!("{reply}");
             ExitCode::SUCCESS
         }
         Command::Status => {
-            let reply = ipc::send(&paths, "status").await?;
+            let reply = voice_input_core::send(&paths, "status").await?;
             println!("{reply}");
             ExitCode::SUCCESS
         }
-        Command::Shortcut { command } => shortcut::cli::run(&paths, command).await?,
+        Command::Shortcut { command } => shortcut::run(&paths, command).await?,
         Command::Hold { edge } => {
-            shortcut::cli::hold(&paths, edge).await?;
+            shortcut::hold(&paths, edge).await?;
             ExitCode::SUCCESS
         }
         Command::Probe { wav } => {
-            let cfg = config::Config::load_or_create(&paths)?;
-            provider::probe(&cfg, &wav).await?;
+            let cfg = Config::load_or_create(&paths)?;
+            voice_input_core::probe(&cfg, &wav).await?;
             ExitCode::SUCCESS
         }
     };

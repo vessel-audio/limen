@@ -7,7 +7,7 @@ use super::{
 };
 
 /// Holds shorter than this are accidental taps: the take is discarded.
-pub(crate) const MIN_HOLD: Duration = Duration::from_millis(300);
+pub const MIN_HOLD: Duration = Duration::from_millis(300);
 
 /// A hold recording stops after this long even if no release arrives, so a
 /// lost release signal cannot record forever.

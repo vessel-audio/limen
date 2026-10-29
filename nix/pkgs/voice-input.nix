@@ -27,6 +27,8 @@ rustPlatform.buildRustPackage {
       && lib.cleanSourceFilter path type;
   };
   cargoLock.lockFile = ../../Cargo.lock;
+  cargoBuildFlags = [ "-p" "voice-input" ];
+  cargoTestFlags = [ "-p" "voice-input-core" "-p" "voice-input" ];
 
   SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
 

@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 
 /// The app ID the portal knows the daemon by.
-pub(crate) const APP_ID: &str = "io.github.Emin017.VoiceInput";
+pub const APP_ID: &str = "io.github.Emin017.VoiceInput";
 
 /// The entry as it is kept in the repository.
-const ENTRY: &str = include_str!("../../data/io.github.Emin017.VoiceInput.desktop");
+const ENTRY: &str = include_str!("../../../../data/io.github.Emin017.VoiceInput.desktop");
 
 /// Where the entry was found or put.
 #[derive(Debug, Clone, PartialEq, Eq)]

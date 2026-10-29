@@ -10,6 +10,38 @@ use crate::shortcut::gnome::{self as keybinding, Clear, Managed};
 use crate::shortcut::program::Program;
 use crate::shortcut::{Backend, Shortcut};
 
+/// A read-only view of the GNOME custom shortcut configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GnomeStatus {
+    /// The managed toggle entry, or `None` when it has not been set up.
+    pub toggle: Option<GnomeBinding>,
+}
+
+/// The managed GNOME custom shortcut without exposing dconf internals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GnomeBinding {
+    /// The raw GTK accelerator; an empty string means disabled.
+    pub binding: String,
+    /// The command GNOME runs for the toggle action.
+    pub command: String,
+    /// The command's executable and its upgrade stability, when recognized.
+    pub program: Option<Program>,
+}
+
+/// Read the current managed GNOME custom shortcut.
+pub async fn gnome_status() -> Result<GnomeStatus, SetupError> {
+    let bindings = gsettings::read(&Gsettings).await?;
+    let toggle = match keybinding::managed(&bindings.list, &bindings.entries) {
+        Managed::Own(entry) | Managed::Adopted(entry) => Some(GnomeBinding {
+            binding: entry.binding.clone(),
+            command: entry.command.clone(),
+            program: keybinding::program_of(&entry.command).map(Program::of),
+        }),
+        Managed::Absent => None,
+    };
+    Ok(GnomeStatus { toggle })
+}
+
 /// Bind `toggle` to `voice-input toggle` in GNOME, then record it in the
 /// config and tell the daemon.
 pub(super) async fn bind(
