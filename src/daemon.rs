@@ -283,6 +283,8 @@ impl DictationActor {
 
                 _ = async { self.hold_deadline.as_mut().unwrap().await },
                         if self.hold_deadline.is_some() => {
+                    // Keep the pressed marker latched: after a lost release, a repeat
+                    // cannot be told from a fresh press. A real release clears it.
                     tracing::warn!("hold exceeded its maximum duration");
                     self.dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
                 }
@@ -832,5 +834,30 @@ mod tests {
             [harness.session.recv().await, harness.session.recv().await],
             [Some(SessionCommand::Start), Some(SessionCommand::Teardown)]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_timeout_only_a_real_release_reenables_holding() {
+        let mut harness = harness();
+        start_hold(&mut harness.actor);
+        harness
+            .actor
+            .dispatch(Event::HoldTimedOut, ReplyTarget::NotRequested);
+        assert_eq!(
+            sent(&mut harness.session),
+            [SessionCommand::Start, SessionCommand::Stop]
+        );
+
+        // A repeated or fresh press cannot be distinguished safely after the
+        // release was lost, so it must not start another take.
+        harness
+            .actor
+            .dispatch(Event::ProviderCompleted, ReplyTarget::NotRequested);
+        harness.actor.hold(HoldEdge::Press);
+        assert_eq!(sent(&mut harness.session), [SessionCommand::Teardown]);
+
+        harness.actor.hold(HoldEdge::Release);
+        harness.actor.hold(HoldEdge::Press);
+        assert_eq!(sent(&mut harness.session), [SessionCommand::Start]);
     }
 }
