@@ -88,9 +88,9 @@ pub(super) fn bound(response: u32, results: &Vardict) -> Outcome<PerAction<Optio
         let shortcuts = results
             .get("shortcuts")
             .ok_or("the response carries no shortcuts")?;
-        Shortcuts::try_from(shortcuts.clone())
-            .map(|shortcuts| triggers(&shortcuts))
-            .map_err(|_| format!("the shortcuts {shortcuts:?} are not a(sa{{sv}})"))
+        let shortcuts = Shortcuts::try_from(shortcuts.clone())
+            .map_err(|_| format!("the shortcuts {shortcuts:?} are not a(sa{{sv}})"))?;
+        triggers(&shortcuts)
     })
 }
 
@@ -106,20 +106,29 @@ fn ended<T>(response: u32, done: impl FnOnce() -> Result<T, String>) -> Outcome<
 }
 
 /// The binding of each action among `shortcuts`, from a response or a
-/// `ShortcutsChanged` signal. Shortcuts of other IDs are ignored.
-pub(super) fn triggers(shortcuts: &Shortcuts) -> PerAction<Option<Trigger>> {
+/// `ShortcutsChanged` signal. Shortcuts of other IDs are ignored. A missing
+/// description means unbound; a present one of the wrong type is an error.
+pub(super) fn triggers(shortcuts: &Shortcuts) -> Result<PerAction<Option<Trigger>>, String> {
     let trigger = |action: Action| {
-        shortcuts
-            .iter()
-            .find(|(id, _)| id == action.id())
-            .and_then(|(_, properties)| properties.get("trigger_description"))
-            .and_then(|description| String::try_from(description.clone()).ok())
-            .map(Trigger::new)
+        let Some((_, properties)) = shortcuts.iter().find(|(id, _)| id == action.id()) else {
+            return Ok(None);
+        };
+        match properties.get("trigger_description") {
+            None => Ok(None),
+            Some(description) => String::try_from(description.clone())
+                .map(|description| Some(Trigger::new(description)))
+                .map_err(|_| {
+                    format!(
+                        "the {} trigger_description {description:?} is not a string",
+                        action.id()
+                    )
+                }),
+        }
     };
-    PerAction {
-        toggle: trigger(Action::Toggle),
-        hold: trigger(Action::Hold),
-    }
+    Ok(PerAction {
+        toggle: trigger(Action::Toggle)?,
+        hold: trigger(Action::Hold)?,
+    })
 }
 
 /// What a change of the portal's owner means for a session made while
@@ -269,6 +278,13 @@ mod tests {
         for results in [
             Vardict::new(),
             vardict([("shortcuts", Variant::from("toggle"))]),
+            vardict([(
+                "shortcuts",
+                Variant::from(vec![(
+                    "toggle".to_string(),
+                    HashMap::from([("trigger_description".to_string(), Variant::from(7u32))]),
+                )]),
+            )]),
         ] {
             assert!(
                 matches!(bound(0, &results), Outcome::Failed(_)),
@@ -280,7 +296,7 @@ mod tests {
     #[test]
     fn shortcuts_without_a_description_are_unbound() {
         let shortcuts = vec![("toggle".to_string(), Vardict::new())];
-        assert_eq!(triggers(&shortcuts), PerAction::default());
+        assert_eq!(triggers(&shortcuts), Ok(PerAction::default()));
     }
 
     #[test]

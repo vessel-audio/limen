@@ -282,7 +282,9 @@ impl Link {
                 .deserialize::<(OwnedObjectPath, Shortcuts)>()
                 .ok()
                 .filter(|(session, _)| ours(session))
-                .map(|(_, shortcuts)| Report::Changed(protocol::triggers(&shortcuts))),
+                .and_then(|(_, shortcuts)| {
+                    protocol::triggers(&shortcuts).ok().map(Report::Changed)
+                }),
             _ => None,
         }
     }
