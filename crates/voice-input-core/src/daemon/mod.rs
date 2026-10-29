@@ -12,10 +12,14 @@
 //! Their outcomes come back as events, so the loop stays responsive to IPC
 //! even while pw-record is being reaped or a take is being finalized.
 
+mod input;
+mod projection;
+pub(crate) mod snapshot;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
@@ -23,13 +27,14 @@ use tokio::time::Instant;
 
 use crate::config::{Config, Paths};
 use crate::dictation::{self, Dictation, Effect, Event, InputOutcome, Notification};
-use crate::input_method::InputMethod;
 use crate::ipc;
 use crate::notify::notify;
-use crate::polish::Polisher;
 use crate::session::{SessionCommand, SessionHandle};
 use crate::shortcut::portal::{Bus, ShortcutHandle};
 use crate::shortcut::{Activation, ActivationReceipt, HoldEdge};
+
+use input::{InputJob, InputReport, MAX_OUTSTANDING_INPUT};
+use projection::{Completion, Projection};
 
 /// Give up on a finalize after this long without a terminal event.
 const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -42,7 +47,7 @@ struct DictationActor {
     dictation: Dictation,
     session: SessionHandle,
     /// Mailbox of the text input worker.
-    input_tx: mpsc::Sender<String>,
+    input_tx: mpsc::UnboundedSender<InputJob>,
     finalize_deadline: Option<Deadline>,
     /// Stops a hold recording whose release never arrived.
     hold_deadline: Option<Deadline>,
@@ -59,6 +64,8 @@ struct DictationActor {
     /// Read again when a client asks to apply the `[shortcut]` section.
     config_file: PathBuf,
     shortcuts: ShortcutHandle,
+    outstanding_input: usize,
+    projection: Projection,
 }
 
 /// Whether the message being handled came from an IPC caller awaiting a reply.
@@ -70,7 +77,7 @@ enum ReplyTarget {
 /// The dictation actor's mailboxes; its loop ends when one of them closes.
 struct Mailboxes {
     commands: mpsc::Receiver<ipc::Command>,
-    input_reports: mpsc::UnboundedReceiver<InputOutcome>,
+    input_reports: mpsc::UnboundedReceiver<InputReport>,
     session_reports: mpsc::UnboundedReceiver<Event>,
     activations: mpsc::UnboundedReceiver<ActivationReceipt>,
 }
@@ -78,10 +85,11 @@ struct Mailboxes {
 impl DictationActor {
     fn new(
         session: SessionHandle,
-        input_tx: mpsc::Sender<String>,
+        input_tx: mpsc::UnboundedSender<InputJob>,
         notify: fn(&str, &str),
         config_file: PathBuf,
         shortcuts: ShortcutHandle,
+        projection: Projection,
     ) -> Self {
         Self {
             dictation: Dictation::default(),
@@ -95,6 +103,8 @@ impl DictationActor {
             notify,
             config_file,
             shortcuts,
+            outstanding_input: 0,
+            projection,
         }
     }
 
@@ -140,13 +150,28 @@ impl DictationActor {
                     Effect::StartSession => self.session.tell(SessionCommand::Start),
                     Effect::StopSession => self.session.tell(SessionCommand::Stop),
                     Effect::TeardownSession => self.session.tell(SessionCommand::Teardown),
-                    Effect::QueueInput(text) => match self.input_tx.try_send(text) {
-                        Ok(()) => events.push_back(Event::InputQueued),
-                        Err(error) => {
-                            tracing::warn!(error = %error, "text input queue full or dead");
-                            events.push_back(Event::InputDropped);
+                    Effect::QueueInput(text) => {
+                        let entry = self.projection.queue(&text, unix_ms());
+                        let job = InputJob { entry, text };
+                        match self.outstanding_input < MAX_OUTSTANDING_INPUT {
+                            false => {
+                                tracing::warn!("too many outstanding text input jobs");
+                                self.projection.drop(entry);
+                                events.push_back(Event::InputDropped);
+                            }
+                            true => match self.input_tx.send(job) {
+                                Ok(()) => {
+                                    self.outstanding_input += 1;
+                                    events.push_back(Event::InputQueued);
+                                }
+                                Err(error) => {
+                                    tracing::warn!(error = %error, "text input worker is gone");
+                                    self.projection.drop(entry);
+                                    events.push_back(Event::InputDropped);
+                                }
+                            },
                         }
-                    },
+                    }
                     Effect::ArmFinalizeDeadline => {
                         self.finalize_deadline =
                             Some(Box::pin(tokio::time::sleep(FINALIZE_TIMEOUT)));
@@ -167,11 +192,13 @@ impl DictationActor {
                         (self.notify)("voice-input", &message);
                     }
                     Effect::Notify(Notification::Error(message)) => {
+                        self.projection.record_error(message.clone(), unix_ms());
                         (self.notify)("voice-input error", &message);
                     }
                 }
             }
         }
+        self.projection.publish(self.dictation.view(), unix_ms());
     }
 
     /// Dispatch an edge of the hold-to-talk key. Nobody waits for the reply.
@@ -251,7 +278,14 @@ impl DictationActor {
 
                 outcome = mailboxes.input_reports.recv() => {
                     match outcome {
-                        Some(outcome) => {
+                        Some(report) => {
+                            let InputReport { entry, text, outcome } = report;
+                            self.outstanding_input = self.outstanding_input.checked_sub(1).expect("input report without an outstanding job");
+                            let completion = match &outcome {
+                                InputOutcome::Succeeded => Completion::Committed,
+                                InputOutcome::Failed(error) => Completion::CommitFailed(error.clone()),
+                            };
+                            self.projection.complete(entry, text, completion);
                             self.dispatch(Event::InputFinished(outcome), ReplyTarget::NotRequested);
                         }
                         None => anyhow::bail!("text input worker stopped unexpectedly"),
@@ -293,6 +327,13 @@ impl DictationActor {
     }
 }
 
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// How long the hold recording has lasted when the key is released at
 /// `released`; zero when no hold recording is running.
 fn effective_hold(started: Option<Instant>, released: Instant) -> Duration {
@@ -307,49 +348,21 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     ipc::spawn_accept_loop(listener, cmd_tx);
 
-    // Text input worker: an actor that owns the input method and commits one
-    // queued text at a time, so slow polishing or text input never stalls the
-    // dictation loop.
-    let (input_tx, mut input_rx) = mpsc::channel::<String>(16);
-    let (input_report_tx, input_reports) = mpsc::unbounded_channel::<InputOutcome>();
-    let backend = crate::input_method::default_backend(cfg.input_method.backend);
-    let polisher = Polisher::from_config(&cfg.polish)?;
-    tracing::info!(?backend, "input method backend");
-    tokio::spawn(async move {
-        let mut input_method = InputMethod::new(backend);
-        while let Some(text) = input_rx.recv().await {
-            let original = text;
-            // Cloud work is optional; queued originals take priority.
-            let corrected = polisher
-                .polish_when_idle(original.clone(), input_rx.is_empty())
-                .await;
-            let text = input_method
-                .compatible_text(&original, &corrected)
-                .to_string();
-            let outcome = match input_method.commit_text(&text).await {
-                Ok(()) => InputOutcome::Succeeded,
-                Err(error) => {
-                    tracing::warn!(error = %format!("{error:#}"), "text input failed");
-                    InputOutcome::Failed(format!("{error:#}"))
-                }
-            };
-            if input_report_tx.send(outcome).is_err() {
-                break;
-            }
-        }
-    });
+    let (input_tx, input_reports) = input::spawn(&cfg)?;
 
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
     let (activation_tx, activations) = mpsc::unbounded_channel();
     let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
+    let (projection, _snapshots) = Projection::new(&cfg);
     let actor = DictationActor::new(
         SessionHandle::spawn(cfg, session_report_tx),
         input_tx,
         notify,
         paths.config_file.clone(),
         shortcuts,
+        projection,
     );
 
     notify("voice-input", "daemon started");
@@ -365,5 +378,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
         .await
 }
 
+#[cfg(test)]
+mod actor_tests;
 #[cfg(test)]
 mod tests;

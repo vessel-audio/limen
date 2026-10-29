@@ -3,12 +3,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
+use super::input::{InputJob, InputReport};
+use super::projection::Projection;
+use super::snapshot::StateSnapshot;
 use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
 use crate::config::ShortcutConfig;
-use crate::dictation::{Event, InputOutcome, MAX_HOLD};
+use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
 use crate::shortcut::portal::{Bus, ShortcutHandle};
@@ -19,16 +22,30 @@ const TAP: Duration = Duration::from_millis(100);
 const KEPT: Duration = Duration::from_secs(1);
 
 /// A dictation actor wired to channels the test holds.
-struct Harness {
-    actor: DictationActor,
+pub(super) struct Harness {
+    pub(super) actor: DictationActor,
     /// Everything the actor told the session actor.
-    session: mpsc::UnboundedReceiver<SessionCommand>,
-    _input: mpsc::Receiver<String>,
+    pub(super) session: mpsc::UnboundedReceiver<SessionCommand>,
+    pub(super) _input: mpsc::UnboundedReceiver<InputJob>,
+    pub(super) _snapshots: watch::Receiver<StateSnapshot>,
 }
 
-fn harness() -> Harness {
+fn test_projection() -> (Projection, watch::Receiver<StateSnapshot>) {
+    let config = toml::from_str(
+        r#"
+        [provider]
+        url = "http://127.0.0.1:8000/v1/audio/transcriptions"
+        model = "test-model"
+        "#,
+    )
+    .unwrap();
+    Projection::new(&config)
+}
+
+pub(super) fn harness() -> Harness {
     let (mailbox, session) = mpsc::unbounded_channel();
-    let (input_tx, input) = mpsc::channel(16);
+    let (input_tx, input) = mpsc::unbounded_channel();
+    let (projection, snapshots) = test_projection();
     Harness {
         actor: DictationActor::new(
             SessionHandle::from_mailbox(mailbox),
@@ -36,18 +53,20 @@ fn harness() -> Harness {
             |_, _| {},
             PathBuf::from("/nonexistent/config.toml"),
             ShortcutHandle::detached(),
+            projection,
         ),
         session,
         _input: input,
+        _snapshots: snapshots,
     }
 }
 
 /// The senders that keep a running actor's mailboxes open.
-struct Senders {
-    commands: mpsc::Sender<ipc::Command>,
-    _input_reports: mpsc::UnboundedSender<InputOutcome>,
-    session_reports: mpsc::UnboundedSender<Event>,
-    activations: mpsc::UnboundedSender<ActivationReceipt>,
+pub(super) struct Senders {
+    pub(super) commands: mpsc::Sender<ipc::Command>,
+    pub(super) _input_reports: mpsc::UnboundedSender<InputReport>,
+    pub(super) session_reports: mpsc::UnboundedSender<Event>,
+    pub(super) activations: mpsc::UnboundedSender<ActivationReceipt>,
 }
 
 fn mailboxes() -> (Mailboxes, Senders) {
@@ -72,7 +91,7 @@ fn mailboxes() -> (Mailboxes, Senders) {
 }
 
 /// Run the actor's message loop in the background.
-fn spawn_loop(actor: DictationActor) -> Senders {
+pub(super) fn spawn_loop(actor: DictationActor) -> Senders {
     let (mailboxes, senders) = mailboxes();
     tokio::spawn(actor.run(mailboxes));
     senders
@@ -95,7 +114,7 @@ fn sent(session: &mut mpsc::UnboundedReceiver<SessionCommand>) -> Vec<SessionCom
 
 /// Ask a running loop for its status: once answered, the loop has handled
 /// everything that was due before.
-async fn status(senders: &Senders) -> String {
+pub(super) async fn status(senders: &Senders) -> String {
     let (reply, answer) = oneshot::channel();
     senders
         .commands
@@ -390,13 +409,15 @@ async fn shortcut_rebind_applies_only_a_valid_config() {
     );
     let before = shortcuts.status();
     let (mailbox, _session) = mpsc::unbounded_channel();
-    let (input_tx, _input) = mpsc::channel(16);
+    let (input_tx, _input) = mpsc::unbounded_channel();
+    let (projection, _snapshots) = test_projection();
     let actor = DictationActor::new(
         SessionHandle::from_mailbox(mailbox),
         input_tx,
         |_, _| {},
         config_file.clone(),
         shortcuts,
+        projection,
     );
     let senders = spawn_loop(actor);
     let rebind = || async {

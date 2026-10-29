@@ -17,6 +17,9 @@ mod shortcut;
 
 pub use config::{Config, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
+pub use daemon::snapshot::{
+    ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, StateSnapshot,
+};
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::{request, send, v1};
 pub use provider::probe;

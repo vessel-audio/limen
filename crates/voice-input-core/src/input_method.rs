@@ -189,7 +189,7 @@ impl InputMethod {
     }
 }
 
-fn sanitize_control_characters(text: &str) -> Cow<'_, str> {
+pub(crate) fn sanitize_control_characters(text: &str) -> Cow<'_, str> {
     let needs_sanitizing = text
         .chars()
         .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'));
