@@ -177,7 +177,7 @@ async fn apply(paths: &Paths) -> Result<Option<ShortcutStatus>> {
 }
 
 /// The daemon's shortcut status, or `None` when it is not running.
-async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
+pub(super) async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
     match ipc::request(paths, &v1::Request::ShortcutStatus).await {
         Ok(v1::Reply::ShortcutStatus(status)) => Ok(Some(status)),
         Ok(v1::Reply::Error { message }) => bail!("the daemon could not tell: {message}"),

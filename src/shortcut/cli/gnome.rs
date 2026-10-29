@@ -99,9 +99,13 @@ pub(super) async fn bind(
         toggle,
         keybinding::toggle_command(program.path()),
     );
-    // When the portal holds the key, it must let go before GNOME grabs it:
-    // apply the backend change first and wait for the session to close.
-    if current.backend == Backend::Portal {
+    // The running daemon can still hold a portal binding even when the
+    // config was already edited to this backend, e.g. by home-manager.
+    let daemon_uses_portal = super::portal::daemon_status(paths)
+        .await?
+        .is_some_and(|status| status.backend == Backend::Portal);
+    // The portal must let go before GNOME grabs the same key.
+    if current.backend == Backend::Portal || daemon_uses_portal {
         apply_backend(paths, toggle).await?;
     }
     gsettings::apply_setup(&dconf, &before, &plan).await?;
