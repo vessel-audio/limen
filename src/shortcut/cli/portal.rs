@@ -52,15 +52,17 @@ pub(super) async fn setup(
     check_distinct(wanted.toggle, wanted.hold)?;
     check_config(paths, &wanted)?;
     let program = Program::find()?;
-    if let Program::Unstable(path) = &program {
-        eprintln!(
-            "warning: {} is in the Nix store and stops working after an upgrade or garbage \
-             collection; install voice-input into your profile and run setup again",
-            path.display()
-        );
-    }
     match desktop_entry::ensure_installed(program.path())? {
-        Install::Installed(path) => println!("Installed {}.", path.display()),
+        Install::Installed(path) => {
+            println!("Installed {}.", path.display());
+            if let Program::Unstable(program) = &program {
+                eprintln!(
+                    "warning: {} is in the Nix store and stops working after an upgrade or garbage \
+                     collection; install voice-input into your profile and run setup again",
+                    program.display()
+                );
+            }
+        }
         Install::Present(_) => {}
     }
     // A GNOME custom shortcut on the same key would fire next to the portal's.
