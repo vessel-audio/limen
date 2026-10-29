@@ -52,6 +52,7 @@ case "$command" in
             org.gnome.desktop.wm.keybindings \
             org.gnome.shell.keybindings \
             org.gnome.mutter.keybindings \
+            org.gnome.mutter.wayland.keybindings \
             org.gnome.settings-daemon.plugins.media-keys
         ;;
     list-recursively)
@@ -113,10 +114,7 @@ impl Sandbox {
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("XDG_DATA_HOME", self.root.join("data"))
-            .env(
-                "XDG_DATA_DIRS",
-                std::env::var("XDG_DATA_DIRS").unwrap_or_default(),
-            )
+            .env("XDG_DATA_DIRS", self.root.join("system-data"))
             .env("XDG_CURRENT_DESKTOP", desktop)
             .env("FAKE_GSETTINGS_STATE", self.root.join("state"))
             .output()
@@ -197,16 +195,6 @@ fn fake_daemon(sandbox: &Sandbox, status: String) -> Arc<Mutex<Vec<String>>> {
         }
     });
     requests
-}
-
-fn cancelled_status() -> String {
-    r#"{"type":"shortcut_status","backend":"portal","session":"cancelled","preferred":{"toggle":"Super+Z","hold":"Super+X"},"actual":{"toggle":null,"hold":null},"last_error":null}"#.to_string()
-}
-
-fn bound_status(preferred_toggle: &str) -> String {
-    format!(
-        "{{\"type\":\"shortcut_status\",\"backend\":\"portal\",\"session\":\"bound\",\"preferred\":{{\"toggle\":\"{preferred_toggle}\",\"hold\":\"Super+X\"}},\"actual\":{{\"toggle\":{{\"description\":\"Press <Super>z\",\"shortcuts\":[\"Super+Z\"]}},\"hold\":{{\"description\":\"Press <Super>x\",\"shortcuts\":[\"Super+X\"]}}}},\"last_error\":null}}"
-    )
 }
 
 #[test]
@@ -318,7 +306,8 @@ fn portal_setup_without_a_daemon_defers_and_installs_the_entry() {
 #[test]
 fn portal_setup_reports_a_cancelled_dialog_from_the_daemon() {
     let sandbox = Sandbox::new("portal-cancelled");
-    let requests = fake_daemon(&sandbox, cancelled_status());
+    let status = r#"{"type":"shortcut_status","backend":"portal","session":"cancelled","preferred":{"toggle":"Super+Z","hold":"Super+X"},"actual":{"toggle":null,"hold":null},"last_error":null}"#.to_string();
+    let requests = fake_daemon(&sandbox, status);
     let (code, _, stderr) = strings(&sandbox.run("KDE", &["shortcut", "setup", "portal"]));
     assert_eq!(code, 1);
     assert!(
@@ -335,7 +324,8 @@ fn portal_setup_reports_a_cancelled_dialog_from_the_daemon() {
 fn portal_set_reports_the_binding_gnome_kept() {
     let sandbox = Sandbox::new("portal-kept");
     sandbox.write_config("portal");
-    let _requests = fake_daemon(&sandbox, bound_status("Super+Y"));
+    let status = r#"{"type":"shortcut_status","backend":"portal","session":"bound","preferred":{"toggle":"Super+Y","hold":"Super+X"},"actual":{"toggle":{"description":"Press <Super>z","shortcuts":["Super+Z"]},"hold":{"description":"Press <Super>x","shortcuts":["Super+X"]}},"last_error":null}"#.to_string();
+    let _requests = fake_daemon(&sandbox, status);
     let (code, _, stderr) = strings(&sandbox.run("KDE", &["shortcut", "set", "toggle", "Super+Y"]));
     assert_eq!(code, 1);
     assert!(
