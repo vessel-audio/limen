@@ -84,6 +84,7 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// Resolve socket, log, cache, and config paths from the user's XDG directories.
     pub fn discover() -> Result<Self> {
         let proj = ProjectDirs::from("dev", "voice-input", "voice-input")
             .context("cannot resolve user directories (HOME unset?)")?;
@@ -103,6 +104,7 @@ impl Paths {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Validated daemon configuration loaded from the user's TOML config file.
 pub struct Config {
     pub provider: ProviderConfig,
     #[serde(default)]

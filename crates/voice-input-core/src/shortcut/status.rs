@@ -48,6 +48,7 @@ pub struct Trigger {
 }
 
 impl Trigger {
+    /// Parse the accelerators GNOME includes in a human-readable trigger description.
     pub fn new(description: String) -> Self {
         let shortcuts = accelerators_in(&description);
         Self {
