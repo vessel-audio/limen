@@ -62,7 +62,7 @@ fn connected() -> GuiState {
 fn spawn_failure_and_reconnect_keep_their_distinct_states() {
     let (spawning, actions) = GuiState::default().apply(Msg::NotRunning);
     assert_eq!(spawning.connection, Connection::Spawning);
-    assert_eq!(actions, [Action::SpawnDaemon]);
+    assert!(actions.is_empty());
     let (failed, _) = spawning.apply(Msg::SpawnFailed {
         log_tail: "last 20 lines".to_string(),
     });

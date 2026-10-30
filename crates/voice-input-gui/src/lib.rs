@@ -55,7 +55,6 @@ pub fn run(paths: Paths) -> Result<()> {
             |window, cx| {
                 cx.new(|cx| {
                     let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
-                    let window_commands = commands.clone();
                     cx.spawn(async move |this, cx| {
                         while let Some(event) = events.recv().await {
                             let _ = this.update(cx, |window: &mut app::AppView, cx| {
@@ -63,10 +62,6 @@ pub fn run(paths: Paths) -> Result<()> {
                                     match action {
                                         Action::CopyToClipboard(text) => {
                                             cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                        }
-                                        Action::SpawnDaemon => {
-                                            let _ = window_commands
-                                                .try_send(BridgeCommand::SpawnDaemon);
                                         }
                                         Action::Reconnect => {}
                                         Action::Toast(_) => window.show_toast(),

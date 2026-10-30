@@ -49,7 +49,6 @@ pub enum Toast {
 /// Side effects requested by a pure state transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    SpawnDaemon,
     Reconnect,
     CopyToClipboard(String),
     Toast(Toast),
@@ -129,7 +128,7 @@ impl GuiState {
                     connection: Connection::Spawning,
                     ..Self::default()
                 };
-                (fresh, vec![Action::SpawnDaemon])
+                (fresh, Vec::new())
             }
             Msg::Disconnected { reason } => {
                 let attempt = match self.connection {

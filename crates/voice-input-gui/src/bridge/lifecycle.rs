@@ -5,6 +5,9 @@ use std::time::Duration;
 use anyhow::Result;
 use voice_input_core::{DaemonTermination, Paths, spawn_daemon, v1};
 
+// Four bounded task joins plus time for polling the final socket unlink.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(25);
+
 pub(super) type StartResult = Result<(), StartError>;
 
 #[derive(Debug)]
@@ -43,21 +46,30 @@ pub(super) async fn restart(paths: &Paths) -> StartResult {
 }
 
 pub(super) async fn wait_for_socket_removal(paths: &Paths) -> Result<(), StartError> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(SHUTDOWN_TIMEOUT, async {
         loop {
             match tokio::net::UnixStream::connect(&paths.socket).await {
                 Ok(stream) => drop(stream),
                 // ConnectionRefused can precede the old daemon's unlink; only
                 // a missing path proves that its socket cleanup has finished.
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
+                    ) => {}
                 Err(error) => return Err(StartError::Failed(error.to_string())),
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .map_err(|_| StartError::Failed("daemon did not stop within 5s".to_string()))?
+    .map_err(|_| {
+        StartError::Failed(format!(
+            "daemon did not stop within {}s",
+            SHUTDOWN_TIMEOUT.as_secs()
+        ))
+    })?
 }
 
 pub(super) fn is_outdated(message: &str) -> bool {

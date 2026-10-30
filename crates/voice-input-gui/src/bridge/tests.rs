@@ -276,3 +276,33 @@ fn hello_protocol_mismatch_offers_termination_without_keeping_the_stream() {
     ));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_waits_for_the_full_cleanup_budget() {
+    use std::fs;
+    use voice_input_core::Paths;
+
+    let root = std::env::temp_dir().join(format!(
+        "voice-input-bridge-shutdown-budget-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("voice-input.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    drop(tokio::net::UnixListener::bind(&paths.socket).unwrap());
+    let socket = paths.socket.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        fs::remove_file(socket).unwrap();
+    });
+
+    super::wait_for_socket_removal(&paths).await.unwrap();
+
+    assert!(!paths.socket.exists());
+    fs::remove_dir_all(root).unwrap();
+}
