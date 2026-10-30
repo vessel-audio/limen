@@ -17,7 +17,7 @@ use anyhow::{Context, Result, anyhow};
 pub const APP_ID: &str = "io.github.Emin017.VoiceInput";
 
 /// The entry as it is kept in the repository.
-const ENTRY: &str = include_str!("../../../../data/io.github.Emin017.VoiceInput.desktop");
+const ENTRY: &str = include_str!("../../../data/io.github.Emin017.VoiceInput.desktop");
 
 /// Which command a non-Nix desktop entry launches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

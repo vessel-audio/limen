@@ -1,11 +1,7 @@
 [workspace]
 resolver = "3"
-members = [
-  "crates/voice-input-core",
-  "crates/voice-input-gui",
-  "crates/voice-input",
-]
-default-members = ["crates/voice-input-core", "crates/voice-input"]
+members = ["voice-input-core", "voice-input-gui", "voice-input"]
+default-members = ["voice-input-core", "voice-input"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,8 +29,8 @@ toml = "0.8"
 toml_edit = "0.22"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-voice-input-core = { path = "crates/voice-input-core" }
-voice-input-gui = { path = "crates/voice-input-gui" }
+voice-input-core = { path = "voice-input-core" }
+voice-input-gui = { path = "voice-input-gui" }
 gpui-kit = "=0.8.1"
 zbus = { version = "6.1.0", default-features = false, features = [
   "proxy",
