@@ -1,6 +1,6 @@
 //! The daemon's recent transcription requests, newest first.
 
-use gpui_kit::component::{ActiveTheme, StyledExt};
+use gpui_kit::component::{ActiveTheme, StyledExt, scroll::ScrollbarMode};
 use gpui_kit::*;
 use voice_input_core::{DictationState, HistoryEntry, RequestEntry, RequestOutcome};
 
@@ -126,20 +126,28 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .child(
             div()
                 .id("requests")
-                .v_flex()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(view.requests_scroll.handle())
                 .rounded_xl()
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.18))
-                .children(live.into_iter().chain(rows).enumerate().map(
-                    |(index, row)| match index {
-                        0 => row,
-                        _ => row.border_t_1().border_color(cx.theme().border),
-                    },
-                ))
-                .children(empty),
+                .child(
+                    div()
+                        .v_flex()
+                        .on_scroll(view.requests_scroll.on_scroll())
+                        .children(
+                            live.into_iter().chain(rows).enumerate().map(
+                                |(index, row)| match index {
+                                    0 => row,
+                                    _ => row.border_t_1().border_color(cx.theme().border),
+                                },
+                            ),
+                        )
+                        .children(empty),
+                )
+                .child(view.requests_scroll.scrollbar(ScrollbarMode::Scrolling)),
         )
 }
 

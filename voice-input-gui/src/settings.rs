@@ -4,6 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt,
     button::{Button, ButtonVariants},
+    scroll::ScrollbarMode,
     searchable_list::SearchableListItem,
     select::Select,
     switch::Switch,
@@ -148,14 +149,12 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
             cx.notify();
         }))
     });
-    div()
-        .id("settings-general")
+    let scroll = &view.settings_scroll;
+    let content = div()
         .v_flex()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
         .gap_5()
         .p_8()
+        .on_scroll(scroll.on_scroll())
         .child(header(view, cx))
         .child(
             div()
@@ -274,7 +273,15 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                         _ => row.border_t_1(),
                     }),
                 ),
-        )
+        );
+    div()
+        .id("settings-general")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(scroll.handle())
+        .child(content)
+        .child(scroll.scrollbar(ScrollbarMode::Always))
 }
 
 pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {

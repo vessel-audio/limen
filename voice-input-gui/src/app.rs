@@ -17,6 +17,7 @@ use crate::recorder::RecorderState;
 use crate::settings::{
     AppearancePreference, FontChoice, LanguagePreference, LightweightMode, SettingsPage,
 };
+use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
@@ -55,6 +56,10 @@ pub struct AppView {
     pub level_history: Vec<f32>,
     pub silent_since: Option<Instant>,
     pub shortcut_report: Option<Result<voice_input_core::Report, crate::bridge::ShortcutFailure>>,
+    pub settings_scroll: SmoothScroll,
+    pub shortcuts_scroll: SmoothScroll,
+    pub history_scroll: SmoothScroll,
+    pub requests_scroll: SmoothScroll,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
 }
@@ -157,6 +162,10 @@ impl AppView {
             silent_since: None,
             shortcut_report: None,
             expanded_request: None,
+            settings_scroll: SmoothScroll::default(),
+            shortcuts_scroll: SmoothScroll::default(),
+            history_scroll: SmoothScroll::default(),
+            requests_scroll: SmoothScroll::default(),
         }
     }
 
@@ -352,6 +361,14 @@ impl Render for AppView {
                 crate::palette::apply(cx);
                 self.apply_typography(cx);
             }
+        }
+        for scroll in [
+            &self.settings_scroll,
+            &self.shortcuts_scroll,
+            &self.history_scroll,
+            &self.requests_scroll,
+        ] {
+            scroll.step(window);
         }
         let page = match self.page {
             Page::Dictation => div()

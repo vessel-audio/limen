@@ -3,6 +3,7 @@
 use gpui_kit::component::{
     ActiveTheme, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
+    scroll::ScrollbarMode,
 };
 use gpui_kit::*;
 use voice_input_core::{HistoryEntry, HistoryOutcome};
@@ -53,17 +54,23 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             .child(rust_i18n::t!("history.empty").to_string()),
         false => div()
             .id("history-entries")
-            .v_flex()
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .gap_2()
-            .children(
-                entries
-                    .iter()
-                    .rev()
-                    .map(|entry| history_card(entry, card_background)),
-            ),
+            .track_scroll(view.history_scroll.handle())
+            .child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .on_scroll(view.history_scroll.on_scroll())
+                    .children(
+                        entries
+                            .iter()
+                            .rev()
+                            .map(|entry| history_card(entry, card_background)),
+                    ),
+            )
+            .child(view.history_scroll.scrollbar(ScrollbarMode::Scrolling)),
     };
     let confirmation = view.confirm_clear.then(|| {
         div()

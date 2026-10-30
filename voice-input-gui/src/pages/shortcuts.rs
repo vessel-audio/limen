@@ -4,6 +4,7 @@ use gpui_kit::component::{
     StyledExt,
     button::{Button, ButtonVariants},
     input::Input,
+    scroll::ScrollbarMode,
 };
 use gpui_kit::*;
 use voice_input_core::{
@@ -99,8 +100,7 @@ pub fn shortcuts(
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .gap_5()
-        .p_8()
+        .track_scroll(view.shortcuts_scroll.handle())
         .track_focus(&view.recorder_focus)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
             if event.keystroke.key == "backspace" && (this.toggle_focused || this.hold_focused) {
@@ -126,16 +126,24 @@ pub fn shortcuts(
                 let _ = this.commands.try_send(BridgeCommand::Shortcut(request));
             }
         }))
-        .child(super::title(rust_i18n::t!("nav.shortcuts")))
-        .child(selector)
-        .child(body)
         .child(
-            Button::new("apply-shortcut-backend")
-                .primary()
-                .label(rust_i18n::t!("shortcuts.apply").to_string())
-                .on_click(cx.listener(apply)),
+            div()
+                .v_flex()
+                .gap_5()
+                .p_8()
+                .on_scroll(view.shortcuts_scroll.on_scroll())
+                .child(super::title(rust_i18n::t!("nav.shortcuts")))
+                .child(selector)
+                .child(body)
+                .child(
+                    Button::new("apply-shortcut-backend")
+                        .primary()
+                        .label(rust_i18n::t!("shortcuts.apply").to_string())
+                        .on_click(cx.listener(apply)),
+                )
+                .children(report),
         )
-        .children(report)
+        .child(view.shortcuts_scroll.scrollbar(ScrollbarMode::Scrolling))
 }
 
 fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {

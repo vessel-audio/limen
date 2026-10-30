@@ -179,7 +179,7 @@ impl AppView {
                                 Button::new("open-settings")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::Settings2)
+                                    .icon(IconName::Settings)
                                     .selected(matches!(self.page, Page::Settings(_)))
                                     .tooltip(rust_i18n::t!("settings.title").to_string())
                                     .on_click(cx.listener(|this, _, _, _| {

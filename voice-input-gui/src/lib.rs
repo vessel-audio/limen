@@ -12,6 +12,7 @@ mod palette;
 mod recorder;
 mod settings;
 mod sidebar;
+mod smooth_scroll;
 
 pub use bridge::{BridgeCommand, BridgeEvent, ShortcutRequest};
 pub use model::{
