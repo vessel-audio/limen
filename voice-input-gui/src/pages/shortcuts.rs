@@ -19,16 +19,18 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
         .snapshot
         .as_ref()
         .map(|snapshot| snapshot.shortcut.preferred);
+    // Follow the daemon's keys until the user edits a field, but only when
+    // they differ: setting a value resets the field's cursor and selection,
+    // and this runs on every frame.
     if let Some(preferred) = preferred {
-        if !view.toggle_touched {
-            view.toggle_input.update(cx, |input, cx| {
-                input.set_value(preferred.toggle.to_string(), window, cx);
-            });
-        }
-        if !view.hold_touched {
-            view.hold_input.update(cx, |input, cx| {
-                input.set_value(preferred.hold.to_string(), window, cx);
-            });
+        for (input, touched, keys) in [
+            (&view.toggle_input, view.toggle_touched, preferred.toggle),
+            (&view.hold_input, view.hold_touched, preferred.hold),
+        ] {
+            let text = keys.to_string();
+            if !touched && input.read(cx).value() != text {
+                input.update(cx, |input, cx| input.set_value(text, window, cx));
+            }
         }
     }
     let selector = div().h_flex().gap_2().children(
