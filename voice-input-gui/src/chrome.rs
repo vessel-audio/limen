@@ -2,7 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Sizable, StyledExt, TitleBar,
+    ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::*;
@@ -88,12 +88,8 @@ impl AppView {
                                     .child(rust_i18n::t!("app.title").to_string())
                                     .with_spring(
                                         "brand-name",
-                                        SpringAnimation::new(motion::SPRING).to(
-                                            match self.sidebar_mode {
-                                                SidebarMode::Expanded => 1.,
-                                                SidebarMode::Collapsed => 0.,
-                                            },
-                                        ),
+                                        SpringAnimation::new(motion::SPRING)
+                                            .to(self.sidebar_mode.label_opacity()),
                                         |name, opacity| name.opacity(opacity.clamp(0., 1.)),
                                     ),
                             )
@@ -168,6 +164,24 @@ impl AppView {
                                 false => dot.into_any_element(),
                             })
                             .child(status),
+                    )
+                    // Settings live outside the sidebar, one press away from
+                    // any page; the press must not start a window drag.
+                    .child(
+                        div()
+                            .ml_3()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                Button::new("open-settings")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Settings2)
+                                    .selected(matches!(self.page, Page::Settings(_)))
+                                    .tooltip(rust_i18n::t!("settings.title").to_string())
+                                    .on_click(cx.listener(|this, _, _, _| {
+                                        this.page = Page::Settings(SettingsPage::General);
+                                    })),
+                            ),
                     ),
             )
     }

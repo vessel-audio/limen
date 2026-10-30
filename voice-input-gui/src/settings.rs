@@ -10,7 +10,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::app::{AppView, ShutdownAction};
+use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
 
 /// Settings subpages shown below the sidebar's Settings item.
@@ -156,7 +156,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .overflow_y_scroll()
         .gap_5()
         .p_8()
-        .child(crate::pages::title(rust_i18n::t!("settings.general")))
+        .child(header(view, cx))
         .child(
             div()
                 .v_flex()
@@ -277,41 +277,93 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         )
 }
 
-pub fn about(_: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
+pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
+    let card = div()
+        .v_flex()
+        .items_center()
+        .gap_4()
+        .rounded_xl()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted.opacity(0.18))
+        .px_16()
+        .py_12()
+        .child(
+            Icon::new(IconName::Mic)
+                .size(px(36.))
+                .text_color(cx.theme().primary),
+        )
+        .child(
+            div()
+                .text_2xl()
+                .font_family("serif")
+                .child(rust_i18n::t!("app.title").to_string()),
+        )
+        .child(div().text_color(cx.theme().muted_foreground).child(format!(
+            "{} {}",
+            rust_i18n::t!("about.version"),
+            env!("CARGO_PKG_VERSION")
+        )));
     div()
         .id("settings-about")
         .v_flex()
         .flex_1()
-        .items_center()
-        .justify_center()
+        .gap_5()
         .p_8()
+        .child(header(view, cx))
         .child(
             div()
-                .v_flex()
+                .flex_1()
+                .flex()
                 .items_center()
-                .gap_4()
-                .rounded_xl()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted.opacity(0.18))
-                .px_16()
-                .py_12()
-                .child(
-                    Icon::new(IconName::Mic)
-                        .size(px(36.))
-                        .text_color(cx.theme().primary),
-                )
-                .child(
-                    div()
-                        .text_2xl()
-                        .font_family("serif")
-                        .child(rust_i18n::t!("app.title").to_string()),
-                )
-                .child(div().text_color(cx.theme().muted_foreground).child(format!(
-                    "{} {}",
-                    rust_i18n::t!("about.version"),
-                    env!("CARGO_PKG_VERSION")
-                ))),
+                .justify_center()
+                .child(card),
+        )
+}
+
+/// The settings title above tabs for its subpages.
+fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
+    div()
+        .v_flex()
+        .gap_4()
+        .child(crate::pages::title(rust_i18n::t!("settings.title")))
+        .child(
+            div().h_flex().gap_1().children(
+                [
+                    (
+                        "settings-tab-general",
+                        rust_i18n::t!("settings.general"),
+                        SettingsPage::General,
+                    ),
+                    (
+                        "settings-tab-about",
+                        rust_i18n::t!("about.menu"),
+                        SettingsPage::About,
+                    ),
+                ]
+                .map(|(id, label, page)| {
+                    let tab = div()
+                        .id(id)
+                        .px(px(14.))
+                        .py_1p5()
+                        .rounded_md()
+                        .text_sm()
+                        .cursor_pointer()
+                        .child(label.to_string())
+                        .on_click(cx.listener(move |this, _, _, _| {
+                            this.page = Page::Settings(page);
+                        }));
+                    match view.page == Page::Settings(page) {
+                        true => tab
+                            .bg(cx.theme().accent)
+                            .text_color(cx.theme().foreground)
+                            .font_medium(),
+                        false => tab
+                            .text_color(cx.theme().muted_foreground)
+                            .hover(|style| style.bg(cx.theme().accent.opacity(0.5))),
+                    }
+                }),
+            ),
         )
 }
 
