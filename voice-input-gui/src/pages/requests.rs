@@ -190,9 +190,15 @@ fn entry(
             };
             let id = format!("{}-{}", request.take, request.started_ms);
             let error_line = detail().text_color(cx.theme().danger);
+            let expanded = view.expanded_request == Some(key);
             div().child(
                 div()
                     .id(SharedString::from(format!("request-{id}")))
+                    .role(Role::Button)
+                    .accessibility_id(format!("request-{id}"))
+                    .aria_label(rust_i18n::t!("requests.failed_status").to_string())
+                    .aria_description(error.clone())
+                    .aria_expanded(expanded)
                     .v_flex()
                     .gap_1()
                     .px_4()
@@ -215,7 +221,7 @@ fn entry(
                         .child(div().flex_1())
                         .child(took(request.duration_ms, cx)),
                     )
-                    .child(match view.expanded_request == Some(key) {
+                    .child(match expanded {
                         true => error_line
                             .child(error.clone())
                             .with_animation(

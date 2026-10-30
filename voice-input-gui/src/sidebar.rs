@@ -130,6 +130,9 @@ impl AppView {
             )
             .child(
                 div()
+                    .id("navigation")
+                    .role(Role::TabList)
+                    .aria_label(rust_i18n::t!("nav.section").to_string())
                     .relative()
                     .v_flex()
                     .gap(px(ROW_GAP))
@@ -139,6 +142,10 @@ impl AppView {
                         let label = destination.label.clone();
                         let row = div()
                             .id(destination.id)
+                            .role(Role::Tab)
+                            .accessibility_id(destination.id)
+                            .aria_label(label.clone())
+                            .aria_selected(self.page == page)
                             .h_flex()
                             .w_full()
                             .h(px(ROW_HEIGHT))

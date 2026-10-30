@@ -2,13 +2,11 @@
 //! daemon's recent transcription requests.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, StyledExt,
-    button::{Button, ButtonVariants},
-};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, StyledExt, button::ButtonVariants};
 use gpui_kit::*;
 use voice_input_core::{Control, DictationState};
 
+use crate::a11y;
 use crate::app::{AppView, LEVEL_BARS};
 use crate::bridge::BridgeCommand;
 use crate::model::{DictationButton, DisabledReason};
@@ -175,6 +173,9 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 .gap_2()
                                 .child(
                                     div()
+                                        .id("dictation-status")
+                                        .role(Role::Status)
+                                        .aria_label(title.to_string())
                                         .text_lg()
                                         .font_family("serif")
                                         .child(title.to_string()),
@@ -190,6 +191,9 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         // below holds the full error.
                         .child(
                             div()
+                                .id("dictation-note")
+                                .role(Role::Status)
+                                .aria_label(note.clone())
                                 .text_sm()
                                 .truncate()
                                 .text_color(note_color)
@@ -197,7 +201,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         ),
                 )
                 .child(
-                    Button::new("dictation-primary")
+                    a11y::button("dictation-primary")
                         .primary()
                         .icon(icon)
                         .label(label.to_string())

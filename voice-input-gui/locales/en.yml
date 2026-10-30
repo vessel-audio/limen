@@ -127,3 +127,5 @@ requests.title: Requests
 requests.count: requests
 requests.kept: The daemon keeps the latest 20
 requests.failed_status: Failed
+settings.font_decrease: Decrease font size
+settings.font_increase: Increase font size

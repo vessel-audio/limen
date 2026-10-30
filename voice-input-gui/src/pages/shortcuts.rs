@@ -1,16 +1,12 @@
 //! Shortcut backend selection, key recording, and operation reports.
 
-use gpui_kit::component::{
-    StyledExt,
-    button::{Button, ButtonVariants},
-    input::Input,
-    scroll::ScrollbarMode,
-};
+use gpui_kit::component::{StyledExt, button::ButtonVariants, input::Input, scroll::ScrollbarMode};
 use gpui_kit::*;
 use voice_input_core::{
     Action as ShortcutAction, Backend, Keys, Note, Program, SessionState, Shortcut,
 };
 
+use crate::a11y;
 use crate::app::AppView;
 use crate::bridge::{BridgeCommand, ShortcutRequest};
 use crate::recorder::{
@@ -50,7 +46,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
             ),
         ]
         .map(|(id, backend, label)| {
-            let button = Button::new(id).label(label);
+            let button = a11y::button(id).label(label);
             match backend == view.selected_backend {
                 true => button.primary(),
                 false => button.outline(),
@@ -69,7 +65,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
             .gap_2()
             .child(rust_i18n::t!("shortcuts.bind_command").to_string())
             .child(
-                Button::new("copy-toggle-command")
+                a11y::button("copy-toggle-command")
                     .outline()
                     .label("voice-input toggle")
                     .on_click(|_, _, cx| {
@@ -84,11 +80,19 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
             Ok(report) => (report, None),
             Err(failure) => (&failure.report, Some(failure.message.clone())),
         };
+        let lines = report
+            .notes
+            .iter()
+            .map(format_note)
+            .chain(error)
+            .collect::<Vec<_>>();
         div()
+            .id("shortcut-report")
+            .role(Role::Status)
+            .aria_label(lines.join("\n"))
             .v_flex()
             .gap_1()
-            .children(report.notes.iter().map(format_note))
-            .children(error)
+            .children(lines)
     });
     let page = div()
         .id("shortcuts-page")
@@ -127,7 +131,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
                 .child(selector)
                 .child(body)
                 .child(
-                    Button::new("apply-shortcut-backend")
+                    a11y::button("apply-shortcut-backend")
                         .primary()
                         .label(rust_i18n::t!("shortcuts.apply").to_string())
                         .on_click(cx.listener(apply)),
@@ -163,7 +167,7 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
             .children(status.last_error.clone())
             .children(match status.session {
                 SessionState::Cancelled | SessionState::Failed => Some(
-                    Button::new("retry-portal")
+                    a11y::button("retry-portal")
                         .outline()
                         .label(rust_i18n::t!("shortcuts.retry").to_string())
                         .on_click({
@@ -190,7 +194,7 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         .gap_3()
         .children(status)
         .child(
-            Button::new("edit-portal-shortcuts")
+            a11y::button("edit-portal-shortcuts")
                 .outline()
                 .label(rust_i18n::t!("shortcuts.edit").to_string())
                 .on_click({
@@ -202,9 +206,17 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         )
         .child(rust_i18n::t!("shortcuts.hold_order").to_string())
         .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
-        .child(Input::new(&view.toggle_input))
+        .child(
+            Input::new(&view.toggle_input)
+                .accessibility_id("toggle-input")
+                .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
+        )
         .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
-        .child(Input::new(&view.hold_input))
+        .child(
+            Input::new(&view.hold_input)
+                .accessibility_id("hold-input")
+                .aria_label(rust_i18n::t!("shortcuts.preferred_hold").to_string()),
+        )
 }
 
 fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
@@ -231,9 +243,15 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             div()
                 .h_flex()
                 .gap_2()
-                .child(current)
                 .child(
-                    Button::new("record-toggle")
+                    div()
+                        .id("recorder-state")
+                        .role(Role::Status)
+                        .aria_label(current.clone())
+                        .child(current),
+                )
+                .child(
+                    a11y::button("record-toggle")
                         .outline()
                         .label(rust_i18n::t!("shortcuts.record").to_string())
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -242,7 +260,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                         })),
                 )
                 .child(
-                    Button::new("clear-toggle")
+                    a11y::button("clear-toggle")
                         .ghost()
                         .label(rust_i18n::t!("action.clear").to_string())
                         .on_click({
@@ -257,9 +275,13 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                         }),
                 ),
         )
-        .child(Input::new(&view.toggle_input))
         .child(
-            Button::new("set-toggle-manual")
+            Input::new(&view.toggle_input)
+                .accessibility_id("toggle-input")
+                .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
+        )
+        .child(
+            a11y::button("set-toggle-manual")
                 .outline()
                 .label(rust_i18n::t!("shortcuts.set_toggle").to_string())
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -280,7 +302,13 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 })),
         )
         .child(rust_i18n::t!("shortcuts.no_hold").to_string())
-        .children(error)
+        .children(error.map(|error| {
+            div()
+                .id("recorder-error")
+                .role(Role::Alert)
+                .aria_label(error.clone())
+                .child(error)
+        }))
 }
 
 fn apply(view: &mut AppView, _: &ClickEvent, _: &mut Window, cx: &mut Context<AppView>) {

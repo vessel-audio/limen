@@ -1,13 +1,12 @@
 //! GPUI pages rendered from the pure GUI model.
 
 use gpui_kit::component::{
-    ActiveTheme, StyledExt, WindowExt,
-    button::{Button, ButtonVariants},
-    scroll::ScrollbarMode,
+    ActiveTheme, StyledExt, WindowExt, button::ButtonVariants, scroll::ScrollbarMode,
 };
 use gpui_kit::*;
 use voice_input_core::{HistoryEntry, HistoryOutcome};
 
+use crate::a11y;
 use crate::app::AppView;
 use crate::bridge::BridgeCommand;
 
@@ -39,7 +38,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 ),
         )
         .child(
-            Button::new("clear-history")
+            a11y::button("clear-history")
                 .ghost()
                 .label(rust_i18n::t!("action.clear").to_string())
                 .on_click(cx.listener(|this, _, _, _| {
@@ -71,12 +70,16 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             .flex_1(),
     };
     let confirmation = view.confirm_clear.then(|| {
+        let question = rust_i18n::t!("history.clear_confirm").to_string();
         div()
+            .id("clear-confirmation")
+            .role(Role::Alert)
+            .aria_label(question.clone())
             .h_flex()
             .gap_2()
-            .child(rust_i18n::t!("history.clear_confirm").to_string())
+            .child(question)
             .child(
-                Button::new("confirm-clear")
+                a11y::button("confirm-clear")
                     .primary()
                     .label(rust_i18n::t!("action.clear").to_string())
                     .on_click(cx.listener(|this, _, _, _| {
@@ -85,7 +88,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                     })),
             )
             .child(
-                Button::new("cancel-clear")
+                a11y::button("cancel-clear")
                     .ghost()
                     .label(rust_i18n::t!("action.cancel").to_string())
                     .on_click(cx.listener(|this, _, _, _| {
@@ -112,8 +115,15 @@ pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
 
 /// Serif page heading shared by every non-dictation page.
-pub fn title(text: impl Into<SharedString>) -> Div {
-    div().text_xl().font_family("serif").child(text.into())
+pub fn title(text: impl Into<SharedString>) -> Stateful<Div> {
+    let text = text.into();
+    div()
+        .id("page-title")
+        .role(Role::Heading)
+        .aria_label(text.clone())
+        .text_xl()
+        .font_family("serif")
+        .child(text)
 }
 
 fn history_card(entry: &HistoryEntry, background: Hsla) -> Div {
@@ -143,7 +153,7 @@ fn history_card(entry: &HistoryEntry, background: Hsla) -> Div {
                     rust_i18n::t!(outcome)
                 ))
                 .child(
-                    Button::new(format!("copy-{}", entry.id))
+                    a11y::button(format!("copy-{}", entry.id))
                         .ghost()
                         .label(rust_i18n::t!("action.copy").to_string())
                         .on_click({

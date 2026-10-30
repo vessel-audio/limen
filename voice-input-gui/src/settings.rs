@@ -11,6 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+use crate::a11y;
 use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
 
@@ -182,10 +183,13 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 .items_center()
                                 .gap_3()
                                 .child(
-                                    Button::new("font-decrease")
+                                    a11y::button("font-decrease")
                                         .small()
                                         .outline()
                                         .label("−")
+                                        .accessibility_label(
+                                            rust_i18n::t!("settings.font_decrease").to_string(),
+                                        )
                                         .disabled(view.font_size <= 12.0)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.font_size = (this.font_size - 1.0).max(12.0);
@@ -194,15 +198,21 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 )
                                 .child(
                                     div()
+                                        .id("font-size")
+                                        .role(Role::Label)
+                                        .aria_value(format!("{} px", view.font_size))
                                         .w(px(64.))
                                         .text_center()
                                         .child(format!("{} px", view.font_size)),
                                 )
                                 .child(
-                                    Button::new("font-increase")
+                                    a11y::button("font-increase")
                                         .small()
                                         .outline()
                                         .label("+")
+                                        .accessibility_label(
+                                            rust_i18n::t!("settings.font_increase").to_string(),
+                                        )
                                         .disabled(view.font_size >= 22.0)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.font_size = (this.font_size + 1.0).min(22.0);
@@ -215,6 +225,9 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                             "settings.interface_font",
                             div().w(px(220.)).child(
                                 Select::new(&view.font_select)
+                                    .accessibility_label(
+                                        rust_i18n::t!("settings.interface_font").to_string(),
+                                    )
                                     .menu_max_h(px(320.))
                                     .search_placeholder(
                                         rust_i18n::t!("settings.search_font").to_string(),
@@ -225,6 +238,9 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         setting(
                             "settings.lightweight",
                             Switch::new("lightweight")
+                                .accessibility_label(
+                                    rust_i18n::t!("settings.lightweight").to_string(),
+                                )
                                 .checked(view.lightweight == LightweightMode::On)
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.lightweight = match checked {
@@ -242,7 +258,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 .h_flex()
                                 .gap_2()
                                 .child(
-                                    Button::new("restart-daemon")
+                                    a11y::button("restart-daemon")
                                         .small()
                                         .outline()
                                         .label(rust_i18n::t!("action.restart_daemon").to_string())
@@ -255,7 +271,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                         }),
                                 )
                                 .child(
-                                    Button::new("stop-daemon")
+                                    a11y::button("stop-daemon")
                                         .small()
                                         .outline()
                                         .label(rust_i18n::t!("action.stop_daemon").to_string())
@@ -304,11 +320,19 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                 .font_family("serif")
                 .child(rust_i18n::t!("app.title").to_string()),
         )
-        .child(div().text_color(cx.theme().muted_foreground).child(format!(
-            "{} {}",
-            rust_i18n::t!("about.version"),
-            env!("CARGO_PKG_VERSION")
-        )));
+        .child({
+            let version = format!(
+                "{} {}",
+                rust_i18n::t!("about.version"),
+                env!("CARGO_PKG_VERSION")
+            );
+            div()
+                .id("about-version")
+                .role(Role::Label)
+                .aria_value(version.clone())
+                .text_color(cx.theme().muted_foreground)
+                .child(version)
+        });
     div()
         .id("settings-about")
         .v_flex()
@@ -333,47 +357,57 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .gap_4()
         .child(crate::pages::title(rust_i18n::t!("settings.title")))
         .child(
-            div().h_flex().gap_1().children(
-                [
-                    (
-                        "settings-tab-general",
-                        rust_i18n::t!("settings.general"),
-                        SettingsPage::General,
-                    ),
-                    (
-                        "settings-tab-about",
-                        rust_i18n::t!("about.menu"),
-                        SettingsPage::About,
-                    ),
-                ]
-                .map(|(id, label, page)| {
-                    let tab = div()
-                        .id(id)
-                        .px(px(14.))
-                        .py_1p5()
-                        .rounded_md()
-                        .text_sm()
-                        .cursor_pointer()
-                        .child(label.to_string())
-                        .on_click(cx.listener(move |this, _, _, _| {
-                            this.page = Page::Settings(page);
-                        }));
-                    match view.page == Page::Settings(page) {
-                        true => tab
-                            .bg(cx.theme().accent)
-                            .text_color(cx.theme().foreground)
-                            .font_medium(),
-                        false => tab
-                            .text_color(cx.theme().muted_foreground)
-                            .hover(|style| style.bg(cx.theme().accent.opacity(0.5))),
-                    }
-                }),
-            ),
+            div()
+                .id("settings-tabs")
+                .role(Role::TabList)
+                .aria_label(rust_i18n::t!("settings.title").to_string())
+                .h_flex()
+                .gap_1()
+                .children(
+                    [
+                        (
+                            "settings-tab-general",
+                            rust_i18n::t!("settings.general"),
+                            SettingsPage::General,
+                        ),
+                        (
+                            "settings-tab-about",
+                            rust_i18n::t!("about.menu"),
+                            SettingsPage::About,
+                        ),
+                    ]
+                    .map(|(id, label, page)| {
+                        let tab = div()
+                            .id(id)
+                            .role(Role::Tab)
+                            .accessibility_id(id)
+                            .aria_label(label.to_string())
+                            .aria_selected(view.page == Page::Settings(page))
+                            .px(px(14.))
+                            .py_1p5()
+                            .rounded_md()
+                            .text_sm()
+                            .cursor_pointer()
+                            .child(label.to_string())
+                            .on_click(cx.listener(move |this, _, _, _| {
+                                this.page = Page::Settings(page);
+                            }));
+                        match view.page == Page::Settings(page) {
+                            true => tab
+                                .bg(cx.theme().accent)
+                                .text_color(cx.theme().foreground)
+                                .font_medium(),
+                            false => tab
+                                .text_color(cx.theme().muted_foreground)
+                                .hover(|style| style.bg(cx.theme().accent.opacity(0.5))),
+                        }
+                    }),
+                ),
         )
 }
 
 fn choice(id: &'static str, label: String, selected: bool) -> Button {
-    let button = Button::new(id).small().label(label);
+    let button = a11y::button(id).small().label(label);
     match selected {
         true => button.primary(),
         false => button.outline(),

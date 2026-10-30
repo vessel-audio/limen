@@ -1,5 +1,6 @@
 //! Optional GPUI control panel for the voice-input daemon.
 
+mod a11y;
 mod app;
 mod bridge;
 mod chrome;

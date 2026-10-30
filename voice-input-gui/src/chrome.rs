@@ -2,11 +2,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar,
-    button::{Button, ButtonVariants},
+    ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, button::ButtonVariants,
 };
 use gpui_kit::*;
 
+use crate::a11y;
 use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
 use crate::model::{Connection, Warning};
@@ -36,13 +36,14 @@ impl AppView {
             Connection::Connecting | Connection::Spawning | Connection::Reconnecting { .. }
         );
         let dot = div().size(px(6.)).rounded_full().bg(color);
-        let (section, page) = match self.page {
+        let (section, page_key) = match self.page {
             Page::Dictation => ("nav.section", "nav.dictation"),
             Page::History => ("nav.section", "nav.history"),
             Page::Shortcuts => ("nav.section", "nav.shortcuts"),
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
             Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
         };
+        let page = rust_i18n::t!(page_key).to_string();
         // The brand mark shares the sidebar's centre line and its label starts
         // in the navigation label column, so the two read as one column; the
         // brand area follows the sidebar's width so the page controls start
@@ -119,7 +120,7 @@ impl AppView {
                                         cx.stop_propagation()
                                     })
                                     .child(
-                                        Button::new("toggle-sidebar")
+                                        a11y::button("toggle-sidebar")
                                             .ghost()
                                             .small()
                                             .icon(match self.sidebar_mode {
@@ -127,6 +128,9 @@ impl AppView {
                                                 SidebarMode::Collapsed => IconName::PanelLeftOpen,
                                             })
                                             .tooltip(
+                                                rust_i18n::t!("nav.toggle_sidebar").to_string(),
+                                            )
+                                            .accessibility_label(
                                                 rust_i18n::t!("nav.toggle_sidebar").to_string(),
                                             )
                                             .on_click(cx.listener(|this, _, _, _| {
@@ -146,14 +150,20 @@ impl AppView {
                             .child(div().text_color(cx.theme().border).child("/"))
                             .child(
                                 div()
+                                    .id("current-page")
+                                    .role(Role::Heading)
+                                    .aria_label(page.clone())
                                     .min_w_0()
                                     .truncate()
                                     .font_medium()
-                                    .child(rust_i18n::t!(page).to_string()),
+                                    .child(page),
                             ),
                     )
                     .child(
                         div()
+                            .id("connection-status")
+                            .role(Role::Status)
+                            .aria_label(status.clone())
                             .h_flex()
                             .items_center()
                             .gap_2()
@@ -176,12 +186,15 @@ impl AppView {
                             .ml_3()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
-                                Button::new("open-settings")
+                                a11y::button("open-settings")
                                     .ghost()
                                     .small()
                                     .icon(IconName::Settings)
                                     .selected(matches!(self.page, Page::Settings(_)))
                                     .tooltip(rust_i18n::t!("settings.title").to_string())
+                                    .accessibility_label(
+                                        rust_i18n::t!("settings.title").to_string(),
+                                    )
                                     .on_click(cx.listener(|this, _, _, _| {
                                         this.page = Page::Settings(SettingsPage::General);
                                     })),
@@ -190,21 +203,33 @@ impl AppView {
             )
     }
 
-    pub(crate) fn banners(&self, cx: &mut Context<Self>) -> Vec<Div> {
+    pub(crate) fn banners(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+        let banner = |id: &'static str, text: String| {
+            div()
+                .id(id)
+                .role(Role::Status)
+                .aria_label(text.clone())
+                .child(text)
+        };
         let mut banners = Vec::new();
         match &self.model.connection {
-            Connection::Reconnecting { attempt, reason } => banners.push(div().child(format!(
-                "{} {attempt}… · {reason}",
-                rust_i18n::t!("connection.reconnecting")
-            ))),
+            Connection::Reconnecting { attempt, reason } => banners.push(banner(
+                "reconnecting-banner",
+                format!(
+                    "{} {attempt}… · {reason}",
+                    rust_i18n::t!("connection.reconnecting")
+                ),
+            )),
             Connection::ProtocolMismatch { message } => {
-                let mut banner = div().v_flex().gap_2().child(format!(
-                    "{}: {message}",
-                    rust_i18n::t!("connection.outdated")
-                ));
+                let mut banner = banner(
+                    "outdated-banner",
+                    format!("{}: {message}", rust_i18n::t!("connection.outdated")),
+                )
+                .v_flex()
+                .gap_2();
                 if self.offer_terminate {
                     banner = banner.child(
-                        Button::new("terminate-daemon")
+                        a11y::button("terminate-daemon")
                             .outline()
                             .label(rust_i18n::t!("action.terminate_daemon").to_string())
                             .on_click(cx.listener(|this, _, _, _| {
@@ -221,11 +246,14 @@ impl AppView {
             | Connection::SpawnFailed { .. } => {}
         }
         if let Some(Warning::DaemonVersion { running, expected }) = &self.model.warning {
-            banners.push(div().child(format!(
-                "{} {running}; {} {expected}",
-                rust_i18n::t!("connection.daemon_version"),
-                rust_i18n::t!("connection.gui_expects")
-            )));
+            banners.push(banner(
+                "version-banner",
+                format!(
+                    "{} {running}; {} {expected}",
+                    rust_i18n::t!("connection.daemon_version"),
+                    rust_i18n::t!("connection.gui_expects")
+                ),
+            ));
         }
         banners
             .into_iter()
@@ -244,7 +272,7 @@ impl AppView {
             .collect()
     }
 
-    pub(crate) fn connection_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn connection_overlay(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let (message, log) = match &self.model.connection {
             Connection::Connecting | Connection::Spawning => {
                 (rust_i18n::t!("connection.starting").to_string(), None)
@@ -258,8 +286,16 @@ impl AppView {
             | Connection::Reconnecting { .. }
             | Connection::ProtocolMismatch { .. } => return None,
         };
+        let overlay = div()
+            .id("connection-overlay")
+            .role(Role::Dialog)
+            .aria_label(message.clone());
+        let overlay = match log.clone() {
+            Some(log) => overlay.aria_description(log),
+            None => overlay,
+        };
         Some(
-            div()
+            overlay
                 .absolute()
                 .inset_0()
                 .v_flex()
@@ -301,7 +337,7 @@ impl AppView {
                                 .child(log)
                         }))
                         .child(
-                            Button::new("open-startup-log")
+                            a11y::button("open-startup-log")
                                 .outline()
                                 .label(rust_i18n::t!("action.open_log").to_string())
                                 .on_click({
@@ -310,7 +346,7 @@ impl AppView {
                                 }),
                         )
                         .child(
-                            Button::new("start-daemon")
+                            a11y::button("start-daemon")
                                 .primary()
                                 .label(rust_i18n::t!("action.start_daemon").to_string())
                                 .on_click({

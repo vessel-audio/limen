@@ -1,15 +1,13 @@
 //! Root GPUI view and connection/status presentation.
 
-use gpui_kit::component::{
-    ActiveTheme, StyledExt, Theme, ThemeMode,
-    button::{Button, ButtonVariants},
-};
+use gpui_kit::component::{ActiveTheme, StyledExt, Theme, ThemeMode, button::ButtonVariants};
 use gpui_kit::*;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
 use voice_input_core::{Backend, DictationState, Paths};
 
+use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, GuiState, Msg};
 use crate::pages;
@@ -259,7 +257,7 @@ impl AppView {
 }
 
 impl AppView {
-    fn shutdown_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn shutdown_overlay(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let action = self.confirm_shutdown?;
         let (message, command) = match action {
             ShutdownAction::Stop => (
@@ -273,6 +271,9 @@ impl AppView {
         };
         Some(
             div()
+                .id("shutdown-confirmation")
+                .role(Role::AlertDialog)
+                .aria_label(message.clone())
                 .absolute()
                 .inset_0()
                 .v_flex()
@@ -286,7 +287,7 @@ impl AppView {
                         .h_flex()
                         .gap_2()
                         .child(
-                            Button::new("confirm-shutdown")
+                            a11y::button("confirm-shutdown")
                                 .primary()
                                 .label(rust_i18n::t!("action.confirm").to_string())
                                 .on_click(cx.listener(move |this, _, _, _| {
@@ -295,7 +296,7 @@ impl AppView {
                                 })),
                         )
                         .child(
-                            Button::new("cancel-shutdown")
+                            a11y::button("cancel-shutdown")
                                 .ghost()
                                 .label(rust_i18n::t!("action.cancel").to_string())
                                 .on_click(cx.listener(|this, _, _, _| {
@@ -326,6 +327,9 @@ impl AppView {
                 .justify_center()
                 .child(
                     div()
+                        .id("toast")
+                        .role(Role::Status)
+                        .aria_label(message.clone())
                         .relative()
                         .rounded_full()
                         .bg(cx.theme().foreground)
