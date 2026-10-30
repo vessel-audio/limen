@@ -7144,13 +7144,19 @@ name = "voice-input"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "atspi",
  "clap",
  "futures-util",
  "libc",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing-subscriber",
  "voice-input-core",
  "voice-input-gui",
+ "x11rb",
+ "zbus 5.19.0",
 ]
 
 [[package]]

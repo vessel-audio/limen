@@ -50,6 +50,15 @@ The package provides `pw-record` and `notify-send` in its runtime PATH and
 installs the desktop entry that the shortcut portal needs. It does not install
 the Fcitx addon; follow the separate addon setup below.
 
+The GUI has desktop end-to-end tests. Inside `nix develop`, `cargo gui-e2e`
+launches the control panel in a private Xvfb display with its own D-Bus and
+AT-SPI buses, finds every control through the accessibility tree, presses it
+with real pointer and keyboard input, and checks what the desktop sees: the
+clipboard, window-manager requests, rendered colors, programs started, GNOME
+settings, the config file, and the daemon protocol. Pass part of a case name to
+run fewer cases, such as `cargo gui-e2e shortcuts`. Each case leaves a
+screenshot, its accessibility tree, and logs under `target/tmp/gui-e2e/`.
+
 ## GUI control panel
 
 Open the GPUI control panel with `voice-input gui` or the desktop launcher. The

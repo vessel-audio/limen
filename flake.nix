@@ -55,27 +55,46 @@
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [ self'.packages.default ];
-            packages = builtins.attrValues {
-              inherit (pkgs)
-                cargo
-                rustc
-                rustfmt
-                clippy
-                rust-analyzer
-                cmake
-                pkg-config
-                gcc
-                gnumake
-                coreutils
-                dbus
-                desktop-file-utils
-                fcitx5
-                pipewire
-                libnotify
-                pre-commit
-                ;
-            };
+            packages =
+              builtins.attrValues {
+                inherit (pkgs)
+                  cargo
+                  rustc
+                  rustfmt
+                  clippy
+                  rust-analyzer
+                  cmake
+                  pkg-config
+                  gcc
+                  gnumake
+                  coreutils
+                  dbus
+                  desktop-file-utils
+                  fcitx5
+                  pipewire
+                  libnotify
+                  pre-commit
+                  # Desktop E2E: a headless X server for `cargo gui-e2e`.
+                  xvfb
+                  ;
+              }
+              # Desktop E2E: real `gsettings` over a keyfile backend.
+              ++ [
+                pkgs.glib.bin
+                pkgs.glib.dev
+              ];
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+            # Desktop E2E renders with Mesa's software Vulkan driver, registers
+            # with a private AT-SPI registry, and uses fixed fonts so captures
+            # match across machines.
+            VOICE_INPUT_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
+            VOICE_INPUT_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
+            VOICE_INPUT_E2E_FONTCONFIG = pkgs.makeFontsConf {
+              fontDirectories = [
+                pkgs.dejavu_fonts
+                pkgs.wqy_microhei
+              ];
+            };
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
               pkgs.wayland
               pkgs.vulkan-loader
