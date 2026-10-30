@@ -9,7 +9,7 @@
 //! focus state.
 //!
 //! Run them with `cargo gui-e2e` inside `nix develop`; every case leaves a
-//! final screenshot and its logs under `target/tmp/gui-e2e/<case>/`.
+//! final screenshot and its logs under `target/tmp/gui-e2e/<module>/<case>/`.
 
 mod cases;
 mod daemon;

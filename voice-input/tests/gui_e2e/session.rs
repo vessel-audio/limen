@@ -34,10 +34,11 @@ pub fn begin_case(name: &'static str) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// One directory per case, nested by module: CI artifact paths forbid `:`.
 pub fn artifacts_for(name: &str) -> PathBuf {
     Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("gui-e2e")
-        .join(name)
+        .join(name.replace("::", "/"))
 }
 
 /// How a case names a node: by accessible ID, or by role for the controls
