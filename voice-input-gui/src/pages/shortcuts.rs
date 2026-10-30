@@ -16,7 +16,11 @@ use crate::recorder::{
     Action as RecorderAction, Event as RecorderEvent, RecorderError, RecorderState,
 };
 
-pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Window) -> Div {
+pub fn shortcuts(
+    view: &mut AppView,
+    cx: &mut Context<AppView>,
+    window: &mut Window,
+) -> Stateful<Div> {
     let preferred = view
         .model
         .snapshot
@@ -90,9 +94,13 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
             .children(error)
     });
     div()
+        .id("shortcuts-page")
         .v_flex()
-        .gap_3()
-        .p_4()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .gap_5()
+        .p_8()
         .track_focus(&view.recorder_focus)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
             if event.keystroke.key == "backspace" && (this.toggle_focused || this.hold_focused) {
@@ -118,6 +126,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
                 let _ = this.commands.try_send(BridgeCommand::Shortcut(request));
             }
         }))
+        .child(super::title(rust_i18n::t!("nav.shortcuts")))
         .child(selector)
         .child(body)
         .child(

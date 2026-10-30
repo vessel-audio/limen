@@ -113,6 +113,25 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.state.history.last().cloned());
+    let recording = view.model.snapshot.as_ref().is_some_and(|snapshot| {
+        matches!(
+            snapshot.state.dictation.state,
+            DictationState::Recording { .. }
+        )
+    });
+    let halo = div()
+        .size(px(64.))
+        .rounded_full()
+        .bg(cx.theme().primary.opacity(0.12))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            Icon::new(IconName::Mic)
+                .size(px(28.))
+                .text_color(cx.theme().primary),
+        );
+    let primary = cx.theme().primary;
     let error = view
         .model
         .snapshot
@@ -125,33 +144,28 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .flex_1()
         .items_center()
         .justify_center()
-        .p_6()
+        .p_8()
         .child(
             div()
                 .v_flex()
                 .w_full()
-                .max_w(px(680.))
+                .max_w(px(560.))
                 .items_center()
-                .gap_4()
+                .gap_5()
                 .rounded_xl()
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.18))
-                .p_8()
-                .child(
-                    div()
-                        .size(px(56.))
-                        .rounded_full()
-                        .bg(cx.theme().primary.opacity(0.12))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            Icon::new(IconName::Mic)
-                                .size(px(28.))
-                                .text_color(cx.theme().primary),
-                        ),
-                )
+                .px_10()
+                .py_12()
+                .child(match recording {
+                    true => halo
+                        .with_animation("recording-halo", crate::motion::pulse(), move |halo, t| {
+                            halo.bg(primary.opacity(0.32 * t))
+                        })
+                        .into_any_element(),
+                    false => halo.into_any_element(),
+                })
                 .child(
                     div()
                         .v_flex()
@@ -219,14 +233,24 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .unwrap_or_default();
     let header = div()
         .h_flex()
-        .items_center()
+        .items_start()
         .justify_between()
-        .child(format!(
-            "{} {} · {}",
-            rust_i18n::t!("history.title"),
-            entries.len(),
-            rust_i18n::t!("history.memory")
-        ))
+        .child(
+            div()
+                .v_flex()
+                .gap_1p5()
+                .child(title(format!(
+                    "{} · {}",
+                    rust_i18n::t!("history.title"),
+                    entries.len()
+                )))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(rust_i18n::t!("history.memory").to_string()),
+                ),
+        )
         .child(
             Button::new("clear-history")
                 .ghost()
@@ -239,6 +263,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     let body = match entries.is_empty() {
         true => div()
             .id("history-empty")
+            .text_color(cx.theme().muted_foreground)
             .child(rust_i18n::t!("history.empty").to_string()),
         false => div()
             .id("history-entries")
@@ -280,8 +305,9 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     div()
         .v_flex()
         .flex_1()
-        .gap_3()
-        .p_4()
+        .min_h_0()
+        .gap_6()
+        .p_8()
         .child(header)
         .child(body)
         .children(confirmation)
@@ -289,6 +315,11 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
 
 mod shortcuts;
 pub use shortcuts::shortcuts;
+
+/// Serif page heading shared by every non-dictation page.
+pub fn title(text: impl Into<SharedString>) -> Div {
+    div().text_xl().font_family("serif").child(text.into())
+}
 
 fn history_card(entry: &HistoryEntry, background: Hsla) -> Div {
     let outcome = match &entry.outcome {

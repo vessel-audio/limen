@@ -256,12 +256,37 @@ impl AppView {
         self.toast = Some((rust_i18n::t!("toast.copied").to_string(), Instant::now()));
     }
 
-    fn toast_overlay(&self) -> Option<Div> {
+    fn toast_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let (message, at) = self.toast.as_ref()?;
         if at.elapsed() >= std::time::Duration::from_secs(3) {
             return None;
         }
-        Some(div().absolute().bottom_4().right_4().child(message.clone()))
+        Some(
+            div()
+                .absolute()
+                .bottom_16()
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .relative()
+                        .rounded_full()
+                        .bg(cx.theme().foreground)
+                        .text_color(cx.theme().background)
+                        .text_sm()
+                        .px_4()
+                        .py_2()
+                        .shadow_md()
+                        .child(message.clone())
+                        .with_animation(
+                            SharedString::from(format!("toast-{at:?}")),
+                            crate::motion::enter(),
+                            |toast, t| toast.opacity(t).top(px(8. * (1. - t))),
+                        ),
+                ),
+        )
     }
 
     pub(crate) fn snapshot_config(&self) -> Option<voice_input_core::ConfigSummary> {
@@ -284,7 +309,11 @@ impl Render for AppView {
         let page = match self.page {
             Page::Dictation => pages::dictation(self, cx),
             Page::History => pages::history(self, cx),
-            Page::Shortcuts => pages::shortcuts(self, cx, window),
+            Page::Shortcuts => div()
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(pages::shortcuts(self, cx, window)),
             Page::Settings(page) => match page {
                 SettingsPage::General => div()
                     .v_flex()
@@ -301,12 +330,15 @@ impl Render for AppView {
         div()
             .v_flex()
             .size_full()
+            .bg(cx.theme().muted)
             .child(self.title_bar(cx))
             .child(
                 div()
                     .h_flex()
                     .flex_1()
                     .min_h_0()
+                    .pr_2()
+                    .pb_2()
                     .child(self.sidebar(cx))
                     .child(
                         div()
@@ -315,13 +347,30 @@ impl Render for AppView {
                             .min_h_0()
                             .flex_1()
                             .min_w_0()
+                            .rounded_xl()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().background)
+                            .overflow_hidden()
                             .children(self.banners(cx))
-                            .child(page)
+                            .child(
+                                div()
+                                    .relative()
+                                    .v_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(page)
+                                    .with_animation(
+                                        SharedString::from(format!("page-{:?}", self.page)),
+                                        crate::motion::enter(),
+                                        |page, t| page.opacity(t).top(px(8. * (1. - t))),
+                                    ),
+                            )
                             .child(self.footer(cx)),
                     ),
             )
             .children(self.shutdown_overlay(cx))
-            .children(self.toast_overlay())
+            .children(self.toast_overlay(cx))
             .children(self.connection_overlay(cx))
     }
 }

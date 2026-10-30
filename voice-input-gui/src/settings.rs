@@ -93,14 +93,9 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .gap_4()
-        .p_4()
-        .child(
-            div()
-                .text_xl()
-                .font_family("serif")
-                .child(rust_i18n::t!("settings.general").to_string()),
-        )
+        .gap_5()
+        .p_8()
+        .child(crate::pages::title(rust_i18n::t!("settings.general")))
         .child(card(
             rust_i18n::t!("settings.appearance").to_string(),
             div().h_flex().gap_2().children(appearance),
@@ -182,7 +177,7 @@ pub fn about(_: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .flex_1()
         .items_center()
         .justify_center()
-        .p_6()
+        .p_8()
         .child(
             div()
                 .v_flex()
@@ -192,7 +187,8 @@ pub fn about(_: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                 .border_1()
                 .border_color(cx.theme().border)
                 .bg(cx.theme().muted.opacity(0.18))
-                .p_8()
+                .px_16()
+                .py_12()
                 .child(
                     Icon::new(IconName::Mic)
                         .size(px(36.))
@@ -223,12 +219,12 @@ fn choice(id: &'static str, label: String, selected: bool) -> Button {
 fn card(title: String, control: Div, cx: &mut Context<AppView>) -> Div {
     div()
         .v_flex()
-        .gap_2()
+        .gap_3()
         .rounded_xl()
         .border_1()
         .border_color(cx.theme().border)
         .bg(cx.theme().muted.opacity(0.18))
-        .p_3()
-        .child(div().text_sm().font_semibold().child(title))
+        .p_5()
+        .child(div().text_sm().font_medium().child(title))
         .child(control)
 }
