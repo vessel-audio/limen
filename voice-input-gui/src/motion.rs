@@ -13,8 +13,12 @@ pub fn enter() -> Animation {
 }
 
 /// Endless breathing used to show that work is in progress.
+///
+/// Each frame re-renders the whole `AppView`, so the slow fade is capped well
+/// below the display rate.
 pub fn pulse() -> Animation {
     Animation::new(Duration::from_millis(1600))
         .repeat()
         .with_easing(pulsating_between(0.35, 1.))
+        .with_max_fps(20.)
 }

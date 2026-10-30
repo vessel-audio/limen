@@ -307,7 +307,11 @@ impl Render for AppView {
             }
         }
         let page = match self.page {
-            Page::Dictation => pages::dictation(self, cx),
+            Page::Dictation => div()
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(pages::dictation(self, cx)),
             Page::History => pages::history(self, cx),
             Page::Shortcuts => div()
                 .v_flex()

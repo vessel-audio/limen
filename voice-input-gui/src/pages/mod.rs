@@ -12,7 +12,7 @@ use crate::app::{AppView, Page};
 use crate::bridge::BridgeCommand;
 use crate::model::{DictationButton, DisabledReason};
 
-pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
+pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
     let (title, detail) = view.model.snapshot.as_ref().map_or(
         (
             rust_i18n::t!("connection.connecting").to_string(),
@@ -139,9 +139,9 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .and_then(|snapshot| snapshot.state.last_error.clone())
         .map(|error| error.message)
         .or_else(|| view.model.command_error.clone());
-    div()
+    let content = div()
         .v_flex()
-        .flex_1()
+        .min_h(relative(1.))
         .items_center()
         .justify_center()
         .p_8()
@@ -221,7 +221,14 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         .text_left()
                         .child(history_card(&entry, cx.theme().muted.opacity(0.25)))
                 })),
-        )
+        );
+    // Centre the card while it fits; scroll from the top once it does not.
+    div()
+        .id("dictation-page")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .child(content)
 }
 
 pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
