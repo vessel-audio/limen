@@ -43,14 +43,14 @@
         in
         {
           packages = rec {
-            voice-input = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = true; };
-            headless = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = false; };
-            default = voice-input;
+            limen = pkgs.callPackage ./nix/pkgs/limen.nix { withGui = true; };
+            headless = pkgs.callPackage ./nix/pkgs/limen.nix { withGui = false; };
+            default = limen;
           };
 
           apps.default = {
             type = "app";
-            program = "${self'.packages.default}/bin/voice-input";
+            program = "${self'.packages.default}/bin/limen";
           };
 
           devShells.default = pkgs.mkShell {
@@ -87,9 +87,9 @@
             # Desktop E2E renders with Mesa's software Vulkan driver, registers
             # with a private AT-SPI registry, and sees only the fonts in
             # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
-            VOICE_INPUT_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
-            VOICE_INPUT_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
-            VOICE_INPUT_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
+            LIMEN_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
+            LIMEN_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
+            LIMEN_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
               ibmPlex = pkgs.ibm-plex;
               dejavu = pkgs.dejavu_fonts;
               wqyMicrohei = pkgs.wqy_microhei;

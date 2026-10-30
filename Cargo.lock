@@ -3561,6 +3561,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "limen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "atspi",
+ "clap",
+ "futures-util",
+ "libc",
+ "limen-core",
+ "limen-gui",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing-subscriber",
+ "x11rb",
+ "zbus 5.19.0",
+]
+
+[[package]]
+name = "limen-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "directories",
+ "dirs 7.0.0",
+ "futures-util",
+ "hound",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "tracing",
+ "zbus 6.1.0",
+]
+
+[[package]]
+name = "limen-gui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "gpui-kit",
+ "libc",
+ "limen-core",
+ "rust-i18n",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7138,62 +7194,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "voice-input"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "atspi",
- "clap",
- "futures-util",
- "libc",
- "png 0.18.1",
- "serde",
- "serde_json",
- "tokio",
- "tracing-subscriber",
- "voice-input-core",
- "voice-input-gui",
- "x11rb",
- "zbus 5.19.0",
-]
-
-[[package]]
-name = "voice-input-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "directories",
- "dirs 7.0.0",
- "futures-util",
- "hound",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tracing",
- "zbus 6.1.0",
-]
-
-[[package]]
-name = "voice-input-gui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures-util",
- "gpui-kit",
- "libc",
- "rust-i18n",
- "tokio",
- "tracing",
- "voice-input-core",
-]
 
 [[package]]
 name = "vswhom"
