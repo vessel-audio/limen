@@ -56,7 +56,7 @@ pub struct Desktop {
     display: String,
     session_bus: String,
     a11y_bus: String,
-    processes: Vec<(&'static str, Child)>,
+    _processes: Processes,
     _status: zbus::blocking::Connection,
     _portal: Option<zbus::blocking::Connection>,
     pub x11: X11,
@@ -109,17 +109,17 @@ impl Desktop {
         }
         std::fs::set_permissions(root.join("run"), std::fs::Permissions::from_mode(0o700))?;
         write_shims(root)?;
-        let mut processes = Vec::new();
+        let mut processes = Processes(Vec::new());
 
         let (display, xvfb) = start_xvfb(&root.join("xvfb.log"))?;
-        processes.push(("Xvfb", xvfb));
+        processes.0.push(("Xvfb", xvfb));
         let config = root.join("bus").join("bus.conf");
         std::fs::write(&config, bus_config(&root.join("bus")))?;
         let (session_bus, session) = start_bus(&config)?;
-        processes.push(("session bus", session));
+        processes.0.push(("session bus", session));
         let (a11y_bus, accessibility) = start_bus(&config)?;
-        processes.push(("accessibility bus", accessibility));
-        processes.push((
+        processes.0.push(("accessibility bus", accessibility));
+        processes.0.push((
             "at-spi2-registryd",
             Command::new(registryd)
                 .env_clear()
@@ -160,7 +160,7 @@ impl Desktop {
             display,
             session_bus,
             a11y_bus,
-            processes,
+            _processes: processes,
             _status: status,
             _portal: portal,
             x11,
@@ -237,9 +237,13 @@ impl Desktop {
     }
 }
 
-impl Drop for Desktop {
+/// Children killed and reaped in reverse order of startup when dropped, so a
+/// desktop that fails halfway through starting leaves nothing running.
+struct Processes(Vec<(&'static str, Child)>);
+
+impl Drop for Processes {
     fn drop(&mut self) {
-        for (_, process) in self.processes.iter_mut().rev() {
+        for (_, process) in self.0.iter_mut().rev() {
             let _ = process.kill();
             let _ = process.wait();
         }

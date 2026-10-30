@@ -41,8 +41,7 @@ pub fn sidebar_collapses_to_icons_and_back() -> Result<()> {
         collapsed * 3 < expanded,
         "collapsed tab is {collapsed}px wide, expanded {expanded}px"
     );
-    session.hover("history-page")?;
-    session.node(Role::ToolTip)?;
+    session.tooltip("history-page")?;
     session.click("history-page")?;
     session.named("current-page", "History")?;
     session.click("toggle-sidebar")?;
@@ -57,8 +56,7 @@ pub fn sidebar_collapses_to_icons_and_back() -> Result<()> {
 pub fn title_bar_buttons_show_tooltips() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     for id in ["toggle-sidebar", "open-settings"] {
-        let button = session.hover(id)?;
-        let tooltip = session.node(Role::ToolTip)?;
+        let (button, tooltip) = session.tooltip(id)?;
         let (button, tooltip) = (
             button.bounds.context("button is off screen")?,
             tooltip.bounds.context("tooltip is off screen")?,

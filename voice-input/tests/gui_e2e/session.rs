@@ -132,7 +132,9 @@ impl Session {
             SESSIONS.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&root);
-        let desktop = Desktop::start(&root, launch.scheme)?;
+        let desktop = Desktop::start(&root, launch.scheme).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&root);
+        })?;
         let env = desktop
             .env()?
             .into_iter()
@@ -341,6 +343,29 @@ impl Session {
         Ok(node)
     }
 
+    /// Click a control that only shows, or only takes the press, while
+    /// hovered: rest on it until hovering stops moving it, then press there.
+    pub fn click_hovered(&self, what: &str, find: impl Fn(&[Node]) -> Option<Node>) -> Result<()> {
+        for _ in 0..10 {
+            let (x, y) = self
+                .settled_by(what, &find)?
+                .bounds
+                .with_context(|| format!("{what} is off screen"))?
+                .center();
+            self.x11().move_to(x, y)?;
+            std::thread::sleep(Duration::from_millis(300));
+            let hovered = self
+                .settled_by(what, &find)?
+                .bounds
+                .map(|bounds| bounds.center());
+            if hovered == Some((x, y)) {
+                self.x11().press(Button::Left)?;
+                return self.x11().release(Button::Left);
+            }
+        }
+        bail!("{what} kept moving under the pointer")
+    }
+
     pub fn click_node(&self, node: &Node) -> Result<()> {
         let (x, y) = node
             .bounds
@@ -370,12 +395,41 @@ impl Session {
         })
     }
 
-    /// Rest the pointer on a node, as a user does to read its tooltip.
+    /// Rest the pointer on a node, arriving in a few steps as a real pointer
+    /// does, so the window sees it enter rather than appear.
     pub fn hover<'a>(&self, target: impl Into<Target<'a>>) -> Result<Node> {
         let node = self.reveal(target)?;
         let (x, y) = node.bounds.context("hovered node is off screen")?.center();
-        self.x11().move_to(x, y)?;
+        for offset in [6, 3, 0] {
+            self.x11().move_to(x - offset, y)?;
+        }
         Ok(node)
+    }
+
+    /// Hover a node until its tooltip shows, nudging the pointer while it
+    /// does not, since a busy window may miss the pointer's arrival.
+    pub fn tooltip<'a>(&self, target: impl Into<Target<'a>>) -> Result<(Node, Node)> {
+        let target = target.into();
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let node = self.hover(target)?;
+            let shown = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < shown {
+                let tooltip = self.desktop.a11y.nodes().ok().and_then(|nodes| {
+                    nodes
+                        .into_iter()
+                        .find(|node| node.role == Role::ToolTip && node.bounds.is_some())
+                });
+                if let Some(tooltip) = tooltip {
+                    return Ok((node, tooltip));
+                }
+                std::thread::sleep(POLL);
+            }
+            if Instant::now() > deadline {
+                bail!("{target:?} showed no tooltip");
+            }
+            self.x11().move_to(0, 0)?;
+        }
     }
 
     /// Press the left button twice in quick succession at a point.
@@ -406,13 +460,26 @@ impl Session {
         Ok(self.gui.try_wait()?.is_none())
     }
 
-    /// Run `voice-input gui` once more in the same desktop and session.
+    /// Run `voice-input gui` once more in the same desktop and session, and
+    /// collect its output once it exits; one that keeps running is killed.
     pub fn launch_again(&self) -> Result<std::process::Output> {
-        Ok(Command::new(env!("CARGO_BIN_EXE_voice-input"))
+        let mut second = Command::new(env!("CARGO_BIN_EXE_voice-input"))
             .arg("gui")
             .env_clear()
             .envs(self.env.iter().cloned())
-            .output()?)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let deadline = Instant::now() + TIMEOUT;
+        while second.try_wait()?.is_none() {
+            if Instant::now() > deadline {
+                let _ = second.kill();
+                let _ = second.wait();
+                bail!("the second launch kept running");
+            }
+            std::thread::sleep(POLL);
+        }
+        Ok(second.wait_with_output()?)
     }
 
     /// Read a GNOME setting the way the application does.

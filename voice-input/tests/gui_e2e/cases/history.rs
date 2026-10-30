@@ -41,14 +41,7 @@ pub fn copy_puts_a_transcript_on_the_clipboard() -> Result<()> {
             .find(|node| node.parent == Some(notification) && node.role == Role::Button)
             .cloned()
     };
-    // The close button shows on hover, once the stack stops sliding.
-    let (x, y) = session
-        .settled_by("the notification's close button", close)?
-        .bounds
-        .context("no bounds")?
-        .center();
-    session.x11().move_to(x, y)?;
-    session.click_node(&session.settled_by("the hovered close button", close)?)?;
+    session.click_hovered("the notification's close button", close)?;
     session.wait("one notification to close", |nodes| {
         (notifications(nodes) == shown - 1).then_some(())
     })?;
