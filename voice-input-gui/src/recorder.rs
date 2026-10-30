@@ -96,14 +96,18 @@ fn map(keystroke: Keystroke) -> Result<Option<Shortcut>, RecorderError> {
     ) {
         return Ok(None);
     }
-    if keystroke.modifiers.shift
-        && key.chars().count() == 1
+    // Platforms report Shift+1 either as Shift with "!" or as a bare "!" with
+    // Shift folded into the symbol; neither names a key on the keyboard.
+    let single_symbol = key.chars().count() == 1
         && !key
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
-        && !matches!(key.as_str(), "space" | "grave")
-    {
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+    let unshifted_symbol = matches!(
+        key.as_str(),
+        "`" | "-" | "=" | "[" | "]" | "\\" | ";" | "'" | "," | "." | "/"
+    );
+    if single_symbol && (keystroke.modifiers.shift || !unshifted_symbol) {
         return Err(RecorderError::ShiftedSymbol);
     }
     let key = match key.as_str() {
@@ -292,21 +296,26 @@ mod tests {
 
     #[test]
     fn shifted_symbols_are_rejected_instead_of_recorded_incorrectly() {
-        let (state, action) = recording().apply(Event::Key(key(
-            Modifiers {
-                shift: true,
-                ..Modifiers::default()
-            },
-            "!",
-        )));
-        assert_eq!(action, None);
-        assert_eq!(
-            state,
-            RecorderState::Invalid {
-                previous: Some(Shortcut::DEFAULT_TOGGLE),
-                error: RecorderError::ShiftedSymbol,
-            }
-        );
+        let shifted = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        let folded = Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        };
+        for keystroke in [key(shifted, "!"), key(folded, "!"), key(folded, "_")] {
+            assert_eq!(
+                recording().apply(Event::Key(keystroke)),
+                (
+                    RecorderState::Invalid {
+                        previous: Some(Shortcut::DEFAULT_TOGGLE),
+                        error: RecorderError::ShiftedSymbol,
+                    },
+                    None
+                )
+            );
+        }
     }
 
     #[test]
