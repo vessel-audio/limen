@@ -43,7 +43,8 @@
         in
         {
           packages = rec {
-            voice-input = pkgs.callPackage ./nix/pkgs/voice-input.nix { };
+            voice-input = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = true; };
+            headless = pkgs.callPackage ./nix/pkgs/voice-input.nix { withGui = false; };
             default = voice-input;
           };
 
@@ -54,30 +55,56 @@
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [ self'.packages.default ];
-            packages = builtins.attrValues {
-              inherit (pkgs)
-                cargo
-                rustc
-                rustfmt
-                clippy
-                rust-analyzer
-                cmake
-                pkg-config
-                gcc
-                gnumake
-                coreutils
-                fcitx5
-                pipewire
-                libnotify
-                pre-commit
-                ;
-            };
+            packages =
+              builtins.attrValues {
+                inherit (pkgs)
+                  cargo
+                  rustc
+                  rustfmt
+                  clippy
+                  rust-analyzer
+                  cmake
+                  pkg-config
+                  gcc
+                  gnumake
+                  coreutils
+                  dbus
+                  desktop-file-utils
+                  fcitx5
+                  pipewire
+                  libnotify
+                  pre-commit
+                  # Desktop E2E: a headless X server for `cargo gui-e2e`.
+                  xvfb
+                  ;
+              }
+              # Desktop E2E: real `gsettings` over a keyfile backend.
+              ++ [
+                pkgs.glib.bin
+                pkgs.glib.dev
+              ];
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+            # Desktop E2E renders with Mesa's software Vulkan driver, registers
+            # with a private AT-SPI registry, and sees only the fonts in
+            # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
+            VOICE_INPUT_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
+            VOICE_INPUT_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
+            VOICE_INPUT_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
+              ibmPlex = pkgs.ibm-plex;
+              dejavu = pkgs.dejavu_fonts;
+              wqyMicrohei = pkgs.wqy_microhei;
+            };
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.wayland
+              pkgs.vulkan-loader
+              pkgs.libGL
+            ];
           };
 
           formatter = treefmtEval.config.build.wrapper;
           checks = {
             package = self'.packages.default;
+            package-headless = self'.packages.headless;
             formatting = treefmtEval.config.build.check self;
           };
         };

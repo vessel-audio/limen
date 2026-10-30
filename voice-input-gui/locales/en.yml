@@ -1,0 +1,131 @@
+app.title: voice-input
+nav.dictation: Dictation
+nav.history: History
+nav.shortcuts: Shortcuts
+status.idle: Idle
+status.starting: Opening microphone…
+status.recording: Recording
+status.hold_recording: Hold to talk
+status.transcribing: Transcribing…
+status.committing: Committing text…
+status.queued: Another take queued
+action.start: Start dictation
+action.stop: Stop and transcribe
+action.record_another: Record another after this take
+action.clear: Clear
+action.copy: Copy
+action.start_daemon: Start background service
+hint.keep_delivery: Button-stopped takes are copied, not typed
+hint.release_shortcut: Release the shortcut to finish
+hint.hold_timeout: Automatically stops at 60 seconds
+hint.no_sound: No sound detected for 3 seconds
+hint.shifted_symbol: Shifted symbols need manual entry
+history.title: History
+history.memory: In-memory only; cleared on daemon restart
+history.empty: No transcripts yet
+history.original: Original
+history.committed: Committed
+history.kept: Kept
+history.failed: Commit failed
+history.dropped: Dropped
+toast.copied: Copied to clipboard
+about.title: About voice-input
+about.version: Version
+about.protocol: Protocol
+about.socket: Socket
+about.config: Config
+about.log: Log
+about.unknown: unknown
+action.open_config: Open config
+action.open_log: Open log
+action.restart_daemon: Restart daemon
+action.stop_daemon: Stop daemon
+action.terminate_daemon: Terminate after confirmation
+action.close: Close
+action.confirm: Confirm
+action.cancel: Cancel
+action.view_history: View history
+connection.connecting: Connecting
+connection.starting: Starting background service…
+connection.not_running: Background service is not running
+connection.failed_start: Background service failed to start
+connection.reconnecting: Reconnecting (attempt
+connection.outdated: Background service is outdated
+connection.daemon_version: Daemon version
+connection.gui_expects: GUI expects
+connection.disconnected: Disconnected
+connection.stop_confirm: Stop the background service?
+connection.terminate_confirm: Terminate the outdated background service?
+connection.closing_hint: Closing the window keeps dictation running
+history.clear_confirm: Clear completed history?
+history.pending: pending
+shortcuts.apply: Apply
+shortcuts.none_backend: none
+shortcuts.or: or
+shortcuts.session_disabled: disabled
+shortcuts.session_binding: waiting for GNOME confirmation…
+shortcuts.session_bound: bound ✓
+shortcuts.session_cancelled: cancelled; retry setup
+shortcuts.session_failed: failed
+shortcuts.retry: Retry
+shortcuts.hold_order: Release X before Super; otherwise recording stops after 60 seconds
+footer.polish: polish
+footer.shortcut: shortcut
+shortcuts.gnome_backend: GNOME custom shortcut
+shortcuts.edit: Change in GNOME Settings
+shortcuts.preferred_toggle: Preferred toggle
+shortcuts.preferred_hold: Preferred hold-to-talk
+shortcuts.session: Session
+shortcuts.not_bound: not bound
+shortcuts.not_set: not set
+shortcuts.record: Record
+shortcuts.recording: Press a shortcut… (Esc cancels, Backspace clears)
+shortcuts.set_toggle: Set toggle
+shortcuts.no_hold: Hold-to-talk is not supported by this backend.
+shortcuts.bind_command: "Bind this command in your desktop settings:"
+shortcuts.invalid: invalid shortcut
+note.installed: Installed
+note.toggle: Toggle
+note.unstable: is in the Nix store and stops working after an upgrade
+note.not_checked: Not checked
+note.daemon_offline: The daemon is not running; the change takes effect when it starts.
+note.stable_path: stable path
+note.unstable_path: unstable path
+note.no_custom: No GNOME custom shortcut runs voice-input toggle.
+note.removed: Removed the GNOME custom shortcut.
+note.disabled: Disabled the GNOME custom shortcut; it stays otherwise.
+about.menu: About
+connection.online: Service ready
+connection.offline: Service offline
+settings.title: Settings
+settings.general: General
+settings.appearance: Appearance
+settings.follow_system: Follow system
+settings.light: Light
+settings.dark: Dark
+settings.language: Language
+settings.system_language: Follow system
+settings.font_size: Font size
+settings.service: Background service
+requests.average: Avg
+requests.failed: Failed
+requests.empty: No transcription requests yet
+requests.succeeded: Transcribed
+requests.in_flight: Transcribing…
+settings.interface_font: Interface font
+settings.search_font: Search fonts
+settings.lightweight: Lightweight mode
+settings.lightweight_hint: Turns off animations to reduce rendering work
+settings.appearance_hint: Light, dark, or match the system
+settings.language_hint: Language of the interface
+settings.font_size_hint: Base size of interface text
+settings.interface_font_hint: Typeface used throughout the window
+settings.service_hint: Restart or stop the dictation daemon
+nav.section: Workspace
+nav.toggle_sidebar: Toggle sidebar
+requests.title: Requests
+requests.count: requests
+requests.kept: The daemon keeps the latest 20
+requests.failed_status: Failed
+settings.font_decrease: Decrease font size
+settings.font_increase: Increase font size

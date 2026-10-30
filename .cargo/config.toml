@@ -1,0 +1,3 @@
+[alias]
+# Desktop E2E for the control panel; needs the tools from `nix develop`.
+gui-e2e = "test -p voice-input --features gui --test gui_e2e --"

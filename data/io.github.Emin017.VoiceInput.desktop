@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=voice-input
+Comment=Wayland voice input
+Exec=voice-input daemon
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;

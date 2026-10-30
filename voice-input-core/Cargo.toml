@@ -1,0 +1,26 @@
+[package]
+name = "voice-input-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+directories.workspace = true
+futures-util.workspace = true
+dirs.workspace = true
+hound.workspace = true
+libc.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+zbus = { workspace = true, features = ["service"] }
