@@ -17,9 +17,9 @@ const TIME_CONSTANT: f32 = 0.07;
 
 /// A scroll handle whose wheel input glides instead of jumping.
 ///
-/// Track [`Self::handle`] on an `overflow_y_scroll` container, attach
-/// [`Self::on_scroll`] to the container's single content child, and call
-/// [`Self::step`] on every render.
+/// Wrap the scroll area with [`Self::container`], attach [`Self::on_scroll`]
+/// to the area's single content child, and call [`Self::step`] on every
+/// render.
 #[derive(Clone, Default)]
 pub struct SmoothScroll {
     handle: ScrollHandle,
@@ -68,10 +68,6 @@ fn advance(glide: Glide, offset: Pixels, max_offset: Pixels, now: Instant) -> Fr
 }
 
 impl SmoothScroll {
-    pub fn handle(&self) -> &ScrollHandle {
-        &self.handle
-    }
-
     /// Wheel listener for the content child. Children dispatch before their
     /// container, so stopping propagation here keeps gpui's own line jump
     /// from running.
@@ -128,13 +124,30 @@ impl SmoothScroll {
         }
     }
 
-    /// A vertical scrollbar overlay for the container, shown per `mode`.
-    pub fn scrollbar(&self, mode: ScrollbarMode) -> Div {
-        div().absolute().inset_0().child(
-            Scrollbar::vertical(&self.handle)
-                .mode(mode)
-                .viewport_from_layout(),
-        )
+    /// Make `area` this handle's scroll container and overlay a vertical
+    /// scrollbar shown per `mode`; callers size and style the returned wrapper.
+    ///
+    /// The scrollbar is the area's sibling: inside the area it would scroll
+    /// away with the content and misreport the position.
+    pub fn container(&self, area: Stateful<Div>, mode: ScrollbarMode) -> Div {
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(
+                area.flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.handle),
+            )
+            .child(
+                div().absolute().inset_0().child(
+                    Scrollbar::vertical(&self.handle)
+                        .mode(mode)
+                        .viewport_from_layout(),
+                ),
+            )
     }
 }
 

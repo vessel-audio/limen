@@ -49,28 +49,26 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     let card_background = cx.theme().muted.opacity(0.25);
     let body = match entries.is_empty() {
         true => div()
-            .id("history-empty")
             .text_color(cx.theme().muted_foreground)
             .child(rust_i18n::t!("history.empty").to_string()),
-        false => div()
-            .id("history-entries")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(view.history_scroll.handle())
-            .child(
-                div()
-                    .v_flex()
-                    .gap_2()
-                    .on_scroll(view.history_scroll.on_scroll())
-                    .children(
-                        entries
-                            .iter()
-                            .rev()
-                            .map(|entry| history_card(entry, card_background)),
-                    ),
+        false => view
+            .history_scroll
+            .container(
+                div().id("history-entries").child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .on_scroll(view.history_scroll.on_scroll())
+                        .children(
+                            entries
+                                .iter()
+                                .rev()
+                                .map(|entry| history_card(entry, card_background)),
+                        ),
+                ),
+                ScrollbarMode::Scrolling,
             )
-            .child(view.history_scroll.scrollbar(ScrollbarMode::Scrolling)),
+            .flex_1(),
     };
     let confirmation = view.confirm_clear.then(|| {
         div()

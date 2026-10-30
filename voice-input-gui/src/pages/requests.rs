@@ -124,30 +124,26 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
         // The page's only scroll container, so a wheel event never moves two
         // scrollers at once.
         .child(
-            div()
-                .id("requests")
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(view.requests_scroll.handle())
-                .rounded_xl()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted.opacity(0.18))
-                .child(
-                    div()
-                        .v_flex()
-                        .on_scroll(view.requests_scroll.on_scroll())
-                        .children(
-                            live.into_iter().chain(rows).enumerate().map(
+            view.requests_scroll
+                .container(
+                    div().id("requests").child(
+                        div()
+                            .v_flex()
+                            .on_scroll(view.requests_scroll.on_scroll())
+                            .children(live.into_iter().chain(rows).enumerate().map(
                                 |(index, row)| match index {
                                     0 => row,
                                     _ => row.border_t_1().border_color(cx.theme().border),
                                 },
-                            ),
-                        )
-                        .children(empty),
+                            ))
+                            .children(empty),
+                    ),
+                    ScrollbarMode::Scrolling,
                 )
-                .child(view.requests_scroll.scrollbar(ScrollbarMode::Scrolling)),
+                .rounded_xl()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.18)),
         )
 }
 

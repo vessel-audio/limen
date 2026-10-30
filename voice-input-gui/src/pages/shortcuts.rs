@@ -17,11 +17,7 @@ use crate::recorder::{
     Action as RecorderAction, Event as RecorderEvent, RecorderError, RecorderState,
 };
 
-pub fn shortcuts(
-    view: &mut AppView,
-    cx: &mut Context<AppView>,
-    window: &mut Window,
-) -> Stateful<Div> {
+pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Window) -> Div {
     let preferred = view
         .model
         .snapshot
@@ -94,13 +90,8 @@ pub fn shortcuts(
             .children(report.notes.iter().map(format_note))
             .children(error)
     });
-    div()
+    let page = div()
         .id("shortcuts-page")
-        .v_flex()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(view.shortcuts_scroll.handle())
         .track_focus(&view.recorder_focus)
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
             if event.keystroke.key == "backspace" && (this.toggle_focused || this.hold_focused) {
@@ -142,8 +133,10 @@ pub fn shortcuts(
                         .on_click(cx.listener(apply)),
                 )
                 .children(report),
-        )
-        .child(view.shortcuts_scroll.scrollbar(ScrollbarMode::Scrolling))
+        );
+    view.shortcuts_scroll
+        .container(page, ScrollbarMode::Scrolling)
+        .flex_1()
 }
 
 fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {

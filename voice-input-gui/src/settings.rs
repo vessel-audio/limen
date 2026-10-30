@@ -95,7 +95,7 @@ pub enum LanguagePreference {
     Chinese,
 }
 
-pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
+pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
     let appearance = [
         (
             "appearance-system",
@@ -274,14 +274,12 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                     }),
                 ),
         );
-    div()
-        .id("settings-general")
+    scroll
+        .container(
+            div().id("settings-general").child(content),
+            ScrollbarMode::Always,
+        )
         .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(scroll.handle())
-        .child(content)
-        .child(scroll.scrollbar(ScrollbarMode::Always))
 }
 
 pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
