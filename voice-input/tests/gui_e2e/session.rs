@@ -20,6 +20,9 @@ use crate::desktop::{
 /// `WM_CLASS` of the control panel, its application ID.
 pub const APP_ID: &str = "io.github.Emin017.VoiceInput";
 
+/// The idle dictation status in each interface language.
+const IDLE: [&str; 2] = ["Idle", "空闲"];
+
 /// How long any expected change may take; Lavapipe startup is the slowest.
 const TIMEOUT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(50);
@@ -153,6 +156,8 @@ impl Session {
             std::fs::create_dir_all(paths.config_file.parent().context("config has no parent")?)?;
             std::fs::write(&paths.config_file, config)?;
         }
+        let waits_for_snapshot =
+            matches!(&launch.daemon, Daemon::Fake(scenario) if !scenario.outdated);
         let fake = match launch.daemon {
             Daemon::Fake(scenario) => Some(FakeDaemon::spawn(
                 &env,
@@ -181,6 +186,16 @@ impl Session {
         };
         session.node("open-settings")?;
         session.x11().focus_window(APP_ID)?;
+        // Controls stay disabled until the daemon's first snapshot; a slow
+        // machine would otherwise take a case's first press on one of them.
+        if waits_for_snapshot {
+            session.wait("the daemon's first snapshot", |nodes| {
+                nodes
+                    .iter()
+                    .any(|node| node.id == "dictation-status" && IDLE.contains(&node.name.as_str()))
+                    .then_some(())
+            })?;
+        }
         Ok(session)
     }
 
