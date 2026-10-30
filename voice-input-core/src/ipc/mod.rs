@@ -21,7 +21,7 @@ pub(crate) use subscription::Watchers;
 pub(crate) mod wire;
 
 use std::io::ErrorKind;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -75,25 +75,46 @@ impl Drop for BoundSocket {
 }
 
 /// Filesystem identity of the socket created by one daemon process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Device and inode name a file only while it exists: ext4 hands a freed
+/// inode to the next file, so a replacement socket bound after the old one
+/// was unlinked can carry the same pair. The identity holds an `O_PATH`
+/// descriptor to its inode, which keeps the inode allocated and the pair
+/// unique for as long as the identity lives.
+#[derive(Debug)]
 pub struct SocketIdentity {
     device: u64,
     inode: u64,
+    _pinned: std::fs::File,
 }
 
+impl PartialEq for SocketIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        (self.device, self.inode) == (other.device, other.inode)
+    }
+}
+
+impl Eq for SocketIdentity {}
+
 impl SocketIdentity {
-    /// Capture the current socket path's device and inode.
+    /// Capture and pin the file now at the socket path.
     pub fn for_path(paths: &Paths) -> Result<Self> {
-        let metadata = std::fs::metadata(&paths.socket)
-            .with_context(|| format!("failed to inspect {}", paths.socket.display()))?;
+        let inspect = || format!("failed to inspect {}", paths.socket.display());
+        let pinned = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open(&paths.socket)
+            .with_context(inspect)?;
+        let metadata = pinned.metadata().with_context(inspect)?;
         Ok(Self {
             device: metadata.dev(),
             inode: metadata.ino(),
+            _pinned: pinned,
         })
     }
 
     /// Remove the path only if it still belongs to this daemon's socket.
-    pub fn remove_if_owned(self, paths: &Paths) -> Result<()> {
+    pub fn remove_if_owned(&self, paths: &Paths) -> Result<()> {
         let owned = match std::fs::metadata(&paths.socket) {
             Ok(metadata) => metadata.dev() == self.device && metadata.ino() == self.inode,
             Err(error) if error.kind() == ErrorKind::NotFound => false,
@@ -463,11 +484,10 @@ mod tests {
             cache_dir: dir.join("cache"),
         };
         let mut old = bind(&paths).unwrap();
-        let identity = old.identity;
         drop(old.listener.take());
         let _replacement = bind(&paths).unwrap();
 
-        identity.remove_if_owned(&paths).unwrap();
+        old.identity.remove_if_owned(&paths).unwrap();
 
         assert!(paths.socket.exists());
         std::fs::remove_dir_all(dir).unwrap();

@@ -149,7 +149,7 @@ async fn daemon_peer(paths: &Paths) -> Result<(u32, SocketIdentity)> {
 }
 
 /// Validated process and socket identities captured before daemon termination.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct DaemonTermination {
     /// Same-UID daemon process that received SIGTERM.
     pub pid: u32,
