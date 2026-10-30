@@ -123,8 +123,23 @@ impl DictationActor {
         while let Some(event) = events.pop_front() {
             let answers_start =
                 matches!(event, Event::SessionStarted | Event::SessionStartFailed(_));
+            let transcribing =
+                self.dictation.view().state == dictation::DictationState::Transcribing;
             let transition = dictation::transition(self.dictation, event);
             self.dictation = transition.state;
+            // The transition that ends transcription decides the request's
+            // outcome; input-delivery errors from other transitions never do.
+            if transcribing
+                && self.dictation.view().state != dictation::DictationState::Transcribing
+            {
+                let failure = transition.effects.iter().find_map(|effect| {
+                    let Effect::Notify(Notification::Error(message)) = effect else {
+                        return None;
+                    };
+                    Some(message.as_str())
+                });
+                self.projection.finish_request(failure, unix_ms());
+            }
             // Only the message itself can come from an IPC caller.
             let caller = std::mem::replace(&mut reply, ReplyTarget::NotRequested);
             match (transition.reply, caller) {

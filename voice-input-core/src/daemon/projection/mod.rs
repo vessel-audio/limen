@@ -69,27 +69,6 @@ impl Projection {
         let entering = |state: DictationState| {
             std::mem::discriminant(&previous) != std::mem::discriminant(&state)
         };
-        // Errors are recorded before the publish that leaves transcription, so
-        // one reported since the request began is that request's failure.
-        if let (DictationState::Transcribing, Some(started_ms)) =
-            (previous, self.snapshot.dictation.since_ms)
-            && entering(view.state)
-        {
-            let outcome = match &self.snapshot.last_error {
-                Some(error) if error.at_ms >= started_ms => RequestOutcome::Failed {
-                    error: error.message.clone(),
-                },
-                Some(_) | None => RequestOutcome::Succeeded,
-            };
-            self.snapshot.requests.push(RequestEntry {
-                take: self.snapshot.take,
-                started_ms,
-                duration_ms: at_ms.saturating_sub(started_ms),
-                outcome,
-            });
-            let excess = self.snapshot.requests.len().saturating_sub(REQUESTS_LEN);
-            self.snapshot.requests.drain(..excess);
-        }
         if matches!(view.state, DictationState::Starting { .. })
             && !matches!(previous, DictationState::Starting { .. })
         {
@@ -118,6 +97,38 @@ impl Projection {
                 }
                 false => false,
             });
+    }
+
+    /// Log the transcription request that just ended, timed from the published
+    /// start of transcription; one that never became visible lasted no time.
+    pub(crate) fn finish_request(&mut self, failure: Option<&str>, at_ms: u64) {
+        let started_ms = match (
+            self.snapshot.dictation.state,
+            self.snapshot.dictation.since_ms,
+        ) {
+            (DictationState::Transcribing, Some(started_ms)) => started_ms,
+            (DictationState::Transcribing, None)
+            | (
+                DictationState::Idle
+                | DictationState::Starting { .. }
+                | DictationState::Recording { .. }
+                | DictationState::Committing,
+                _,
+            ) => at_ms,
+        };
+        self.snapshot.requests.push(RequestEntry {
+            take: self.snapshot.take,
+            started_ms,
+            duration_ms: at_ms.saturating_sub(started_ms),
+            outcome: match failure {
+                Some(error) => RequestOutcome::Failed {
+                    error: capped(error, ERROR_CAP).0,
+                },
+                None => RequestOutcome::Succeeded,
+            },
+        });
+        let excess = self.snapshot.requests.len().saturating_sub(REQUESTS_LEN);
+        self.snapshot.requests.drain(..excess);
     }
 
     pub(crate) fn record_error(&mut self, message: String, at_ms: u64) {

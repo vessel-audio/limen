@@ -1,6 +1,6 @@
 use super::input::{InputJob, InputReport};
 use super::projection::Completion;
-use super::snapshot::HistoryOutcome;
+use super::snapshot::{HistoryOutcome, RequestOutcome};
 use super::tests::{Senders, harness, mailboxes, spawn_loop, status};
 use super::{DictationActor, ReplyTarget};
 use crate::dictation::{Event, InputOutcome};
@@ -53,6 +53,53 @@ fn complete_dispatches_publish_only_the_final_view() {
         crate::dictation::DictationState::Idle
     ));
     assert_eq!(snapshot.take, 1);
+}
+
+fn request_outcomes(actor: &DictationActor) -> Vec<RequestOutcome> {
+    actor
+        .projection
+        .snapshot()
+        .requests
+        .iter()
+        .map(|request| request.outcome.clone())
+        .collect()
+}
+
+#[test]
+fn a_delivery_failure_during_transcription_leaves_the_request_successful() {
+    let mut harness = harness();
+    start_recording(&mut harness.actor);
+    for event in [
+        Event::Toggle,
+        Event::Transcript("text".to_string()),
+        Event::InputQueued,
+        Event::InputFinished(InputOutcome::Failed("commit text: gone".to_string())),
+        Event::ProviderCompleted,
+    ] {
+        harness.actor.dispatch(event, ReplyTarget::NotRequested);
+    }
+    assert_eq!(
+        request_outcomes(&harness.actor),
+        vec![RequestOutcome::Succeeded]
+    );
+}
+
+#[test]
+fn a_provider_failure_is_the_request_outcome() {
+    let mut harness = harness();
+    start_recording(&mut harness.actor);
+    for event in [
+        Event::Toggle,
+        Event::ProviderFailed("connection refused".to_string()),
+    ] {
+        harness.actor.dispatch(event, ReplyTarget::NotRequested);
+    }
+    assert_eq!(
+        request_outcomes(&harness.actor),
+        vec![RequestOutcome::Failed {
+            error: "connection refused".to_string()
+        }]
+    );
 }
 
 #[test]

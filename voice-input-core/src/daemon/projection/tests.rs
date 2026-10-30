@@ -94,21 +94,15 @@ fn take_ids_errors_and_timing_change_only_at_their_boundaries() {
 }
 
 #[test]
-fn transcription_requests_record_duration_and_the_error_reported_meanwhile() {
+fn finished_requests_are_timed_from_the_published_transcription_start() {
     let mut projection = projection();
-    projection.record_error("before the request".to_string(), 1);
-    projection.publish(starting(), 2);
-    projection.publish(recording(), 3);
+    projection.publish(starting(), 1);
+    projection.publish(recording(), 2);
     projection.publish(view(DictationState::Transcribing), 10);
-    projection.publish(view(DictationState::Transcribing), 20);
+    projection.finish_request(None, 1_250);
     projection.publish(view(DictationState::Committing), 1_250);
-    projection.publish(view(DictationState::Idle), 1_300);
-
     projection.publish(starting(), 2_000);
-    projection.publish(recording(), 2_001);
-    projection.publish(view(DictationState::Transcribing), 3_000);
-    projection.record_error("connection refused".to_string(), 3_400);
-    projection.publish(view(DictationState::Idle), 3_400);
+    projection.finish_request(Some("connection refused"), 2_100);
 
     assert_eq!(
         projection.snapshot().requests,
@@ -121,8 +115,8 @@ fn transcription_requests_record_duration_and_the_error_reported_meanwhile() {
             },
             RequestEntry {
                 take: 2,
-                started_ms: 3_000,
-                duration_ms: 400,
+                started_ms: 2_100,
+                duration_ms: 0,
                 outcome: RequestOutcome::Failed {
                     error: "connection refused".to_string(),
                 },
@@ -135,8 +129,7 @@ fn transcription_requests_record_duration_and_the_error_reported_meanwhile() {
 fn only_the_newest_requests_are_kept() {
     let mut projection = projection();
     for at_ms in 0..REQUESTS_LEN as u64 + 3 {
-        projection.publish(view(DictationState::Transcribing), at_ms * 10);
-        projection.publish(view(DictationState::Idle), at_ms * 10 + 1);
+        projection.finish_request(None, at_ms);
     }
     let started = projection
         .snapshot()
@@ -144,12 +137,7 @@ fn only_the_newest_requests_are_kept() {
         .iter()
         .map(|request| request.started_ms)
         .collect::<Vec<_>>();
-    assert_eq!(
-        started,
-        (3..REQUESTS_LEN as u64 + 3)
-            .map(|at_ms| at_ms * 10)
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(started, (3..REQUESTS_LEN as u64 + 3).collect::<Vec<_>>());
 }
 
 #[test]
@@ -321,9 +309,7 @@ fn the_worst_bounded_snapshot_fits_the_push_limit() {
         projection.complete(id, field.clone(), Completion::CommitFailed(field.clone()));
     }
     for _ in 0..REQUESTS_LEN {
-        projection.publish(view(DictationState::Transcribing), 4);
-        projection.record_error("\"".repeat(ERROR_CAP + 1), 4);
-        projection.publish(view(DictationState::Committing), 4);
+        projection.finish_request(Some(&"\"".repeat(ERROR_CAP + 1)), 4);
     }
     projection.snapshot.config = ConfigSummary {
         input_method: capped(&"\"".repeat(300), 256).0,
