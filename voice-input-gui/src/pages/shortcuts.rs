@@ -86,10 +86,7 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
             .map(format_note)
             .chain(error)
             .collect::<Vec<_>>();
-        div()
-            .id("shortcut-report")
-            .role(Role::Status)
-            .aria_label(lines.join("\n"))
+        a11y::status("shortcut-report", lines.join("\n"))
             .v_flex()
             .gap_1()
             .children(lines)
@@ -243,13 +240,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             div()
                 .h_flex()
                 .gap_2()
-                .child(
-                    div()
-                        .id("recorder-state")
-                        .role(Role::Status)
-                        .aria_label(current.clone())
-                        .child(current),
-                )
+                .child(a11y::status("recorder-state", current.clone()).child(current))
                 .child(
                     a11y::button("record-toggle")
                         .outline()
@@ -302,13 +293,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                 })),
         )
         .child(rust_i18n::t!("shortcuts.no_hold").to_string())
-        .children(error.map(|error| {
-            div()
-                .id("recorder-error")
-                .role(Role::Alert)
-                .aria_label(error.clone())
-                .child(error)
-        }))
+        .children(error.map(|error| a11y::alert("recorder-error", error.clone()).child(error)))
 }
 
 fn apply(view: &mut AppView, _: &ClickEvent, _: &mut Window, cx: &mut Context<AppView>) {

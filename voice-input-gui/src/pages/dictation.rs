@@ -172,10 +172,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 .items_baseline()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .id("dictation-status")
-                                        .role(Role::Status)
-                                        .aria_label(title.to_string())
+                                    a11y::status("dictation-status", title.to_string())
                                         .text_lg()
                                         .font_family("serif")
                                         .child(title.to_string()),
@@ -190,10 +187,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         // One line keeps the strip narrow; the request list
                         // below holds the full error.
                         .child(
-                            div()
-                                .id("dictation-note")
-                                .role(Role::Status)
-                                .aria_label(note.clone())
+                            a11y::status("dictation-note", note.clone())
                                 .text_sm()
                                 .truncate()
                                 .text_color(note_color)

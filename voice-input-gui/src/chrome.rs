@@ -160,10 +160,7 @@ impl AppView {
                             ),
                     )
                     .child(
-                        div()
-                            .id("connection-status")
-                            .role(Role::Status)
-                            .aria_label(status.clone())
+                        a11y::status("connection-status", status.clone())
                             .h_flex()
                             .items_center()
                             .gap_2()
@@ -204,13 +201,7 @@ impl AppView {
     }
 
     pub(crate) fn banners(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
-        let banner = |id: &'static str, text: String| {
-            div()
-                .id(id)
-                .role(Role::Status)
-                .aria_label(text.clone())
-                .child(text)
-        };
+        let banner = |id: &'static str, text: String| a11y::status(id, text.clone()).child(text);
         let mut banners = Vec::new();
         match &self.model.connection {
             Connection::Reconnecting { attempt, reason } => banners.push(banner(

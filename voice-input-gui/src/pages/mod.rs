@@ -71,10 +71,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
     };
     let confirmation = view.confirm_clear.then(|| {
         let question = rust_i18n::t!("history.clear_confirm").to_string();
-        div()
-            .id("clear-confirmation")
-            .role(Role::Alert)
-            .aria_label(question.clone())
+        a11y::alert("clear-confirmation", question.clone())
             .h_flex()
             .gap_2()
             .child(question)

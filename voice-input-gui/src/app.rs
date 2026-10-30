@@ -326,10 +326,7 @@ impl AppView {
                 .flex()
                 .justify_center()
                 .child(
-                    div()
-                        .id("toast")
-                        .role(Role::Status)
-                        .aria_label(message.clone())
+                    a11y::status("toast", message.clone())
                         .relative()
                         .rounded_full()
                         .bg(cx.theme().foreground)
