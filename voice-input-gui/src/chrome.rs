@@ -68,7 +68,10 @@ impl AppView {
                             .gap(px(6.))
                             .pl(px(18.))
                             .child(
+                                // A fixed mark: collapsing clips and fades the
+                                // name, never squeezes the logo.
                                 div()
+                                    .flex_shrink_0()
                                     .size(px(24.))
                                     .rounded_md()
                                     .bg(cx.theme().primary)
@@ -83,6 +86,7 @@ impl AppView {
                             )
                             .child(
                                 div()
+                                    .flex_shrink_0()
                                     .text_sm()
                                     .font_semibold()
                                     .child(rust_i18n::t!("app.title").to_string())
