@@ -103,6 +103,27 @@ fn a_provider_failure_is_the_request_outcome() {
 }
 
 #[test]
+fn every_failing_exit_logs_one_request_with_its_error() {
+    for (event, error) in [
+        (Event::StopFailed("stop".to_string()), "stop"),
+        (Event::ProviderEnded, "provider ended without completing"),
+        (Event::FinalizeTimedOut, "provider did not finish in time"),
+    ] {
+        let mut harness = harness();
+        start_recording(&mut harness.actor);
+        for event in [Event::Toggle, event, Event::ProviderCompleted] {
+            harness.actor.dispatch(event, ReplyTarget::NotRequested);
+        }
+        assert_eq!(
+            request_outcomes(&harness.actor),
+            vec![RequestOutcome::Failed {
+                error: error.to_string()
+            }]
+        );
+    }
+}
+
+#[test]
 fn errors_clear_only_when_the_next_take_actually_starts() {
     let mut harness = harness();
     harness
