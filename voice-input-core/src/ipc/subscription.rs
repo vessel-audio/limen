@@ -59,6 +59,7 @@ impl Watchers {
             queued: false,
             history: Vec::new(),
             last_error: None,
+            requests: Vec::new(),
             config: ConfigSummary {
                 input_method: "fcitx5".to_string(),
                 provider_model: "test".to_string(),
@@ -208,6 +209,7 @@ mod tests {
             queued: false,
             history: Vec::new(),
             last_error: None,
+            requests: Vec::new(),
             config: ConfigSummary {
                 input_method: "fcitx5".to_string(),
                 provider_model: "test".to_string(),

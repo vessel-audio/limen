@@ -16,6 +16,7 @@ fn snapshot(state: DictationState, history: Vec<HistoryEntry>) -> WireSnapshot {
             queued: false,
             history,
             last_error: None,
+            requests: Vec::new(),
             config: ConfigSummary {
                 input_method: "fcitx5".to_string(),
                 provider_model: "model".to_string(),

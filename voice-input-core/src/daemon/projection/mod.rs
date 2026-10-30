@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 use super::snapshot::{
     ConfigSummary, DictationStatus, ERROR_CAP, ErrorEntry, FIELD_CAP, HistoryEntry, HistoryOutcome,
-    StateSnapshot, capped,
+    RequestEntry, RequestOutcome, StateSnapshot, capped,
 };
 use crate::config::Config;
 use crate::dictation::{DictationState, DictationView};
@@ -12,6 +12,7 @@ use crate::input_method::sanitize_control_characters;
 
 const HISTORY_LEN: usize = 50;
 const HISTORY_BUDGET: usize = 1024 * 1024;
+const REQUESTS_LEN: usize = 20;
 
 /// A completed input-worker result suitable for history.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,7 @@ impl Projection {
             queued: false,
             history: Vec::new(),
             last_error: None,
+            requests: Vec::new(),
             config: ConfigSummary::from_config(config),
         };
         let (sender, receiver) = watch::channel(snapshot.clone());
@@ -67,6 +69,27 @@ impl Projection {
         let entering = |state: DictationState| {
             std::mem::discriminant(&previous) != std::mem::discriminant(&state)
         };
+        // Errors are recorded before the publish that leaves transcription, so
+        // one reported since the request began is that request's failure.
+        if let (DictationState::Transcribing, Some(started_ms)) =
+            (previous, self.snapshot.dictation.since_ms)
+            && entering(view.state)
+        {
+            let outcome = match &self.snapshot.last_error {
+                Some(error) if error.at_ms >= started_ms => RequestOutcome::Failed {
+                    error: error.message.clone(),
+                },
+                Some(_) | None => RequestOutcome::Succeeded,
+            };
+            self.snapshot.requests.push(RequestEntry {
+                take: self.snapshot.take,
+                started_ms,
+                duration_ms: at_ms.saturating_sub(started_ms),
+                outcome,
+            });
+            let excess = self.snapshot.requests.len().saturating_sub(REQUESTS_LEN);
+            self.snapshot.requests.drain(..excess);
+        }
         if matches!(view.state, DictationState::Starting { .. })
             && !matches!(previous, DictationState::Starting { .. })
         {

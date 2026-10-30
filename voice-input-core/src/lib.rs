@@ -20,7 +20,8 @@ pub use audio::Level;
 pub use config::{Config, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
-    ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, StateSnapshot,
+    ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
+    RequestOutcome, StateSnapshot,
 };
 pub use daemon::{DaemonTermination, daemon_peer_pid, spawn_daemon, terminate_daemon};
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};

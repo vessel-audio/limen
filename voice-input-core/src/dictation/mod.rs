@@ -317,7 +317,13 @@ pub(crate) fn transition(mut state: Dictation, event: Event) -> Transition {
             Phase::Finalizing => terminal(
                 state,
                 TerminalOutcome::Failure,
-                vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
+                vec![
+                    Effect::DisarmFinalizeDeadline,
+                    Effect::TeardownSession,
+                    Effect::Notify(Notification::Error(
+                        "provider ended without completing".to_string(),
+                    )),
+                ],
             ),
             Phase::Idle | Phase::Recording(_) | Phase::Draining => unchanged(state),
         },

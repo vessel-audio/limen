@@ -23,6 +23,9 @@ pub struct StateSnapshot {
     pub history: Vec<HistoryEntry>,
     /// The most recent daemon error, cleared when a new take starts.
     pub last_error: Option<ErrorEntry>,
+    /// Finished transcription requests from oldest to newest.
+    #[serde(default)]
+    pub requests: Vec<RequestEntry>,
     /// Non-secret configuration useful for status display.
     pub config: ConfigSummary,
 }
@@ -70,6 +73,29 @@ pub enum HistoryOutcome {
     CommitFailed { error: String },
     /// The actor refused the job because input was not making progress.
     Dropped,
+}
+
+/// One finished transcription request to the configured provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestEntry {
+    /// The take whose audio was transcribed.
+    pub take: u64,
+    /// Unix milliseconds when the request began.
+    pub started_ms: u64,
+    /// Milliseconds from the request's start until the take left transcription.
+    pub duration_ms: u64,
+    /// Whether the request produced a transcript.
+    pub outcome: RequestOutcome,
+}
+
+/// How a transcription request ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RequestOutcome {
+    /// The provider finished without reporting an error.
+    Succeeded,
+    /// The take failed; `error` is the daemon error reported meanwhile.
+    Failed { error: String },
 }
 
 /// A timestamped daemon error.

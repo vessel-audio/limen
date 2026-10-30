@@ -1,7 +1,8 @@
-use super::{Completion, ERROR_CAP, HISTORY_BUDGET, HISTORY_LEN, Projection};
+use super::{Completion, ERROR_CAP, HISTORY_BUDGET, HISTORY_LEN, Projection, REQUESTS_LEN};
 use crate::config::Config;
 use crate::daemon::snapshot::{
-    ConfigSummary, ErrorEntry, FIELD_CAP, HistoryEntry, HistoryOutcome, MAX_PUSH_BYTES, capped,
+    ConfigSummary, ErrorEntry, FIELD_CAP, HistoryEntry, HistoryOutcome, MAX_PUSH_BYTES,
+    RequestEntry, RequestOutcome, StateSnapshot, capped,
 };
 use crate::dictation::{Control, DictationState, DictationView};
 use crate::shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
@@ -90,6 +91,75 @@ fn take_ids_errors_and_timing_change_only_at_their_boundaries() {
     snapshots.borrow_and_update();
     projection.publish(starting(), 10);
     assert!(!snapshots.has_changed().unwrap());
+}
+
+#[test]
+fn transcription_requests_record_duration_and_the_error_reported_meanwhile() {
+    let mut projection = projection();
+    projection.record_error("before the request".to_string(), 1);
+    projection.publish(starting(), 2);
+    projection.publish(recording(), 3);
+    projection.publish(view(DictationState::Transcribing), 10);
+    projection.publish(view(DictationState::Transcribing), 20);
+    projection.publish(view(DictationState::Committing), 1_250);
+    projection.publish(view(DictationState::Idle), 1_300);
+
+    projection.publish(starting(), 2_000);
+    projection.publish(recording(), 2_001);
+    projection.publish(view(DictationState::Transcribing), 3_000);
+    projection.record_error("connection refused".to_string(), 3_400);
+    projection.publish(view(DictationState::Idle), 3_400);
+
+    assert_eq!(
+        projection.snapshot().requests,
+        vec![
+            RequestEntry {
+                take: 1,
+                started_ms: 10,
+                duration_ms: 1_240,
+                outcome: RequestOutcome::Succeeded,
+            },
+            RequestEntry {
+                take: 2,
+                started_ms: 3_000,
+                duration_ms: 400,
+                outcome: RequestOutcome::Failed {
+                    error: "connection refused".to_string(),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn only_the_newest_requests_are_kept() {
+    let mut projection = projection();
+    for at_ms in 0..REQUESTS_LEN as u64 + 3 {
+        projection.publish(view(DictationState::Transcribing), at_ms * 10);
+        projection.publish(view(DictationState::Idle), at_ms * 10 + 1);
+    }
+    let started = projection
+        .snapshot()
+        .requests
+        .iter()
+        .map(|request| request.started_ms)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        started,
+        (3..REQUESTS_LEN as u64 + 3)
+            .map(|at_ms| at_ms * 10)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn snapshots_from_daemons_without_requests_still_parse() {
+    let mut legacy = serde_json::to_value(projection().snapshot()).unwrap();
+    legacy.as_object_mut().unwrap().remove("requests");
+    assert_eq!(
+        serde_json::from_value::<StateSnapshot>(legacy).unwrap(),
+        projection().snapshot().clone()
+    );
 }
 
 #[test]
@@ -250,7 +320,11 @@ fn the_worst_bounded_snapshot_fits_the_push_limit() {
         let id = projection.queue(&field, 3);
         projection.complete(id, field.clone(), Completion::CommitFailed(field.clone()));
     }
-    projection.record_error("\"".repeat(ERROR_CAP + 1), 4);
+    for _ in 0..REQUESTS_LEN {
+        projection.publish(view(DictationState::Transcribing), 4);
+        projection.record_error("\"".repeat(ERROR_CAP + 1), 4);
+        projection.publish(view(DictationState::Committing), 4);
+    }
     projection.snapshot.config = ConfigSummary {
         input_method: capped(&"\"".repeat(300), 256).0,
         provider_model: capped(&"\"".repeat(300), 256).0,

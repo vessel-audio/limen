@@ -384,12 +384,18 @@ fn finalizing_toggle_restarts_only_after_old_output_drains() {
 }
 
 #[test]
-fn provider_eof_is_failure_without_a_success_notification() {
+fn provider_eof_is_a_reported_failure() {
     assert_eq!(
         transition(finalizing(), Event::ProviderEnded),
         Transition {
             state: Dictation::default(),
-            effects: vec![Effect::DisarmFinalizeDeadline, Effect::TeardownSession],
+            effects: vec![
+                Effect::DisarmFinalizeDeadline,
+                Effect::TeardownSession,
+                Effect::Notify(Notification::Error(
+                    "provider ended without completing".to_string()
+                )),
+            ],
             reply: None,
         }
     );
