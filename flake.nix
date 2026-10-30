@@ -85,15 +85,14 @@
               ];
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
             # Desktop E2E renders with Mesa's software Vulkan driver, registers
-            # with a private AT-SPI registry, and uses fixed fonts so captures
-            # match across machines.
+            # with a private AT-SPI registry, and sees only the fonts in
+            # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
             VOICE_INPUT_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
             VOICE_INPUT_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
-            VOICE_INPUT_E2E_FONTCONFIG = pkgs.makeFontsConf {
-              fontDirectories = [
-                pkgs.dejavu_fonts
-                pkgs.wqy_microhei
-              ];
+            VOICE_INPUT_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
+              ibmPlex = pkgs.ibm-plex;
+              dejavu = pkgs.dejavu_fonts;
+              wqyMicrohei = pkgs.wqy_microhei;
             };
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
               pkgs.wayland
