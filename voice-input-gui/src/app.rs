@@ -21,6 +21,9 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 
+/// Recording levels kept for the live waveform.
+pub const LEVEL_BARS: usize = 64;
+
 /// Root application state owned by the GPUI thread.
 pub struct AppView {
     pub model: GuiState,
@@ -53,8 +56,8 @@ pub struct AppView {
     pub level_history: Vec<f32>,
     pub silent_since: Option<Instant>,
     pub shortcut_report: Option<Result<voice_input_core::Report, crate::bridge::ShortcutFailure>>,
-    /// Start time of the failed request whose full error is shown.
-    pub expanded_request: Option<u64>,
+    /// The failed request whose full error is shown.
+    pub expanded_request: Option<crate::pages::RequestKey>,
 }
 
 /// Top-level navigation pages.
@@ -230,7 +233,7 @@ impl AppView {
         }
         if level_event {
             self.level_history.push(self.model.level.rms);
-            if self.level_history.len() > 24 {
+            if self.level_history.len() > LEVEL_BARS {
                 self.level_history.remove(0);
             }
         }

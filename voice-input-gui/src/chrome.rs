@@ -7,10 +7,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-use crate::app::{AppView, ShutdownAction};
+use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
 use crate::model::{Connection, Warning};
 use crate::motion;
+use crate::settings::SettingsPage;
 use crate::sidebar::SidebarMode;
 
 impl AppView {
@@ -35,7 +36,13 @@ impl AppView {
             Connection::Connecting | Connection::Spawning | Connection::Reconnecting { .. }
         );
         let dot = div().size(px(6.)).rounded_full().bg(color);
-        let (section, page) = crate::sidebar::breadcrumb(self.page);
+        let (section, page) = match self.page {
+            Page::Dictation => ("nav.section", "nav.dictation"),
+            Page::History => ("nav.section", "nav.history"),
+            Page::Shortcuts => ("nav.section", "nav.shortcuts"),
+            Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
+            Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
+        };
         // The brand mark shares the sidebar's centre line and its label starts
         // in the navigation label column, so the two read as one column; the
         // brand area follows the sidebar's width so the page controls start
@@ -104,27 +111,46 @@ impl AppView {
                             .items_center()
                             .gap_2()
                             .text_sm()
+                            // Keep the press from reaching the title bar, which
+                            // would otherwise start a window drag.
                             .child(
-                                Button::new("toggle-sidebar")
-                                    .ghost()
-                                    .small()
-                                    .icon(match self.sidebar_mode {
-                                        SidebarMode::Expanded => IconName::PanelLeftClose,
-                                        SidebarMode::Collapsed => IconName::PanelLeftOpen,
+                                div()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
                                     })
-                                    .tooltip(rust_i18n::t!("nav.toggle_sidebar").to_string())
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.sidebar_mode = this.sidebar_mode.toggled();
-                                    })),
+                                    .child(
+                                        Button::new("toggle-sidebar")
+                                            .ghost()
+                                            .small()
+                                            .icon(match self.sidebar_mode {
+                                                SidebarMode::Expanded => IconName::PanelLeftClose,
+                                                SidebarMode::Collapsed => IconName::PanelLeftOpen,
+                                            })
+                                            .tooltip(
+                                                rust_i18n::t!("nav.toggle_sidebar").to_string(),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, _| {
+                                                this.sidebar_mode = match this.sidebar_mode {
+                                                    SidebarMode::Expanded => SidebarMode::Collapsed,
+                                                    SidebarMode::Collapsed => SidebarMode::Expanded,
+                                                };
+                                            })),
+                                    ),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(section),
+                                    .child(rust_i18n::t!(section).to_string()),
                             )
                             .child(div().text_color(cx.theme().border).child("/"))
-                            .child(div().min_w_0().truncate().font_medium().child(page)),
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_medium()
+                                    .child(rust_i18n::t!(page).to_string()),
+                            ),
                     )
                     .child(
                         div()

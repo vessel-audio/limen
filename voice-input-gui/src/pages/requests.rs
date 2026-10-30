@@ -1,15 +1,28 @@
-//! Recent transcription requests shown below the dictation card.
+//! The daemon's recent transcription requests, newest first.
 
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::*;
-use voice_input_core::{DictationState, RequestEntry, RequestOutcome};
+use voice_input_core::{DictationState, HistoryEntry, RequestEntry, RequestOutcome};
 
 use crate::app::AppView;
 use crate::motion;
 
+/// Identifies one request: its take, and its start in case a take ever
+/// produces more than one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestKey {
+    take: u64,
+    started_ms: u64,
+}
+
+/// Width of the time column, so details line up under the status.
+const TIME_WIDTH: f32 = 64.;
+const DOT: f32 = 6.;
+const GAP: f32 = 12.;
+
 pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
-    let (requests, in_flight) = view.model.snapshot.as_ref().map_or_else(
-        || (Vec::new(), None),
+    let (requests, history, in_flight) = view.model.snapshot.as_ref().map_or_else(
+        || (Vec::new(), Vec::new(), None),
         |snapshot| {
             let in_flight = match snapshot.state.dictation.state {
                 DictationState::Transcribing => snapshot.state.dictation.since_ms,
@@ -18,7 +31,11 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
                 | DictationState::Recording { .. }
                 | DictationState::Committing => None,
             };
-            (snapshot.state.requests.clone(), in_flight)
+            (
+                snapshot.state.requests.clone(),
+                snapshot.state.history.clone(),
+                in_flight,
+            )
         },
     );
     let failed = requests
@@ -26,9 +43,10 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .filter(|request| matches!(request.outcome, RequestOutcome::Failed { .. }))
         .count();
     let summary = match requests.len() {
-        0 => None,
-        count => Some(format!(
-            "{} {} · {} {failed}",
+        0 => rust_i18n::t!("requests.kept").to_string(),
+        count => format!(
+            "{count} {} · {} {} · {} {failed}",
+            rust_i18n::t!("requests.count"),
             rust_i18n::t!("requests.average"),
             duration(
                 requests
@@ -38,74 +56,78 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     / count as u64
             ),
             rust_i18n::t!("requests.failed"),
-        )),
+        ),
     };
     let live = in_flight.map(|since_ms| {
-        row()
-            .child(dot(cx.theme().primary).with_animation(
-                "request-in-flight",
-                motion::pulse(),
-                |dot, t| dot.opacity(t),
-            ))
-            .child(time(since_ms, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(rust_i18n::t!("requests.in_flight").to_string()),
-            )
-            .child(took(
-                (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64)
-                    .saturating_sub(since_ms),
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        div().px_4().py_3().child(
+            headline(
+                since_ms,
+                dot(cx.theme().primary).with_animation(
+                    "request-in-flight",
+                    motion::pulse(),
+                    |dot, t| dot.opacity(t),
+                ),
+                rust_i18n::t!("requests.in_flight").to_string(),
                 cx,
-            ))
+            )
+            .child(div().flex_1())
+            .child(took(now.saturating_sub(since_ms), cx)),
+        )
     });
     let rows = requests
         .iter()
         .rev()
-        .map(|request| entry(view, request, cx))
+        .map(|request| entry(view, request, &history, cx))
         .collect::<Vec<_>>();
     let empty = (rows.is_empty() && live.is_none()).then(|| {
         div()
             .px_4()
-            .py_3()
+            .py_6()
             .text_sm()
+            .text_center()
             .text_color(cx.theme().muted_foreground)
             .child(rust_i18n::t!("requests.empty").to_string())
     });
     div()
         .v_flex()
-        .w_full()
-        .max_w(px(560.))
-        .gap_2()
+        .flex_1()
+        .min_h_0()
+        .gap_3()
         .child(
             div()
                 .h_flex()
                 .items_baseline()
                 .justify_between()
+                .gap_4()
                 .px_1()
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_sm()
                         .font_medium()
+                        .text_color(cx.theme().muted_foreground)
                         .child(rust_i18n::t!("requests.title").to_string()),
                 )
-                .children(summary.map(|summary| {
+                .child(
                     div()
+                        .min_w_0()
                         .text_xs()
+                        .truncate()
                         .text_color(cx.theme().muted_foreground)
-                        .child(summary)
-                })),
+                        .child(summary),
+                ),
         )
+        // The page's only scroll container, so a wheel event never moves two
+        // scrollers at once.
         .child(
             div()
                 .id("requests")
                 .v_flex()
-                .max_h(px(212.))
+                .min_h_0()
                 .overflow_y_scroll()
                 .rounded_xl()
                 .border_1()
@@ -121,93 +143,125 @@ pub fn requests(view: &AppView, cx: &mut Context<AppView>) -> Div {
         )
 }
 
-fn entry(view: &AppView, request: &RequestEntry, cx: &mut Context<AppView>) -> Div {
-    let started_ms = request.started_ms;
+fn entry(
+    view: &AppView,
+    request: &RequestEntry,
+    history: &[HistoryEntry],
+    cx: &mut Context<AppView>,
+) -> Div {
     match &request.outcome {
-        RequestOutcome::Succeeded => row()
-            .child(dot(cx.theme().success))
-            .child(time(started_ms, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(rust_i18n::t!("requests.succeeded").to_string()),
-            )
-            .child(took(request.duration_ms, cx)),
-        RequestOutcome::Failed { error } => {
-            let expanded = view.expanded_request == Some(started_ms);
-            let summary = row()
-                .child(dot(cx.theme().danger))
-                .child(time(started_ms, cx))
+        RequestOutcome::Succeeded => {
+            let transcript = history
+                .iter()
+                .filter(|entry| entry.take == request.take)
+                .map(|entry| entry.text.as_deref().unwrap_or(&entry.original))
+                .collect::<Vec<_>>()
+                .join(" ");
+            div()
+                .v_flex()
+                .gap_1()
+                .px_4()
+                .py_3()
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(cx.theme().danger)
-                        .child(error.clone()),
+                    headline(
+                        request.started_ms,
+                        dot(cx.theme().success),
+                        rust_i18n::t!("requests.succeeded").to_string(),
+                        cx,
+                    )
+                    .child(div().flex_1())
+                    .child(took(request.duration_ms, cx)),
                 )
-                .child(took(request.duration_ms, cx));
+                .children((!transcript.is_empty()).then(|| {
+                    detail()
+                        .truncate()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(transcript)
+                }))
+        }
+        RequestOutcome::Failed { error } => {
+            let key = RequestKey {
+                take: request.take,
+                started_ms: request.started_ms,
+            };
+            let id = format!("{}-{}", request.take, request.started_ms);
+            let error_line = detail().text_color(cx.theme().danger);
             div().child(
                 div()
-                    .id(SharedString::from(format!("request-{started_ms}")))
+                    .id(SharedString::from(format!("request-{id}")))
                     .v_flex()
+                    .gap_1()
+                    .px_4()
+                    .py_3()
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().accent.opacity(0.5)))
                     .on_click(cx.listener(move |this, _, _, _| {
-                        this.expanded_request = match this.expanded_request == Some(started_ms) {
+                        this.expanded_request = match this.expanded_request == Some(key) {
                             true => None,
-                            false => Some(started_ms),
+                            false => Some(key),
                         };
                     }))
-                    .child(summary)
-                    .children(expanded.then(|| {
-                        // Indent under the summary text, past the dot and time.
-                        div()
-                            .pl(px(110.))
-                            .pr_4()
-                            .pb_3()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                    .child(
+                        headline(
+                            request.started_ms,
+                            dot(cx.theme().danger),
+                            rust_i18n::t!("requests.failed_status").to_string(),
+                            cx,
+                        )
+                        .child(div().flex_1())
+                        .child(took(request.duration_ms, cx)),
+                    )
+                    .child(match view.expanded_request == Some(key) {
+                        true => error_line
                             .child(error.clone())
                             .with_animation(
-                                SharedString::from(format!("request-detail-{started_ms}")),
+                                SharedString::from(format!("request-detail-{id}")),
                                 motion::enter(),
                                 |detail, t| detail.opacity(t),
                             )
-                    })),
+                            .into_any_element(),
+                        false => error_line
+                            .truncate()
+                            .child(error.clone())
+                            .into_any_element(),
+                    }),
             )
         }
     }
 }
 
-fn row() -> Div {
+/// A row's first line: time, status dot, and status; callers append a spacer
+/// and the duration.
+fn headline(at_ms: u64, dot: impl IntoElement, status: String, cx: &mut Context<AppView>) -> Div {
     div()
         .h_flex()
-        .w_full()
         .items_center()
-        .gap_3()
-        .px_4()
-        .py(px(10.))
+        .gap(px(GAP))
         .text_sm()
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(TIME_WIDTH))
+                .text_color(cx.theme().muted_foreground)
+                .child(super::format_time(at_ms)),
+        )
+        .child(dot)
+        .child(div().font_medium().child(status))
+}
+
+/// A row's second line, indented under the status.
+fn detail() -> Div {
+    div().pl(px(TIME_WIDTH + DOT + 2. * GAP)).text_sm()
 }
 
 fn dot(color: Hsla) -> Div {
-    div().flex_shrink_0().size(px(6.)).rounded_full().bg(color)
-}
-
-fn time(at_ms: u64, cx: &mut Context<AppView>) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(px(64.))
-        .text_color(cx.theme().muted_foreground)
-        .child(super::format_time(at_ms))
+    div().flex_shrink_0().size(px(DOT)).rounded_full().bg(color)
 }
 
 fn took(duration_ms: u64, cx: &mut Context<AppView>) -> Div {
     div()
         .flex_shrink_0()
+        .text_sm()
         .text_color(cx.theme().muted_foreground)
         .child(duration(duration_ms))
 }

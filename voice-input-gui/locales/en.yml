@@ -107,7 +107,6 @@ settings.language: Language
 settings.system_language: Follow system
 settings.font_size: Font size
 settings.service: Background service
-requests.title: Recent requests
 requests.average: Avg
 requests.failed: Failed
 requests.empty: No transcription requests yet
@@ -124,3 +123,7 @@ settings.interface_font_hint: Typeface used throughout the window
 settings.service_hint: Restart or stop the dictation daemon
 nav.section: Workspace
 nav.toggle_sidebar: Toggle sidebar
+requests.title: Requests
+requests.count: requests
+requests.kept: The daemon keeps the latest 20
+requests.failed_status: Failed

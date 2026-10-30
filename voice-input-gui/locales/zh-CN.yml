@@ -107,7 +107,6 @@ settings.language: 语言
 settings.system_language: 跟随系统
 settings.font_size: 字体大小
 settings.service: 后台服务
-requests.title: 最近请求
 requests.average: 平均
 requests.failed: 失败
 requests.empty: 还没有转写请求
@@ -124,3 +123,7 @@ settings.interface_font_hint: 窗口内所有文字使用的字体
 settings.service_hint: 重启或停止听写后台服务
 nav.section: 工作区
 nav.toggle_sidebar: 收起或展开侧边栏
+requests.title: 请求
+requests.count: 个请求
+requests.kept: 后台服务保留最近 20 个
+requests.failed_status: 转写失败

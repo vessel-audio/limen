@@ -32,25 +32,6 @@ impl SidebarMode {
             Self::Collapsed => px(60.),
         }
     }
-
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Expanded => Self::Collapsed,
-            Self::Collapsed => Self::Expanded,
-        }
-    }
-}
-
-/// The section and page names shown in the title bar for `page`.
-pub fn breadcrumb(page: Page) -> (SharedString, SharedString) {
-    let (section, name) = match page {
-        Page::Dictation => ("nav.section", "nav.dictation"),
-        Page::History => ("nav.section", "nav.history"),
-        Page::Shortcuts => ("nav.section", "nav.shortcuts"),
-        Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
-        Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
-    };
-    (rust_i18n::t!(section).into(), rust_i18n::t!(name).into())
 }
 
 /// One navigable sidebar destination.
