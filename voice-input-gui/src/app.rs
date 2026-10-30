@@ -272,6 +272,7 @@ impl AppView {
         Some(
             div()
                 .id("shutdown-confirmation")
+                .accessibility_id("shutdown-confirmation")
                 .role(Role::AlertDialog)
                 .aria_label(message.clone())
                 .absolute()

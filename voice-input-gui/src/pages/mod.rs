@@ -116,6 +116,7 @@ pub fn title(text: impl Into<SharedString>) -> Stateful<Div> {
     let text = text.into();
     div()
         .id("page-title")
+        .accessibility_id("page-title")
         .role(Role::Heading)
         .aria_label(text.clone())
         .text_xl()

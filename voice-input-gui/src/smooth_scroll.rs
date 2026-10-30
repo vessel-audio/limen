@@ -136,7 +136,8 @@ impl SmoothScroll {
             .flex_col()
             .min_h_0()
             .child(
-                area.flex_1()
+                area.role(Role::ScrollView)
+                    .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.handle),

@@ -199,6 +199,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                                 .child(
                                     div()
                                         .id("font-size")
+                                        .accessibility_id("font-size")
                                         .role(Role::Label)
                                         .aria_value(format!("{} px", view.font_size))
                                         .w(px(64.))
@@ -328,6 +329,7 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
             );
             div()
                 .id("about-version")
+                .accessibility_id("about-version")
                 .role(Role::Label)
                 .aria_value(version.clone())
                 .text_color(cx.theme().muted_foreground)
@@ -359,6 +361,7 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .child(
             div()
                 .id("settings-tabs")
+                .accessibility_id("settings-tabs")
                 .role(Role::TabList)
                 .aria_label(rust_i18n::t!("settings.title").to_string())
                 .h_flex()

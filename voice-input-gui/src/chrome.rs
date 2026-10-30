@@ -151,6 +151,7 @@ impl AppView {
                             .child(
                                 div()
                                     .id("current-page")
+                                    .accessibility_id("current-page")
                                     .role(Role::Heading)
                                     .aria_label(page.clone())
                                     .min_w_0()
@@ -279,6 +280,7 @@ impl AppView {
         };
         let overlay = div()
             .id("connection-overlay")
+            .accessibility_id("connection-overlay")
             .role(Role::Dialog)
             .aria_label(message.clone());
         let overlay = match log.clone() {

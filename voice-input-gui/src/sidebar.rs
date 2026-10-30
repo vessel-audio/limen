@@ -131,6 +131,7 @@ impl AppView {
             .child(
                 div()
                     .id("navigation")
+                    .accessibility_id("navigation")
                     .role(Role::TabList)
                     .aria_label(rust_i18n::t!("nav.section").to_string())
                     .relative()
