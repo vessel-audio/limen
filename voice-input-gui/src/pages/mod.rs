@@ -2,7 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, StyledExt, WindowExt,
+    ActiveTheme, Disableable, Icon, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::*;
@@ -144,6 +144,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .min_h(relative(1.))
         .items_center()
         .justify_center()
+        .gap_6()
         .p_8()
         .child(
             div()
@@ -169,6 +170,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                 .child(
                     div()
                         .v_flex()
+                        .w_full()
                         .items_center()
                         .gap_2()
                         .child(
@@ -178,14 +180,30 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                                 .child(format!("{title}{detail}")),
                         )
                         .children(error.map(|message| {
-                            div().h_flex().gap_2().child(message).child(
-                                Button::new("view-history")
-                                    .ghost()
-                                    .label(rust_i18n::t!("action.view_history").to_string())
-                                    .on_click(
-                                        cx.listener(|this, _, _, _| this.page = Page::History),
-                                    ),
-                            )
+                            div()
+                                .v_flex()
+                                .w_full()
+                                .min_w_0()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .text_sm()
+                                        .text_center()
+                                        .text_color(cx.theme().danger)
+                                        .line_clamp(2)
+                                        .child(message),
+                                )
+                                .child(
+                                    Button::new("view-history")
+                                        .ghost()
+                                        .small()
+                                        .label(rust_i18n::t!("action.view_history").to_string())
+                                        .on_click(
+                                            cx.listener(|this, _, _, _| this.page = Page::History),
+                                        ),
+                                )
                         })),
                 )
                 .children(level_meter)
@@ -221,7 +239,8 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                         .text_left()
                         .child(history_card(&entry, cx.theme().muted.opacity(0.25)))
                 })),
-        );
+        )
+        .child(requests::requests(view, cx));
     // Centre the card while it fits; scroll from the top once it does not.
     div()
         .id("dictation-page")
@@ -320,6 +339,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         .children(confirmation)
 }
 
+mod requests;
 mod shortcuts;
 pub use shortcuts::shortcuts;
 

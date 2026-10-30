@@ -107,3 +107,18 @@ settings.language: Language
 settings.system_language: Follow system
 settings.font_size: Font size
 settings.service: Background service
+requests.title: Recent requests
+requests.average: Avg
+requests.failed: Failed
+requests.empty: No transcription requests yet
+requests.succeeded: Transcribed
+requests.in_flight: Transcribing…
+settings.interface_font: Interface font
+settings.search_font: Search fonts
+settings.lightweight: Lightweight mode
+settings.lightweight_hint: Turns off animations to reduce rendering work
+settings.appearance_hint: Light, dark, or match the system
+settings.language_hint: Language of the interface
+settings.font_size_hint: Base size of interface text
+settings.interface_font_hint: Typeface used throughout the window
+settings.service_hint: Restart or stop the dictation daemon

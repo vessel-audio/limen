@@ -14,8 +14,12 @@ use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, GuiState, Msg};
 use crate::pages;
 use crate::recorder::RecorderState;
-use crate::settings::{AppearancePreference, LanguagePreference, SettingsPage};
+use crate::settings::{
+    AppearancePreference, FontChoice, LanguagePreference, LightweightMode, SettingsPage,
+};
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::searchable_list::SearchableVec;
+use gpui_kit::component::select::{SelectEvent, SelectState};
 
 /// Root application state owned by the GPUI thread.
 pub struct AppView {
@@ -38,6 +42,9 @@ pub struct AppView {
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_size: f32,
+    pub font_family: SharedString,
+    pub font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
+    pub lightweight: LightweightMode,
     pub confirm_clear: bool,
     pub confirm_shutdown: Option<ShutdownAction>,
     pub toast: Option<(String, Instant)>,
@@ -45,6 +52,8 @@ pub struct AppView {
     pub level_history: Vec<f32>,
     pub silent_since: Option<Instant>,
     pub shortcut_report: Option<Result<voice_input_core::Report, crate::bridge::ShortcutFailure>>,
+    /// Start time of the failed request whose full error is shown.
+    pub expanded_request: Option<u64>,
 }
 
 /// Top-level navigation pages.
@@ -80,6 +89,15 @@ impl AppView {
                 .placeholder("Super+X")
                 .default_value("Super+X")
         });
+        let font_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(FontChoice::all(cx)),
+                Some(gpui_kit::component::IndexPath::new(0)),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
         let subscriptions = vec![
             cx.subscribe_in(&toggle_input, window, |this, _, event, _, _| match event {
                 InputEvent::Change => this.toggle_touched = true,
@@ -87,6 +105,17 @@ impl AppView {
                 InputEvent::Blur => this.toggle_focused = false,
                 _ => {}
             }),
+            cx.subscribe_in(
+                &font_select,
+                window,
+                |this, _, event: &SelectEvent<SearchableVec<FontChoice>>, _, cx| match event {
+                    SelectEvent::Confirm(Some(family)) => {
+                        this.font_family = family.clone();
+                        this.apply_typography(cx);
+                    }
+                    SelectEvent::Confirm(None) => {}
+                },
+            ),
             cx.subscribe_in(&hold_input, window, |this, _, event, _, _| match event {
                 InputEvent::Change => this.hold_touched = true,
                 InputEvent::Focus => this.hold_focused = true,
@@ -114,6 +143,9 @@ impl AppView {
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
             font_size: 16.0,
+            font_family: FontChoice::SYSTEM_FAMILY.into(),
+            font_select,
+            lightweight: LightweightMode::Off,
             confirm_clear: false,
             confirm_shutdown: None,
             toast: None,
@@ -121,6 +153,7 @@ impl AppView {
             level_history: Vec::new(),
             silent_since: None,
             shortcut_report: None,
+            expanded_request: None,
         }
     }
 
@@ -131,6 +164,16 @@ impl AppView {
             AppearancePreference::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
         }
         crate::palette::apply(cx);
+        self.apply_typography(cx);
+    }
+
+    /// Re-apply font choices, which a theme reload may reset.
+    pub(crate) fn apply_typography(&self, cx: &mut App) {
+        let (family, size) = (self.font_family.clone(), px(self.font_size));
+        Theme::update(cx, |theme| {
+            theme.font_family = family;
+            theme.font_size = size;
+        });
     }
 
     /// Apply one bridge event and return GUI-only side effects.
@@ -304,6 +347,7 @@ impl Render for AppView {
             if cx.theme().mode != mode {
                 Theme::change(mode, Some(window), cx);
                 crate::palette::apply(cx);
+                self.apply_typography(cx);
             }
         }
         let page = match self.page {

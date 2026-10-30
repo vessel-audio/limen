@@ -2,8 +2,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, StyledExt, Theme,
+    ActiveTheme, Disableable, Icon, Sizable, StyledExt,
     button::{Button, ButtonVariants},
+    searchable_list::SearchableListItem,
+    select::Select,
+    switch::Switch,
 };
 use gpui_kit::*;
 
@@ -23,6 +26,64 @@ pub enum AppearancePreference {
     System,
     Light,
     Dark,
+}
+
+/// Whether decorative motion is skipped to save rendering work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightweightMode {
+    Off,
+    On,
+}
+
+/// One entry of the interface-font picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontChoice {
+    /// The platform's UI font, resolved by the theme.
+    System,
+    Family(SharedString),
+}
+
+impl FontChoice {
+    pub const SYSTEM_FAMILY: &'static str = ".SystemUIFont";
+
+    /// The system entry followed by every installed family, sorted.
+    pub fn all(cx: &App) -> Vec<Self> {
+        let mut families = cx.text_system().all_font_names();
+        families.sort_unstable();
+        families.dedup();
+        std::iter::once(Self::System)
+            .chain(
+                families
+                    .into_iter()
+                    .filter(|family| !family.starts_with('.'))
+                    .map(|family| Self::Family(family.into())),
+            )
+            .collect()
+    }
+}
+
+impl SearchableListItem for FontChoice {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        match self {
+            Self::System => rust_i18n::t!("settings.follow_system").into(),
+            Self::Family(family) => family.clone(),
+        }
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let family: SharedString = self.value().clone();
+        div().font_family(family).child(self.title())
+    }
+
+    fn value(&self) -> &SharedString {
+        static SYSTEM: SharedString = SharedString::new_static(FontChoice::SYSTEM_FAMILY);
+        match self {
+            Self::System => &SYSTEM,
+            Self::Family(family) => family,
+        }
+    }
 }
 
 /// Application language preference.
@@ -96,78 +157,124 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .gap_5()
         .p_8()
         .child(crate::pages::title(rust_i18n::t!("settings.general")))
-        .child(card(
-            rust_i18n::t!("settings.appearance").to_string(),
-            div().h_flex().gap_2().children(appearance),
-            cx,
-        ))
-        .child(card(
-            rust_i18n::t!("settings.language").to_string(),
-            div().h_flex().gap_2().children(language),
-            cx,
-        ))
-        .child(card(
-            rust_i18n::t!("settings.font_size").to_string(),
+        .child(
             div()
-                .h_flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    Button::new("font-decrease")
-                        .outline()
-                        .label("−")
-                        .disabled(view.font_size <= 12.0)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.font_size = (this.font_size - 1.0).max(12.0);
-                            let size = this.font_size;
-                            Theme::update(cx, |theme| theme.font_size = px(size));
-                        })),
-                )
-                .child(
-                    div()
-                        .w(px(64.))
-                        .text_center()
-                        .child(format!("{} px", view.font_size)),
-                )
-                .child(
-                    Button::new("font-increase")
-                        .outline()
-                        .label("+")
-                        .disabled(view.font_size >= 22.0)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.font_size = (this.font_size + 1.0).min(22.0);
-                            let size = this.font_size;
-                            Theme::update(cx, |theme| theme.font_size = px(size));
-                        })),
+                .v_flex()
+                .rounded_xl()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.18))
+                .children(
+                    [
+                        setting(
+                            "settings.appearance",
+                            div().h_flex().gap_2().children(appearance),
+                            cx,
+                        ),
+                        setting(
+                            "settings.language",
+                            div().h_flex().gap_2().children(language),
+                            cx,
+                        ),
+                        setting(
+                            "settings.font_size",
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    Button::new("font-decrease")
+                                        .small()
+                                        .outline()
+                                        .label("−")
+                                        .disabled(view.font_size <= 12.0)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.font_size = (this.font_size - 1.0).max(12.0);
+                                            this.apply_typography(cx);
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(64.))
+                                        .text_center()
+                                        .child(format!("{} px", view.font_size)),
+                                )
+                                .child(
+                                    Button::new("font-increase")
+                                        .small()
+                                        .outline()
+                                        .label("+")
+                                        .disabled(view.font_size >= 22.0)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.font_size = (this.font_size + 1.0).min(22.0);
+                                            this.apply_typography(cx);
+                                        })),
+                                ),
+                            cx,
+                        ),
+                        setting(
+                            "settings.interface_font",
+                            div().w(px(220.)).child(
+                                Select::new(&view.font_select)
+                                    .menu_max_h(px(320.))
+                                    .search_placeholder(
+                                        rust_i18n::t!("settings.search_font").to_string(),
+                                    ),
+                            ),
+                            cx,
+                        ),
+                        setting(
+                            "settings.lightweight",
+                            Switch::new("lightweight")
+                                .checked(view.lightweight == LightweightMode::On)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.lightweight = match checked {
+                                        true => LightweightMode::On,
+                                        false => LightweightMode::Off,
+                                    };
+                                    cx.set_reduce_motion(*checked);
+                                    cx.notify();
+                                })),
+                            cx,
+                        ),
+                        setting(
+                            "settings.service",
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("restart-daemon")
+                                        .small()
+                                        .outline()
+                                        .label(rust_i18n::t!("action.restart_daemon").to_string())
+                                        .on_click({
+                                            let commands = view.commands.clone();
+                                            move |_, _, _| {
+                                                let _ =
+                                                    commands.try_send(BridgeCommand::RestartDaemon);
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    Button::new("stop-daemon")
+                                        .small()
+                                        .outline()
+                                        .label(rust_i18n::t!("action.stop_daemon").to_string())
+                                        .on_click(cx.listener(|this, _, _, _| {
+                                            this.confirm_shutdown = Some(ShutdownAction::Stop);
+                                        })),
+                                ),
+                            cx,
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, row)| match index {
+                        0 => row,
+                        _ => row.border_t_1(),
+                    }),
                 ),
-            cx,
-        ))
-        .child(card(
-            rust_i18n::t!("settings.service").to_string(),
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    Button::new("restart-daemon")
-                        .outline()
-                        .label(rust_i18n::t!("action.restart_daemon").to_string())
-                        .on_click({
-                            let commands = view.commands.clone();
-                            move |_, _, _| {
-                                let _ = commands.try_send(BridgeCommand::RestartDaemon);
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("stop-daemon")
-                        .outline()
-                        .label(rust_i18n::t!("action.stop_daemon").to_string())
-                        .on_click(cx.listener(|this, _, _, _| {
-                            this.confirm_shutdown = Some(ShutdownAction::Stop);
-                        })),
-                ),
-            cx,
-        ))
+        )
 }
 
 pub fn about(_: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
@@ -209,22 +316,44 @@ pub fn about(_: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
 }
 
 fn choice(id: &'static str, label: String, selected: bool) -> Button {
-    let button = Button::new(id).label(label);
+    let button = Button::new(id).small().label(label);
     match selected {
         true => button.primary(),
         false => button.outline(),
     }
 }
 
-fn card(title: String, control: Div, cx: &mut Context<AppView>) -> Div {
+/// One settings row: the title and description under `key` beside a control.
+fn setting(key: &str, control: impl IntoElement, cx: &mut Context<AppView>) -> Div {
+    let hint = format!("{key}_hint");
     div()
-        .v_flex()
-        .gap_3()
-        .rounded_xl()
-        .border_1()
+        .h_flex()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap_x_6()
+        .gap_y_3()
+        .px_5()
+        .py_4()
         .border_color(cx.theme().border)
-        .bg(cx.theme().muted.opacity(0.18))
-        .p_5()
-        .child(div().text_sm().font_medium().child(title))
-        .child(control)
+        .child(
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w(px(160.))
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .child(rust_i18n::t!(key).to_string()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(rust_i18n::t!(&hint).to_string()),
+                ),
+        )
+        .child(div().flex_shrink_0().child(control))
 }
