@@ -27,10 +27,44 @@ pub struct SmoothScroll {
 }
 
 /// An eased scroll still on its way to `target`.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Glide {
     target: Pixels,
+    /// The offset this glide last wrote; any other offset means something
+    /// else, such as the scrollbar or a layout change, moved the container.
+    written: Pixels,
     last_frame: Instant,
+}
+
+/// What one frame does to a glide.
+#[derive(Debug, PartialEq)]
+enum Frame {
+    /// Keep easing: write the offset and ask for another frame.
+    Move(Glide),
+    /// Arrived: write the final offset and stop.
+    Settle(Pixels),
+    /// The offset moved under the glide, which yields to that move.
+    Abandon,
+}
+
+/// Ease `glide` toward its target as of `now`, keeping the target inside the
+/// current range `[-max_offset, 0]` in case the content shrank meanwhile.
+fn advance(glide: Glide, offset: Pixels, max_offset: Pixels, now: Instant) -> Frame {
+    let target = glide.target.clamp(-max_offset, px(0.));
+    let progress = 1. - (-(now - glide.last_frame).as_secs_f32() / TIME_CONSTANT).exp();
+    let next = offset + (target - offset) * progress;
+    match (
+        (offset - glide.written).abs() < px(0.5),
+        (target - next).abs() < px(0.5),
+    ) {
+        (false, _) => Frame::Abandon,
+        (true, true) => Frame::Settle(target),
+        (true, false) => Frame::Move(Glide {
+            target,
+            written: next,
+            last_frame: now,
+        }),
+    }
 }
 
 impl SmoothScroll {
@@ -59,6 +93,7 @@ impl SmoothScroll {
                     let from = glide.map_or(offset.y, |glide| glide.target);
                     *glide = Some(Glide {
                         target: clamp(from + delta),
+                        written: offset.y,
                         last_frame: Instant::now(),
                     });
                 }
@@ -70,26 +105,26 @@ impl SmoothScroll {
     /// Advance an ongoing glide by the time since the last frame.
     pub fn step(&self, window: &mut Window) {
         let mut glide = self.glide.borrow_mut();
-        let Some(Glide { target, last_frame }) = *glide else {
+        let Some(current) = *glide else {
             return;
         };
-        let now = Instant::now();
         let offset = self.handle.offset();
-        let progress = 1. - (-(now - last_frame).as_secs_f32() / TIME_CONSTANT).exp();
-        let next = offset.y + (target - offset.y) * progress;
-        match (target - next).abs() < px(0.5) {
-            true => {
+        match advance(
+            current,
+            offset.y,
+            self.handle.max_offset().y,
+            Instant::now(),
+        ) {
+            Frame::Move(next) => {
+                *glide = Some(next);
+                self.handle.set_offset(point(offset.x, next.written));
+                window.request_animation_frame();
+            }
+            Frame::Settle(target) => {
                 *glide = None;
                 self.handle.set_offset(point(offset.x, target));
             }
-            false => {
-                *glide = Some(Glide {
-                    target,
-                    last_frame: now,
-                });
-                self.handle.set_offset(point(offset.x, next));
-                window.request_animation_frame();
-            }
+            Frame::Abandon => *glide = None,
         }
     }
 
@@ -100,5 +135,52 @@ impl SmoothScroll {
                 .mode(mode)
                 .viewport_from_layout(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use gpui_kit::px;
+
+    use super::{Frame, Glide, TIME_CONSTANT, advance};
+
+    fn glide(target: f32, written: f32, start: Instant) -> Glide {
+        Glide {
+            target: px(target),
+            written: px(written),
+            last_frame: start,
+        }
+    }
+
+    #[test]
+    fn a_frame_covers_the_eased_share_of_the_remaining_way() {
+        let start = Instant::now();
+        let now = start + Duration::from_secs_f32(TIME_CONSTANT);
+        let Frame::Move(next) = advance(glide(-100., 0., start), px(0.), px(500.), now) else {
+            panic!("a glide one time constant in should still be moving");
+        };
+        assert!((next.written - px(-63.2)).abs() < px(0.1), "{next:?}");
+        assert_eq!((next.target, next.last_frame), (px(-100.), now));
+    }
+
+    #[test]
+    fn a_target_beyond_a_shrunken_range_settles_at_its_end() {
+        let start = Instant::now();
+        let later = start + Duration::from_secs(1);
+        assert_eq!(
+            advance(glide(-400., -150., start), px(-150.), px(150.), later),
+            Frame::Settle(px(-150.))
+        );
+    }
+
+    #[test]
+    fn an_offset_moved_by_something_else_ends_the_glide() {
+        let start = Instant::now();
+        assert_eq!(
+            advance(glide(-300., -100., start), px(-40.), px(500.), start),
+            Frame::Abandon
+        );
     }
 }
