@@ -122,3 +122,5 @@ settings.language_hint: Language of the interface
 settings.font_size_hint: Base size of interface text
 settings.interface_font_hint: Typeface used throughout the window
 settings.service_hint: Restart or stop the dictation daemon
+nav.section: Workspace
+nav.toggle_sidebar: Toggle sidebar

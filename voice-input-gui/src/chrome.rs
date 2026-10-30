@@ -2,7 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, StyledExt, TitleBar,
+    ActiveTheme, Icon, Sizable, StyledExt, TitleBar,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::*;
@@ -11,6 +11,7 @@ use crate::app::{AppView, ShutdownAction};
 use crate::bridge::BridgeCommand;
 use crate::model::{Connection, Warning};
 use crate::motion;
+use crate::sidebar::SidebarMode;
 
 impl AppView {
     pub(crate) fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -34,8 +35,11 @@ impl AppView {
             Connection::Connecting | Connection::Spawning | Connection::Reconnecting { .. }
         );
         let dot = div().size(px(6.)).rounded_full().bg(color);
+        let (section, page) = crate::sidebar::breadcrumb(self.page);
         // The brand mark shares the sidebar's centre line and its label starts
-        // in the navigation label column, so the two read as one column.
+        // in the navigation label column, so the two read as one column; the
+        // brand area follows the sidebar's width so the page controls start
+        // above the content panel.
         TitleBar::new()
             .h(px(48.))
             .pl_0()
@@ -45,15 +49,17 @@ impl AppView {
                 div()
                     .h_flex()
                     .items_center()
-                    .justify_between()
                     .w_full()
-                    .pl(px(18.))
                     .pr_2()
                     .child(
                         div()
                             .h_flex()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
                             .items_center()
                             .gap(px(6.))
+                            .pl(px(18.))
                             .child(
                                 div()
                                     .size(px(24.))
@@ -72,8 +78,53 @@ impl AppView {
                                 div()
                                     .text_sm()
                                     .font_semibold()
-                                    .child(rust_i18n::t!("app.title").to_string()),
+                                    .child(rust_i18n::t!("app.title").to_string())
+                                    .with_spring(
+                                        "brand-name",
+                                        SpringAnimation::new(motion::SPRING).to(
+                                            match self.sidebar_mode {
+                                                SidebarMode::Expanded => 1.,
+                                                SidebarMode::Collapsed => 0.,
+                                            },
+                                        ),
+                                        |name, opacity| name.opacity(opacity.clamp(0., 1.)),
+                                    ),
+                            )
+                            .with_spring(
+                                "brand-width",
+                                SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.width()),
+                                |brand, width| brand.w(width),
                             ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .child(
+                                Button::new("toggle-sidebar")
+                                    .ghost()
+                                    .small()
+                                    .icon(match self.sidebar_mode {
+                                        SidebarMode::Expanded => IconName::PanelLeftClose,
+                                        SidebarMode::Collapsed => IconName::PanelLeftOpen,
+                                    })
+                                    .tooltip(rust_i18n::t!("nav.toggle_sidebar").to_string())
+                                    .on_click(cx.listener(|this, _, _, _| {
+                                        this.sidebar_mode = this.sidebar_mode.toggled();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(section),
+                            )
+                            .child(div().text_color(cx.theme().border).child("/"))
+                            .child(div().min_w_0().truncate().font_medium().child(page)),
                     )
                     .child(
                         div()

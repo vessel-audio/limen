@@ -12,6 +12,9 @@ use crate::app::{AppView, Page};
 use crate::bridge::BridgeCommand;
 use crate::model::{DictationButton, DisabledReason};
 
+/// Characters of an error shown on the dictation card.
+const ERROR_PREVIEW: usize = 140;
+
 pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
     let (title, detail) = view.model.snapshot.as_ref().map_or(
         (
@@ -138,7 +141,13 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .as_ref()
         .and_then(|snapshot| snapshot.state.last_error.clone())
         .map(|error| error.message)
-        .or_else(|| view.model.command_error.clone());
+        .or_else(|| view.model.command_error.clone())
+        // gpui's `line_clamp` clips at a different width than it wraps, so
+        // shorten the text instead; the request list keeps the full error.
+        .map(|error| match error.chars().count() > ERROR_PREVIEW {
+            true => format!("{}…", error.chars().take(ERROR_PREVIEW).collect::<String>()),
+            false => error,
+        });
     let content = div()
         .v_flex()
         .min_h(relative(1.))
@@ -186,13 +195,13 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
                                 .min_w_0()
                                 .items_center()
                                 .gap_1()
+                                // gpui centres wrapped lines by their unwrapped
+                                // width, so the error stays left-aligned.
                                 .child(
                                     div()
                                         .w_full()
                                         .text_sm()
-                                        .text_center()
                                         .text_color(cx.theme().danger)
-                                        .line_clamp(2)
                                         .child(message),
                                 )
                                 .child(
