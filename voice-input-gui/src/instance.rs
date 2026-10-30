@@ -59,7 +59,15 @@ mod tests {
         assert!(first.is_some());
         assert!(acquire(&paths).unwrap().is_none());
         drop(first);
-        assert!(acquire(&paths).unwrap().is_some());
+        // A test spawning a child in parallel shares every open descriptor
+        // between fork and exec, so the released lock may linger briefly.
+        let reacquired = (0..100).find_map(|_| {
+            acquire(&paths).unwrap().or_else(|| {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                None
+            })
+        });
+        assert!(reacquired.is_some());
         let _ = std::fs::remove_dir_all(root);
     }
 }
