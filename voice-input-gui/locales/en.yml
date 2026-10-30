@@ -94,3 +94,16 @@ note.unstable_path: unstable path
 note.no_custom: No GNOME custom shortcut runs voice-input toggle.
 note.removed: Removed the GNOME custom shortcut.
 note.disabled: Disabled the GNOME custom shortcut; it stays otherwise.
+about.menu: About
+connection.online: Service ready
+connection.offline: Service offline
+settings.title: Settings
+settings.general: General
+settings.appearance: Appearance
+settings.follow_system: Follow system
+settings.light: Light
+settings.dark: Dark
+settings.language: Language
+settings.system_language: Follow system
+settings.font_size: Font size
+settings.service: Background service

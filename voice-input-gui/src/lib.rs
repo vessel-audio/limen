@@ -2,11 +2,14 @@
 
 mod app;
 mod bridge;
+mod chrome;
 mod instance;
 mod locale;
 mod model;
 mod pages;
+mod palette;
 mod recorder;
+mod settings;
 
 pub use bridge::{BridgeCommand, BridgeEvent, ShortcutRequest};
 pub use model::{
@@ -38,60 +41,65 @@ pub fn run(paths: Paths) -> Result<()> {
     let bridge_commands = commands.clone();
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
-        match gpui_kit::open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: size(px(720.0), px(520.0)),
-                })),
-                window_min_size: Some(size(px(560.0), px(420.0))),
-                app_id: Some("io.github.Emin017.VoiceInput".to_string()),
-                ..TitleBar::window_options()
-            },
-            cx,
-            |window, cx| {
-                cx.new(|cx| {
-                    let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
-                    cx.spawn(async move |this, cx| {
-                        while let Some(event) = events.recv().await {
-                            let _ = this.update(cx, |window: &mut app::AppView, cx| {
-                                for action in window.apply_bridge_event(event) {
-                                    match action {
-                                        Action::CopyToClipboard(text) => {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
+            palette::apply(cx);
+            match gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: point(px(0.0), px(0.0)),
+                        size: size(px(720.0), px(520.0)),
+                    })),
+                    window_min_size: Some(size(px(560.0), px(420.0))),
+                    app_id: Some("io.github.Emin017.VoiceInput".to_string()),
+                    ..TitleBar::window_options()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| {
+                        let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
+                        cx.spawn(async move |this, cx| {
+                            while let Some(event) = events.recv().await {
+                                let _ = this.update(cx, |window: &mut app::AppView, cx| {
+                                    for action in window.apply_bridge_event(event) {
+                                        match action {
+                                            Action::CopyToClipboard(text) => {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    text,
+                                                ));
+                                            }
+                                            Action::Reconnect => {}
+                                            Action::Toast(_) => window.show_toast(),
                                         }
-                                        Action::Reconnect => {}
-                                        Action::Toast(_) => window.show_toast(),
                                     }
-                                }
-                                cx.notify();
-                            });
-                        }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .detach();
+                        cx.spawn(async move |this, cx| {
+                            loop {
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(200))
+                                    .await;
+                                let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
+                            }
+                        })
+                        .detach();
+                        app
                     })
-                    .detach();
-                    cx.spawn(async move |this, cx| {
-                        loop {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(200))
-                                .await;
-                            let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
-                        }
-                    })
-                    .detach();
-                    app
-                })
-            },
-        ) {
-            Ok(_) => {}
-            Err(error) => {
-                *result.borrow_mut() = Some(error);
-                cx.quit();
+                },
+            ) {
+                Ok(_) => {}
+                Err(error) => {
+                    *result.borrow_mut() = Some(error);
+                    cx.quit();
+                }
             }
-        }
-    });
+        });
     let _ = bridge_commands.blocking_send(BridgeCommand::Quit);
     let _ = bridge_thread.join();
     match opened.borrow_mut().take() {

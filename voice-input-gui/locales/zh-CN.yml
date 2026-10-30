@@ -94,3 +94,16 @@ note.unstable_path: 路径会在升级后失效
 note.no_custom: 没有运行 voice-input toggle 的 GNOME 自定义快捷键。
 note.removed: 已移除 GNOME 自定义快捷键。
 note.disabled: 已禁用 GNOME 自定义快捷键，其余内容保留。
+about.menu: 关于
+connection.online: 后台服务就绪
+connection.offline: 后台服务未连接
+settings.title: 设置
+settings.general: 常规
+settings.appearance: 外观
+settings.follow_system: 跟随系统
+settings.light: 浅色
+settings.dark: 深色
+settings.language: 语言
+settings.system_language: 跟随系统
+settings.font_size: 字体大小
+settings.service: 后台服务

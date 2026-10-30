@@ -1,7 +1,8 @@
 //! GPUI pages rendered from the pure GUI model.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    Disableable, StyledExt, WindowExt,
+    ActiveTheme, Disableable, Icon, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
 };
 use gpui_kit::*;
@@ -124,43 +125,89 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .flex_1()
         .items_center()
         .justify_center()
-        .gap_4()
-        .p_4()
+        .p_6()
         .child(
             div()
                 .v_flex()
+                .w_full()
+                .max_w(px(680.))
                 .items_center()
-                .gap_2()
-                .child(format!("{title}{detail}"))
-                .children(error.map(|message| {
-                    div().h_flex().gap_2().child(message).child(
-                        Button::new("view-history")
-                            .ghost()
-                            .label(rust_i18n::t!("action.view_history").to_string())
-                            .on_click(cx.listener(|this, _, _, _| this.page = Page::History)),
-                    )
+                .gap_4()
+                .rounded_xl()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.18))
+                .p_8()
+                .child(
+                    div()
+                        .size(px(56.))
+                        .rounded_full()
+                        .bg(cx.theme().primary.opacity(0.12))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(IconName::Mic)
+                                .size(px(28.))
+                                .text_color(cx.theme().primary),
+                        ),
+                )
+                .child(
+                    div()
+                        .v_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_2xl()
+                                .font_family("serif")
+                                .child(format!("{title}{detail}")),
+                        )
+                        .children(error.map(|message| {
+                            div().h_flex().gap_2().child(message).child(
+                                Button::new("view-history")
+                                    .ghost()
+                                    .label(rust_i18n::t!("action.view_history").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, _| this.page = Page::History),
+                                    ),
+                            )
+                        })),
+                )
+                .children(level_meter)
+                .child(
+                    Button::new("dictation-primary")
+                        .primary()
+                        .label(label)
+                        .w_full()
+                        .max_w(px(320.))
+                        .disabled(!enabled)
+                        .on_click(move |_, _, _| {
+                            if let Some(command) = command.clone() {
+                                let _ = commands.try_send(command);
+                            }
+                        }),
+                )
+                .children(hold_timeout)
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .text_center()
+                        .child(match button {
+                            DictationButton::Disabled(DisabledReason::ReleaseShortcut) => {
+                                rust_i18n::t!("hint.release_shortcut").to_string()
+                            }
+                            _ => rust_i18n::t!("hint.keep_delivery").to_string(),
+                        }),
+                )
+                .children(latest.map(|entry| {
+                    div()
+                        .w_full()
+                        .text_left()
+                        .child(history_card(&entry, cx.theme().muted.opacity(0.25)))
                 })),
         )
-        .children(level_meter)
-        .child(
-            Button::new("dictation-primary")
-                .primary()
-                .label(label)
-                .disabled(!enabled)
-                .on_click(move |_, _, _| {
-                    if let Some(command) = command.clone() {
-                        let _ = commands.try_send(command);
-                    }
-                }),
-        )
-        .children(hold_timeout)
-        .child(match button {
-            DictationButton::Disabled(DisabledReason::ReleaseShortcut) => {
-                rust_i18n::t!("hint.release_shortcut").to_string()
-            }
-            _ => rust_i18n::t!("hint.keep_delivery").to_string(),
-        })
-        .children(latest.map(|entry| history_card(&entry)))
 }
 
 pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
@@ -188,6 +235,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
                     this.confirm_clear = true;
                 })),
         );
+    let card_background = cx.theme().muted.opacity(0.25);
     let body = match entries.is_empty() {
         true => div()
             .id("history-empty")
@@ -199,7 +247,12 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
             .min_h_0()
             .overflow_y_scroll()
             .gap_2()
-            .children(entries.iter().rev().map(history_card)),
+            .children(
+                entries
+                    .iter()
+                    .rev()
+                    .map(|entry| history_card(entry, card_background)),
+            ),
     };
     let confirmation = view.confirm_clear.then(|| {
         div()
@@ -237,83 +290,7 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
 mod shortcuts;
 pub use shortcuts::shortcuts;
 
-pub fn about(view: &AppView, cx: &mut Context<AppView>) -> impl IntoElement {
-    let config = view.paths.config_file.clone();
-    let log = view.paths.log_file.clone();
-    div()
-        .v_flex()
-        .gap_3()
-        .p_4()
-        .child(rust_i18n::t!("about.title").to_string())
-        .child(format!(
-            "{}: {}",
-            rust_i18n::t!("about.version"),
-            env!("CARGO_PKG_VERSION")
-        ))
-        .child(format!("{}: 1", rust_i18n::t!("about.protocol")))
-        .child(
-            view.model
-                .daemon_version
-                .as_deref()
-                .unwrap_or("unknown")
-                .to_string(),
-        )
-        .child(format!(
-            "{}: {}",
-            rust_i18n::t!("about.socket"),
-            view.paths.socket.display()
-        ))
-        .child(format!(
-            "{}: {}",
-            rust_i18n::t!("about.config"),
-            config.display()
-        ))
-        .child(format!("{}: {}", rust_i18n::t!("about.log"), log.display()))
-        .child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    Button::new("open-config")
-                        .outline()
-                        .label(rust_i18n::t!("action.open_config").to_string())
-                        .on_click(move |_, _, cx| cx.open_with_system(&config)),
-                )
-                .child(
-                    Button::new("open-log")
-                        .outline()
-                        .label(rust_i18n::t!("action.open_log").to_string())
-                        .on_click(move |_, _, cx| cx.open_with_system(&log)),
-                )
-                .child(
-                    Button::new("restart-daemon")
-                        .outline()
-                        .label(rust_i18n::t!("action.restart_daemon").to_string())
-                        .on_click({
-                            let commands = view.commands.clone();
-                            move |_, _, _| {
-                                let _ = commands.try_send(BridgeCommand::RestartDaemon);
-                            }
-                        }),
-                )
-                .child(
-                    Button::new("stop-daemon")
-                        .outline()
-                        .label(rust_i18n::t!("action.stop_daemon").to_string())
-                        .on_click(cx.listener(|this, _, _, _| {
-                            this.confirm_shutdown = Some(crate::app::ShutdownAction::Stop);
-                        })),
-                )
-                .child(
-                    Button::new("close-about")
-                        .ghost()
-                        .label(rust_i18n::t!("action.close").to_string())
-                        .on_click(cx.listener(|this, _, _, _| this.about = false)),
-                ),
-        )
-}
-
-fn history_card(entry: &HistoryEntry) -> Div {
+fn history_card(entry: &HistoryEntry, background: Hsla) -> Div {
     let outcome = match &entry.outcome {
         HistoryOutcome::Pending => "history.pending",
         HistoryOutcome::Committed => "history.committed",
@@ -326,9 +303,10 @@ fn history_card(entry: &HistoryEntry) -> Div {
         .then(|| format!("{}: {}", rust_i18n::t!("history.original"), entry.original));
     div()
         .v_flex()
-        .gap_1()
-        .border_b_1()
-        .pb_2()
+        .gap_2()
+        .rounded_lg()
+        .bg(background)
+        .p_3()
         .child(
             div()
                 .h_flex()
