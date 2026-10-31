@@ -1,4 +1,4 @@
-# voice-input
+# Limen
 
 System-wide voice input for Wayland: microphone audio is buffered for one take,
 transcribed after the stop shortcut, and committed to the focused
@@ -61,7 +61,7 @@ screenshot, its accessibility tree, and logs under `target/tmp/gui-e2e/`.
 
 ## GUI control panel
 
-Open the GPUI control panel with `voice-input gui` or the desktop launcher. The
+Open the GPUI control panel with `limen gui` or the desktop launcher. The
 default Nix package includes it; `nix run .#headless -- daemon` builds and runs
 the headless variant without GPUI. Closing the window never stops the daemon,
 so shortcut dictation keeps working. If the daemon is not running, the GUI starts
@@ -82,53 +82,53 @@ protocol takes effect.
    sgl-omni serve --model-path Qwen/Qwen3-ASR-0.6B --port 8000
    ```
 2. Install the Fcitx5 addon and restart Fcitx5. Build artifacts use a
-   source-specific directory under `${XDG_CACHE_HOME:-$HOME/.cache}/voice-input/fcitx5`
-   (override with `VOICE_INPUT_BUILD_DIR`); installation targets
+   source-specific directory under `${XDG_CACHE_HOME:-$HOME/.cache}/limen/fcitx5`
+   (override with `LIMEN_BUILD_DIR`); installation targets
    `${XDG_DATA_HOME:-$HOME/.local/share}` and never uses sudo:
    ```bash
-   contrib/fcitx5-voice-input/install-user.sh
+   contrib/fcitx5-limen/install-user.sh
    fcitx5 -d -r
-   busctl --user introspect org.fcitx.Fcitx5 /org/freedesktop/Fcitx5/VoiceInput
+   busctl --user introspect org.fcitx.Fcitx5 /org/freedesktop/Fcitx5/Limen
    ```
    The introspection output must contain `CommitText`. On NixOS, `nix develop`
    provides CMake, pkg-config, GCC, coreutils, and Fcitx5 development files.
    Use the same `fcitx5` package version as the running daemon; rebuild after
    Fcitx upgrades because the addon uses its C++ ABI.
 3. First run writes an annotated default config to
-   `$XDG_CONFIG_HOME/voice-input/config.toml`; point `provider.url` at your
+   `$XDG_CONFIG_HOME/limen/config.toml`; point `provider.url` at your
    server's `/v1/audio/transcriptions` endpoint. `input_method.backend` defaults to
    `fcitx5` and requires the addon from step 2.
 4. Start the daemon:
    ```bash
-   voice-input daemon
+   limen daemon
    ```
    The portal shortcuts below live in the daemon, so keep it running, e.g.
-   by starting it from your session's autostart; voice-input does not
+   by starting it from your session's autostart; Limen does not
    install an autostart entry yet.
 5. Bind the shortcuts, choosing one way:
    - **Portal (recommended, supports hold-to-talk):**
      ```bash
-     voice-input shortcut setup portal
+     limen shortcut setup portal
      ```
      The first time, GNOME asks you to confirm the keys, prefilled with
      Super+Z (toggle) and Super+X (hold to talk); pass `--toggle KEYS` or
      `--hold KEYS` to suggest others. GNOME keeps the binding from then on:
-     change it in GNOME Settings with `voice-input shortcut edit`. Without a
+     change it in GNOME Settings with `limen shortcut edit`. Without a
      Nix package, setup installs the desktop entry the portal needs into
      `~/.local/share/applications`.
    - **GNOME custom shortcut (toggle only):**
      ```bash
-     voice-input shortcut setup gnome-keybinding --toggle Super+Z
+     limen shortcut setup gnome-keybinding --toggle Super+Z
      ```
-     It writes a GNOME custom shortcut that runs `voice-input toggle`, keeping
+     It writes a GNOME custom shortcut that runs `limen toggle`, keeping
      your other custom shortcuts, and refuses a key GNOME already uses. Change
-     the key later with `voice-input shortcut set toggle KEYS`.
-   - **By hand:** bind `voice-input toggle` in your desktop's keyboard
+     the key later with `limen shortcut set toggle KEYS`.
+   - **By hand:** bind `limen toggle` in your desktop's keyboard
      settings (backend `none`, the default). Compositors with key-release
-     bindings can also run `voice-input hold press` and `voice-input hold
+     bindings can also run `limen hold press` and `limen hold
      release`, e.g. sway's `bindsym --no-repeat` and `bindsym --release`.
 
-   `voice-input shortcut status` shows what is bound. A config managed by
+   `limen shortcut status` shows what is bound. A config managed by
    home-manager is never rewritten: setup prints the `[shortcut]` section to
    add to it instead.
 
@@ -144,16 +144,16 @@ released the key.
 
 ## Commands
 
-- `voice-input gui` — open the graphical control panel (GUI-enabled builds)
-- `voice-input daemon` — resident process (capture, ASR session, text input,
+- `limen gui` — open the graphical control panel (GUI-enabled builds)
+- `limen daemon` — resident process (capture, ASR session, text input,
   portal shortcuts)
-- `voice-input toggle` — start/stop dictation (for the desktop shortcut)
-- `voice-input hold press|release` — the hold-to-talk key went down or up (for
+- `limen toggle` — start/stop dictation (for the desktop shortcut)
+- `limen hold press|release` — the hold-to-talk key went down or up (for
   key-release bindings)
-- `voice-input status` — print daemon state (`idle` / `recording` / `finalizing`)
-- `voice-input shortcut status|setup|set|clear|edit` — show, set up, or change
+- `limen status` — print daemon state (`idle` / `recording` / `finalizing`)
+- `limen shortcut status|setup|set|clear|edit` — show, set up, or change
   the global shortcuts; exits with 1 on failure and 2 on invalid arguments
-- `voice-input probe <wav>` — transcribe a 16kHz mono wav and print the final
+- `limen probe <wav>` — transcribe a 16kHz mono wav and print the final
   result with timestamps
 
 ## Recognition
@@ -197,6 +197,6 @@ not just the transcription request.
 
 ## Config
 
-`$XDG_CONFIG_HOME/voice-input/config.toml` — see the annotated default written
+`$XDG_CONFIG_HOME/limen/config.toml` — see the annotated default written
 on first run. Logs and the IPC socket follow the XDG spec
-(`$XDG_STATE_HOME/voice-input/`, `$XDG_RUNTIME_DIR/voice-input.sock`).
+(`$XDG_STATE_HOME/limen/`, `$XDG_RUNTIME_DIR/limen.sock`).

@@ -24,9 +24,9 @@ jobs:
       - name: Enable Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
       - name: Run Clippy
-        run: nix develop --command cargo clippy -p voice-input-core -p voice-input --all-targets -- -D warnings
+        run: nix develop --command cargo clippy -p limen-core -p limen --all-targets -- -D warnings
       - name: Run tests
-        run: nix develop --command cargo test -p voice-input-core -p voice-input
+        run: nix develop --command cargo test -p limen-core -p limen
   gui:
     name: GUI Rust checks
     runs-on: ubuntu-latest
@@ -39,9 +39,9 @@ jobs:
       - name: Enable Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
       - name: Run Clippy
-        run: nix develop --command cargo clippy --workspace --all-targets --features voice-input/gui -- -D warnings
+        run: nix develop --command cargo clippy --workspace --all-targets --features limen/gui -- -D warnings
       - name: Run GUI tests
-        run: nix develop --command cargo test -p voice-input-gui
+        run: nix develop --command cargo test -p limen-gui
   gui-e2e:
     name: GUI desktop E2E
     runs-on: ubuntu-latest
@@ -55,7 +55,7 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
       # `--all-targets` skips the suite because plain `cargo test` must.
       - name: Run Clippy on the E2E suite
-        run: nix develop --command cargo clippy -p voice-input --features gui --test gui_e2e -- -D warnings
+        run: nix develop --command cargo clippy -p limen --features gui --test gui_e2e -- -D warnings
       - name: Run desktop E2E
         run: nix develop --command cargo gui-e2e
       - name: Upload screenshots, accessibility trees, and logs
@@ -81,10 +81,10 @@ jobs:
       - name: Configure Fcitx addon
         run: |
           nix develop --command cmake \
-            -S contrib/fcitx5-voice-input \
+            -S contrib/fcitx5-limen \
             -B "$RUNNER_TEMP/fcitx5-build" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DVOICE_INPUT_DATA_HOME="$RUNNER_TEMP/fcitx5-install"
+            -DLIMEN_DATA_HOME="$RUNNER_TEMP/fcitx5-install"
       - name: Build Fcitx addon
         run: nix develop --command cmake --build "$RUNNER_TEMP/fcitx5-build" --parallel
       - name: Check packaged executable

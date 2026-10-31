@@ -1,0 +1,38 @@
+[package]
+name = "limen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+limen-core.workspace = true
+limen-gui = { workspace = true, optional = true }
+
+[features]
+default = []
+gui = ["dep:limen-gui"]
+
+[dev-dependencies]
+atspi = { version = "0.29", default-features = false, features = ["proxies"] }
+png = "0.18"
+serde.workspace = true
+serde_json.workspace = true
+x11rb = { version = "0.13", features = ["xtest"] }
+zbus = { version = "5.5", default-features = false, features = [
+  "async-io",
+  "blocking-api",
+] }
+
+# Desktop E2E needs Xvfb, D-Bus, and AT-SPI from the dev shell, so plain
+# `cargo test` skips it; run it with `cargo gui-e2e`.
+[[test]]
+name = "gui_e2e"
+path = "tests/gui_e2e/main.rs"
+harness = false
+test = false
+required-features = ["gui"]
