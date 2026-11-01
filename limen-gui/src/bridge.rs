@@ -9,8 +9,9 @@ use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths,
-    ProviderUrlChange, Push, Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set,
-    set_provider_url, setup, spawn_daemon, subscribe, terminate_daemon, v1,
+    ProviderEndpoint, ProviderUrlChange, Push, Report, SetupError, Shortcut, clear,
+    daemon_peer_pid, edit, set, set_provider_server, setup, spawn_daemon, subscribe,
+    terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -34,8 +35,11 @@ pub enum BridgeCommand {
     ShutdownDaemon,
     TerminateDaemon,
     Shortcut(ShortcutRequest),
-    /// Save a new ASR endpoint and apply it in a running daemon.
-    SetProviderUrl(String),
+    /// Point the ASR provider at a new server and apply it in a running daemon.
+    SetProviderServer {
+        server: String,
+        endpoint: ProviderEndpoint,
+    },
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
@@ -472,13 +476,19 @@ async fn handle_command(
             let paths = paths.clone();
             shortcuts.spawn(async move { run_shortcut(&paths, request).await });
         }
-        BridgeCommand::SetProviderUrl(url) => {
-            let result =
-                tokio::time::timeout(Duration::from_secs(3), set_provider_url(paths, &url))
-                    .await
-                    .map_err(|_| "daemon request timed out".to_string())
-                    .and_then(|result| result.map_err(|error| format!("{error:#}")));
-            let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
+        BridgeCommand::SetProviderServer { server, endpoint } => {
+            // Off the loop, so snapshots and levels keep flowing meanwhile.
+            let (paths, events) = (paths.clone(), events.clone());
+            tokio::spawn(async move {
+                let result = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    set_provider_server(&paths, &server, endpoint),
+                )
+                .await
+                .map_err(|_| "daemon request timed out".to_string())
+                .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
+            });
         }
         BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),
     }

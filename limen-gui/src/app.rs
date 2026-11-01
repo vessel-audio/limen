@@ -10,7 +10,7 @@ use limen_core::{Backend, DictationState, Paths, ProviderUrlChange};
 use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, GuiState, Msg, Toast};
-use crate::pages;
+use crate::pages::{self, ProviderForm};
 use crate::recorder::RecorderState;
 use crate::settings::{
     AppearancePreference, FontChoice, LanguagePreference, LightweightMode, SettingsPage,
@@ -39,11 +39,7 @@ pub struct AppView {
     pub hold_touched: bool,
     pub toggle_focused: bool,
     pub hold_focused: bool,
-    /// The ASR endpoint field; follows the daemon until the user edits it.
-    pub provider_input: Entity<InputState>,
-    pub provider_touched: bool,
-    /// Why the last attempt to change the ASR endpoint failed.
-    pub provider_error: Option<String>,
+    pub provider: ProviderForm,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     pub appearance: AppearancePreference,
@@ -100,9 +96,7 @@ impl AppView {
                 .placeholder("Super+X")
                 .default_value("Super+X")
         });
-        let provider_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("http://127.0.0.1:8000/v1/audio/transcriptions")
-        });
+        let (provider, provider_subscriptions) = ProviderForm::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -136,18 +130,6 @@ impl AppView {
                 InputEvent::Blur => this.hold_focused = false,
                 _ => {}
             }),
-            cx.subscribe_in(
-                &provider_input,
-                window,
-                |this, _, event, _, cx| match event {
-                    InputEvent::Change => {
-                        this.provider_touched = true;
-                        this.provider_error = None;
-                    }
-                    InputEvent::PressEnter { .. } => pages::apply_provider_url(this, cx),
-                    _ => {}
-                },
-            ),
         ];
         Self {
             model: GuiState::default(),
@@ -164,10 +146,11 @@ impl AppView {
             hold_touched: false,
             toggle_focused: false,
             hold_focused: false,
-            provider_input,
-            provider_touched: false,
-            provider_error: None,
-            _subscriptions: subscriptions,
+            provider,
+            _subscriptions: subscriptions
+                .into_iter()
+                .chain(provider_subscriptions)
+                .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
@@ -215,7 +198,7 @@ impl AppView {
         if matches!(event, BridgeEvent::Msg(Msg::DaemonReplaced)) {
             self.toggle_touched = false;
             self.hold_touched = false;
-            self.provider_touched = false;
+            self.provider.error = None;
             self.backend_selected = false;
         }
         if let BridgeEvent::Msg(Msg::Snapshot(snapshot)) = &event
@@ -244,15 +227,14 @@ impl AppView {
                 Vec::new()
             }
             BridgeEvent::ProviderUrl(Ok(change)) => {
-                self.provider_touched = false;
-                self.provider_error = None;
+                self.provider.finish(None);
                 vec![Action::Toast(match change {
                     ProviderUrlChange::Applied => Toast::ProviderApplied,
                     ProviderUrlChange::Saved => Toast::ProviderSaved,
                 })]
             }
             BridgeEvent::ProviderUrl(Err(message)) => {
-                self.provider_error = Some(message);
+                self.provider.finish(Some(message));
                 Vec::new()
             }
             BridgeEvent::Toast(_) => Vec::new(),

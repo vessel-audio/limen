@@ -130,6 +130,7 @@ requests.failed_status: Failed
 settings.font_decrease: Decrease font size
 settings.font_increase: Increase font size
 action.apply: Apply
-provider.title: ASR endpoint
-toast.provider_applied: ASR endpoint applied
-toast.provider_saved: ASR endpoint saved; the daemon uses it when it starts
+provider.title: ASR server
+toast.provider_applied: ASR server applied
+toast.provider_saved: ASR server saved; the daemon uses it when it starts
+provider.route: Route

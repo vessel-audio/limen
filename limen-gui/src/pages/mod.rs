@@ -109,7 +109,7 @@ mod provider;
 mod requests;
 mod shortcuts;
 pub use dictation::dictation;
-pub use provider::apply_provider_url;
+pub use provider::ProviderForm;
 pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
 

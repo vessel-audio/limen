@@ -130,6 +130,7 @@ requests.failed_status: 转写失败
 settings.font_decrease: 减小字号
 settings.font_increase: 增大字号
 action.apply: 应用
-provider.title: ASR 地址
-toast.provider_applied: 已应用新的 ASR 服务地址
-toast.provider_saved: 已保存 ASR 服务地址，后台服务启动时生效
+provider.title: ASR 服务
+toast.provider_applied: 已应用新的 ASR 服务
+toast.provider_saved: 已保存 ASR 服务，后台服务启动时生效
+provider.route: 路径
