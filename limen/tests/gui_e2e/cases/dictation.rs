@@ -1,9 +1,9 @@
 //! The dictation control strip and the request list below it.
 
 use anyhow::{Context, Result, ensure};
-use limen_core::{Delivery, v1};
+use limen_core::{Config, Delivery, v1};
 
-use super::failed_request;
+use super::{failed_request, retype};
 use crate::daemon::Scenario;
 use crate::desktop::Button;
 use crate::session::Session;
@@ -140,6 +140,57 @@ pub fn recording_another_take_queues_it() -> Result<()> {
                 v1::Request::Start,
             ],
         "the queued button sent a request"
+    );
+    Ok(())
+}
+
+fn provider_reloads(session: &Session) -> Result<usize> {
+    Ok(session
+        .requests()?
+        .iter()
+        .filter(|request| **request == v1::Request::ProviderReload)
+        .count())
+}
+
+/// A new ASR endpoint lands in the config file and the running daemon is
+/// asked to reload it.
+pub fn the_asr_endpoint_is_saved_and_applied() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    retype(&session, "provider-url", "http://10.0.0.2:9000/asr")?;
+    session.click("provider-apply")?;
+    session.named("toast", "ASR endpoint applied")?;
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        config.provider.url == "http://10.0.0.2:9000/asr",
+        "the config holds {:?}",
+        config.provider.url
+    );
+    ensure!(
+        provider_reloads(&session)? == 1,
+        "the daemon was not asked to reload"
+    );
+    Ok(())
+}
+
+/// An endpoint that is not an http(s) URL is reported beside the field and
+/// neither written nor sent to the daemon.
+pub fn an_invalid_asr_endpoint_is_reported() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    retype(&session, "provider-url", "ftp://10.0.0.2/asr")?;
+    session.click("provider-apply")?;
+    let error = session.node("provider-error")?;
+    ensure!(
+        error.name.contains("provider.url"),
+        "the error says {:?}",
+        error.name
+    );
+    ensure!(
+        provider_reloads(&session)? == 0,
+        "an invalid endpoint was applied"
+    );
+    ensure!(
+        !session.paths().config_file.exists(),
+        "an invalid endpoint was written"
     );
     Ok(())
 }

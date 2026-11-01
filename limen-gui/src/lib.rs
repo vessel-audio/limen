@@ -76,7 +76,7 @@ pub fn run(paths: Paths) -> Result<()> {
                                                 ));
                                             }
                                             Action::Reconnect => {}
-                                            Action::Toast(_) => window.show_toast(),
+                                            Action::Toast(toast) => window.show_toast(toast),
                                         }
                                     }
                                     cx.notify();

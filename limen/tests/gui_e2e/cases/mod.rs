@@ -8,9 +8,12 @@ mod settings;
 mod shortcuts;
 mod window;
 
+use anyhow::Result;
 use limen_core::{HistoryEntry, HistoryOutcome, RequestEntry, RequestOutcome};
 
 use crate::Case;
+use crate::desktop::Key;
+use crate::session::Session;
 
 macro_rules! cases {
     ($($path:path),* $(,)?) => {
@@ -32,6 +35,8 @@ pub const ALL: &[Case] = cases![
     dictation::failed_requests_expand_to_the_full_error,
     dictation::the_request_list_scrolls_with_the_wheel,
     dictation::recording_another_take_queues_it,
+    dictation::the_asr_endpoint_is_saved_and_applied,
+    dictation::an_invalid_asr_endpoint_is_reported,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,
@@ -84,4 +89,11 @@ pub fn failed_request(take: u64, error: &str) -> RequestEntry {
             error: error.to_string(),
         },
     }
+}
+
+/// Replace a text field's contents by typing, as a user does.
+pub fn retype(session: &Session, id: &str, text: &str) -> Result<()> {
+    session.click(id)?;
+    session.chord(&[Key::CONTROL, Key::char('a')])?;
+    session.x11().type_text(text)
 }

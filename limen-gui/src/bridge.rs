@@ -8,9 +8,9 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
-    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths, Push,
-    Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set, setup, spawn_daemon,
-    subscribe, terminate_daemon, v1,
+    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths,
+    ProviderUrlChange, Push, Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set,
+    set_provider_url, setup, spawn_daemon, subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -34,6 +34,8 @@ pub enum BridgeCommand {
     ShutdownDaemon,
     TerminateDaemon,
     Shortcut(ShortcutRequest),
+    /// Save a new ASR endpoint and apply it in a running daemon.
+    SetProviderUrl(String),
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
@@ -59,6 +61,7 @@ pub enum BridgeEvent {
     Msg(Msg),
     OfferTerminate,
     ShortcutReport(Result<Report, ShortcutFailure>),
+    ProviderUrl(Result<ProviderUrlChange, String>),
     Toast(Toast),
 }
 
@@ -468,6 +471,14 @@ async fn handle_command(
         BridgeCommand::Shortcut(request) => {
             let paths = paths.clone();
             shortcuts.spawn(async move { run_shortcut(&paths, request).await });
+        }
+        BridgeCommand::SetProviderUrl(url) => {
+            let result =
+                tokio::time::timeout(Duration::from_secs(3), set_provider_url(paths, &url))
+                    .await
+                    .map_err(|_| "daemon request timed out".to_string())
+                    .and_then(|result| result.map_err(|error| format!("{error:#}")));
+            let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
         }
         BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),
     }

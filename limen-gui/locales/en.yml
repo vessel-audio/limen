@@ -129,3 +129,7 @@ requests.kept: The daemon keeps the latest 20
 requests.failed_status: Failed
 settings.font_decrease: Decrease font size
 settings.font_increase: Increase font size
+action.apply: Apply
+provider.title: ASR endpoint
+toast.provider_applied: ASR endpoint applied
+toast.provider_saved: ASR endpoint saved; the daemon uses it when it starts

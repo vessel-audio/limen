@@ -105,9 +105,11 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
 }
 
 mod dictation;
+mod provider;
 mod requests;
 mod shortcuts;
 pub use dictation::dictation;
+pub use provider::apply_provider_url;
 pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
 
