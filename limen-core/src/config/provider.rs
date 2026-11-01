@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml_edit::{ImDocument, Item};
 
 use super::Config;
-use super::write::{check_writable, lock_dir, read_current, replace};
+use super::write::{check_writable, lock_dir, read_text, replace};
 
 /// Set `provider.url` in the config file at `path`, under the same lock as
 /// shortcut writes. A missing file is created from the annotated default.
@@ -18,7 +18,10 @@ use super::write::{check_writable, lock_dir, read_current, replace};
 /// would no longer be a valid config.
 pub(crate) fn update_provider_url(path: &Path, url: &str) -> Result<()> {
     let _lock = lock_dir(path)?;
-    let (text, mode, current) = read_current(path)?;
+    let (text, mode) = read_text(path)?;
+    // Only the edited file must be valid, so a broken URL can be repaired.
+    let current: Config = toml::from_str(&text)
+        .with_context(|| format!("failed to parse config: {}", path.display()))?;
     check_writable(path)
         .map_err(|refusal| anyhow!("{refusal}; set provider.url = {url:?} there instead"))?;
     // A missing config is written even unchanged, like shortcut setup does.
@@ -85,6 +88,19 @@ mod tests {
                 "http://127.0.0.1:8000/v1/audio/transcriptions",
                 "http://10.0.0.2:9000/asr"
             )
+        );
+    }
+
+    #[test]
+    fn a_broken_url_can_be_repaired() {
+        let path = scratch("provider-repair").join("config.toml");
+        fs::write(&path, "[provider]\nurl = \"http://\"\nmodel = \"m\"\n").unwrap();
+
+        update_provider_url(&path, "http://127.0.0.1:8000/asr").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[provider]\nurl = \"http://127.0.0.1:8000/asr\"\nmodel = \"m\"\n"
         );
     }
 

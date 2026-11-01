@@ -73,7 +73,10 @@ pub(crate) fn update_shortcut(
     change: impl FnOnce(ShortcutConfig) -> ShortcutConfig,
 ) -> Result<ShortcutConfig> {
     let _lock = lock_dir(path)?;
-    let (text, mode, current) = read_current(path)?;
+    let (text, mode) = read_text(path)?;
+    let current: Config = toml::from_str(&text)
+        .with_context(|| format!("failed to parse config: {}", path.display()))?;
+    current.validate()?;
     let shortcut = change(current.shortcut);
     check_writable(path)?;
     // A missing config is written even unchanged: setup leaves one behind.
@@ -93,21 +96,14 @@ pub(crate) fn update_shortcut(
     Ok(shortcut)
 }
 
-/// The config file at `path` as text, its mode, and the valid config it
-/// holds. A missing file reads as the annotated default, without a mode.
-/// Callers hold the directory lock.
-pub(super) fn read_current(path: &Path) -> Result<(String, Option<u32>, Config)> {
-    let (text, mode) = match fs::read_to_string(path) {
-        Ok(text) => (text, Some(fs::metadata(path)?.permissions().mode())),
-        Err(error) if error.kind() == ErrorKind::NotFound => (DEFAULT_CONFIG.to_string(), None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()));
-        }
-    };
-    let current: Config = toml::from_str(&text)
-        .with_context(|| format!("failed to parse config: {}", path.display()))?;
-    current.validate()?;
-    Ok((text, mode, current))
+/// The config file at `path` as text, and its mode. A missing file reads as
+/// the annotated default, without a mode. Callers hold the directory lock.
+pub(super) fn read_text(path: &Path) -> Result<(String, Option<u32>)> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok((text, Some(fs::metadata(path)?.permissions().mode()))),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok((DEFAULT_CONFIG.to_string(), None)),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
 }
 
 /// Write the annotated default config to `path`, unless a config appeared
