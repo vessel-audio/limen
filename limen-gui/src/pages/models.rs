@@ -148,16 +148,17 @@ impl ModelForms {
         }
     }
 
-    /// Forget what was learned from a daemon that was replaced.
+    /// Forget what was learned from a daemon that was replaced. A pending
+    /// choice still ends with its own reply, which the bridge always sends.
     pub fn reset(&mut self) {
         for form in [&mut self.asr, &mut self.polish] {
             form.listing = Listing::Unknown;
-            form.pending = false;
             form.error = None;
         }
     }
 
     /// Record the models `endpoint` listed, if it is still the one asked.
+    /// An empty list counts as a failure: the server may still be loading.
     pub fn listed(
         &mut self,
         role: ModelRole,
@@ -167,10 +168,11 @@ impl ModelForms {
         let form = self.form(role);
         if form.listing == Listing::Asked(endpoint.clone()) {
             form.listing = match models {
-                Ok(models) => Listing::Listed(
+                Ok(models) if !models.is_empty() => Listing::Listed(
                     endpoint,
                     models.into_iter().map(SharedString::from).collect(),
                 ),
+                Ok(_) => Listing::Failed(endpoint, Instant::now()),
                 Err(error) => {
                     tracing::debug!(?role, %error, "no model list");
                     Listing::Failed(endpoint, Instant::now())
