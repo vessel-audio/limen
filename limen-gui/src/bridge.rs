@@ -40,8 +40,12 @@ pub enum BridgeCommand {
         server: String,
         endpoint: ProviderEndpoint,
     },
-    /// Ask the configured server which models it offers for `role`.
-    ListModels(ModelRole),
+    /// Ask the configured server which models it offers for `role`;
+    /// `endpoint` names the endpoint the GUI asks about in its reply.
+    ListModels {
+        role: ModelRole,
+        endpoint: String,
+    },
     /// Set the model for `role` and apply it in a running daemon.
     SetModel {
         role: ModelRole,
@@ -73,10 +77,11 @@ pub enum BridgeEvent {
     OfferTerminate,
     ShortcutReport(Result<Report, ShortcutFailure>),
     ProviderUrl(Result<ConfigChange, String>),
-    /// The models a server offers; empty when it lists none.
+    /// The models a server offers, or why it listed none.
     Models {
         role: ModelRole,
-        models: Vec<String>,
+        endpoint: String,
+        models: Result<Vec<String>, String>,
     },
     ModelSet {
         role: ModelRole,
@@ -506,15 +511,19 @@ async fn handle_command(
                 let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
             });
         }
-        BridgeCommand::ListModels(role) => {
+        BridgeCommand::ListModels { role, endpoint } => {
             let (paths, events) = (paths.clone(), events.clone());
             tokio::spawn(async move {
-                // Servers such as whisper.cpp list no models; any name still works.
-                let models = list_models(&paths, role).await.unwrap_or_else(|error| {
-                    tracing::debug!(?role, error = %format!("{error:#}"), "no model list");
-                    Vec::new()
-                });
-                let _ = events.send(BridgeEvent::Models { role, models }).await;
+                let models = list_models(&paths, role)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = events
+                    .send(BridgeEvent::Models {
+                        role,
+                        endpoint,
+                        models,
+                    })
+                    .await;
             });
         }
         BridgeCommand::SetModel { role, model } => {

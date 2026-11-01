@@ -263,3 +263,67 @@ pub fn typed_models_are_saved_and_applied() -> Result<()> {
     );
     Ok(())
 }
+
+/// Answer every connection with an OpenAI-compatible list of `models`, and
+/// return the server's address.
+fn serve_models(models: &'static [&'static str]) -> Result<String> {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = format!("http://{}", listener.local_addr()?);
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.read(&mut [0; 4096]);
+            let data: Vec<String> = models
+                .iter()
+                .map(|model| format!(r#"{{"id":"{model}"}}"#))
+                .collect();
+            let body = format!(r#"{{"object":"list","data":[{}]}}"#, data.join(","));
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    Ok(address)
+}
+
+/// Once the ASR server changes, the model select offers the daemon's model
+/// and those the new server lists, and a listed one is applied.
+pub fn the_models_a_server_lists_are_offered() -> Result<()> {
+    let server = serve_models(&["listed-a", "listed-b"])?;
+    let session = Session::fake(Scenario::default())?;
+    choose_route(&session, 0)?;
+    retype(&session, "provider-server", &server)?;
+    session.chord(&[Key::RETURN])?;
+    session.named("toast", "ASR server applied")?;
+    let count = |nodes: &[crate::desktop::Node]| {
+        nodes
+            .iter()
+            .filter(|node| node.role == Role::ListItem)
+            .count()
+    };
+    // The list may arrive after the select first opens, and an open select
+    // keeps its items: reopen until it offers the current and listed models.
+    session.until("the listed models to be offered", || {
+        session.click(Target::Named(Role::ComboBox, "ASR model"))?;
+        session.node(Role::List)?;
+        let offered = session.wait("the open list", |nodes| Some(count(nodes)))? == 3;
+        session.chord(&[Key::ESCAPE])?;
+        session.wait("the list to close", |nodes| {
+            (!nodes.iter().any(|node| node.role == Role::List)).then_some(())
+        })?;
+        Ok(offered)
+    })?;
+    session.click(Target::Named(Role::ComboBox, "ASR model"))?;
+    session.node(Role::List)?;
+    session.x11().type_text("listed-b")?;
+    session.wait("only listed-b offered", |nodes| {
+        (count(nodes) == 1).then_some(())
+    })?;
+    session.chord(&[Key::RETURN])?;
+    session.named("toast", "ASR model applied")?;
+    let model = Config::load(&session.paths().config_file)?.provider.model;
+    ensure!(model == "listed-b", "the config holds {model:?}");
+    Ok(())
+}

@@ -38,6 +38,7 @@ pub const ALL: &[Case] = cases![
     dictation::the_asr_server_and_route_are_saved_and_applied,
     dictation::an_invalid_asr_server_is_reported,
     dictation::typed_models_are_saved_and_applied,
+    dictation::the_models_a_server_lists_are_offered,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,

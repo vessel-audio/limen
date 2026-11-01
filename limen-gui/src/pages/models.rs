@@ -2,6 +2,8 @@
 //! strip, a searchable list of the models their servers offer that also
 //! takes any typed name. Choosing one applies it at once.
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
@@ -70,15 +72,30 @@ impl SearchableListDelegate for ModelChoices {
     }
 }
 
-/// State of one model row. The select follows the daemon except while a
-/// choice is being applied; a failed choice stays shown until the daemon's
-/// model or the server's list changes.
+/// How long a server that listed no models waits before it is asked again.
+const RETRY: Duration = Duration::from_secs(15);
+
+/// What the GUI knows of the models an endpoint offers. Each state names the
+/// endpoint it is about, so a list that arrives for an endpoint the daemon
+/// no longer uses is dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Listing {
+    /// Not asked yet, or forgotten with the daemon that was replaced.
+    Unknown,
+    Asked(String),
+    Listed(String, Vec<SharedString>),
+    /// The endpoint listed nothing; asked again after [`RETRY`].
+    Failed(String, Instant),
+}
+
+/// State of one model row. The select follows the daemon except while it is
+/// open or a choice is being applied; a failed choice stays shown until the
+/// daemon's model or the server's list changes.
 pub struct ModelForm {
     select: Entity<SelectState<ModelChoices>>,
-    /// The models the server listed.
-    listed: Vec<SharedString>,
-    /// The endpoint whose models were last asked for.
-    listed_for: Option<String>,
+    /// The select's focus while closed; it moves into the list while open.
+    closed_focus: FocusHandle,
+    listing: Listing,
     /// The daemon's model and the models the select offers, as last set.
     followed: (Option<SharedString>, Vec<SharedString>),
     pending: bool,
@@ -107,9 +124,9 @@ impl ModelForms {
                 },
             );
             let form = ModelForm {
+                closed_focus: select.read(cx).focus_handle(cx),
                 select,
-                listed: Vec::new(),
-                listed_for: None,
+                listing: Listing::Unknown,
                 followed: (None, Vec::new()),
                 pending: false,
                 error: None,
@@ -131,17 +148,35 @@ impl ModelForms {
         }
     }
 
-    /// Forget the lists and errors of a daemon that was replaced.
+    /// Forget what was learned from a daemon that was replaced.
     pub fn reset(&mut self) {
         for form in [&mut self.asr, &mut self.polish] {
-            form.listed_for = None;
+            form.listing = Listing::Unknown;
+            form.pending = false;
             form.error = None;
         }
     }
 
-    /// Record the models a server listed.
-    pub fn listed(&mut self, role: ModelRole, models: Vec<String>) {
-        self.form(role).listed = models.into_iter().map(SharedString::from).collect();
+    /// Record the models `endpoint` listed, if it is still the one asked.
+    pub fn listed(
+        &mut self,
+        role: ModelRole,
+        endpoint: String,
+        models: Result<Vec<String>, String>,
+    ) {
+        let form = self.form(role);
+        if form.listing == Listing::Asked(endpoint.clone()) {
+            form.listing = match models {
+                Ok(models) => Listing::Listed(
+                    endpoint,
+                    models.into_iter().map(SharedString::from).collect(),
+                ),
+                Err(error) => {
+                    tracing::debug!(?role, %error, "no model list");
+                    Listing::Failed(endpoint, Instant::now())
+                }
+            };
+        }
     }
 
     /// Record how applying a choice ended.
@@ -176,48 +211,56 @@ fn configured(config: &ConfigSummary, role: ModelRole) -> (Option<&str>, Option<
     (model, url)
 }
 
-/// Ask for the models of every endpoint that changed since they were last
-/// asked for, so the lists are ready before a select opens.
-pub fn request_lists(view: &mut AppView) {
-    let Some(config) = view.snapshot_config() else {
-        return;
-    };
-    for role in [ModelRole::Asr, ModelRole::Polish] {
-        let (_, url) = configured(&config, role);
-        let form = view.models.form(role);
-        if let Some(url) = url
-            && form.listed_for.as_deref() != Some(url)
-            && view
-                .commands
-                .try_send(BridgeCommand::ListModels(role))
-                .is_ok()
-        {
-            form.listed_for = Some(url.to_string());
-            form.listed.clear();
-        }
-    }
-}
-
-/// Offer the daemon's model and the listed ones in each select, where they
-/// changed: setting the items resets the select, and this runs every frame.
+/// Keep each select in step with the daemon; runs every frame. Asks for the
+/// models of an endpoint not asked yet, or that listed nothing a while ago,
+/// so the lists are ready before a select opens. Then offers the daemon's
+/// model and the listed ones where they changed, unless the select is open:
+/// setting its items would clear what the user is typing.
 pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>) {
     let Some(config) = view.snapshot_config() else {
         return;
     };
     for role in [ModelRole::Asr, ModelRole::Polish] {
-        let current = configured(&config, role).0.map(SharedString::from);
+        let (current, endpoint) = configured(&config, role);
         let form = view.models.form(role);
+        let stale = match (&form.listing, endpoint) {
+            (_, None) => false,
+            (Listing::Unknown, Some(_)) => true,
+            (
+                Listing::Asked(asked) | Listing::Listed(asked, _) | Listing::Failed(asked, _),
+                Some(endpoint),
+            ) if asked != endpoint => true,
+            (Listing::Failed(_, at), Some(_)) => at.elapsed() >= RETRY,
+            (Listing::Asked(_) | Listing::Listed(..), Some(_)) => false,
+        };
+        if let (true, Some(endpoint)) = (stale, endpoint)
+            && view
+                .commands
+                .try_send(BridgeCommand::ListModels {
+                    role,
+                    endpoint: endpoint.to_string(),
+                })
+                .is_ok()
+        {
+            form.listing = Listing::Asked(endpoint.to_string());
+        }
+        let current = current.map(SharedString::from);
+        let listed = match &form.listing {
+            Listing::Listed(_, models) => models.as_slice(),
+            Listing::Unknown | Listing::Asked(_) | Listing::Failed(..) => &[],
+        };
         let offered: Vec<SharedString> = current
             .iter()
             .chain(
-                form.listed
+                listed
                     .iter()
                     .filter(|model| Some(*model) != current.as_ref()),
             )
             .cloned()
             .collect();
         let followed = (current, offered);
-        if !form.pending && form.followed != followed {
+        let open = form.select.read(cx).focus_handle(cx) != form.closed_focus;
+        if !form.pending && !open && form.followed != followed {
             form.select.update(cx, |select, cx| {
                 select.set_items(ModelChoices::new(followed.1.clone()), window, cx);
                 match &followed.0 {

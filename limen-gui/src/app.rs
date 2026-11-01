@@ -212,7 +212,6 @@ impl AppView {
             self.selected_backend = snapshot.shortcut.backend;
         }
         let actions = self.apply_event(event);
-        pages::request_model_lists(self);
         self.update_level_tracking(level_event);
         actions
     }
@@ -243,8 +242,12 @@ impl AppView {
                 self.provider.finish(Some(message));
                 Vec::new()
             }
-            BridgeEvent::Models { role, models } => {
-                self.models.listed(role, models);
+            BridgeEvent::Models {
+                role,
+                endpoint,
+                models,
+            } => {
+                self.models.listed(role, endpoint, models);
                 Vec::new()
             }
             BridgeEvent::ModelSet { role, result } => self.models.finish(role, result),
