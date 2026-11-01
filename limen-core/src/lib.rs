@@ -28,7 +28,7 @@ pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};
-pub use provider::probe;
+pub use provider::{UrlChange as ProviderUrlChange, probe, set_url as set_provider_url};
 pub use shortcut::desktop_entry::{APP_ID, Launch};
 pub use shortcut::program::Program;
 pub use shortcut::setup::{GnomeBinding, GnomeStatus, configured as shortcut_config};

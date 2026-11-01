@@ -65,7 +65,8 @@ struct DictationActor {
     start_caller: Option<oneshot::Sender<String>>,
     /// Shows a desktop notification: `(summary, body)`.
     notify: fn(&str, &str),
-    /// Read again when a client asks to apply the `[shortcut]` section.
+    /// Read again when a client asks to apply the `[shortcut]` or `[provider]`
+    /// section.
     config_file: PathBuf,
     shortcuts: ShortcutHandle,
     outstanding_input: usize,
@@ -343,6 +344,23 @@ impl DictationActor {
         }
     }
 
+    /// Apply the `[provider]` section of the config again. The whole file must
+    /// be valid; the take in flight, if any, finishes with the old provider.
+    fn reload_provider(&mut self) -> ipc::v1::Reply {
+        match Config::load(&self.config_file) {
+            Ok(config) => {
+                self.projection.set_provider(&config.provider);
+                self.projection.publish(self.dictation.view(), unix_ms());
+                tracing::info!(url = %config.provider.url, "provider reloaded");
+                self.session.tell(SessionCommand::Provider(config.provider));
+                ipc::v1::Reply::Ok
+            }
+            Err(error) => ipc::v1::Reply::Error {
+                message: format!("{error:#}"),
+            },
+        }
+    }
+
     /// Run all mailboxes and return owned actors for the common cleanup path.
     async fn run(mut self, mut mailboxes: Mailboxes) -> lifecycle::ActorExit {
         let result = self.run_inner(&mut mailboxes).await;
@@ -392,6 +410,9 @@ impl DictationActor {
                         ipc::Command::ShortcutRebind(reply) => self.rebind(reply),
                         ipc::Command::ShortcutStatus(reply) => {
                             let _ = reply.send(ipc::v1::Reply::ShortcutStatus(self.shortcuts.status()));
+                        }
+                        ipc::Command::ProviderReload(reply) => {
+                            let _ = reply.send(self.reload_provider());
                         }
                     }
                 }
