@@ -74,7 +74,14 @@ pub async fn set_server(paths: &Paths, server: &str, endpoint: Endpoint) -> Resu
         ("http" | "https", true) => {}
         _ => bail!("enter only the server's http(s):// address, such as http://127.0.0.1:8000"),
     }
-    config::update_provider_url(&paths.config_file, &format!("{origin}{}", endpoint.path()))?;
+    // The write waits on a file lock; keep it off the caller's runtime thread.
+    let (file, url) = (
+        paths.config_file.clone(),
+        format!("{origin}{}", endpoint.path()),
+    );
+    tokio::task::spawn_blocking(move || config::update_provider_url(&file, &url))
+        .await
+        .context("the config writer stopped")??;
     match ipc::request(paths, &v1::Request::ProviderReload).await {
         Ok(v1::Reply::Ok) => Ok(UrlChange::Applied),
         Ok(v1::Reply::Error { message }) => {
