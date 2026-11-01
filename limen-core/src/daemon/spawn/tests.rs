@@ -284,15 +284,18 @@ fn fake_server(paths: &CorePaths, session_only: bool) {
                     actual: PerAction::default(),
                     last_error: None,
                 };
+                // The readiness probe hangs up once it reads the hello, so
+                // the snapshot may meet a closed socket; a real daemon drops
+                // that subscriber and keeps serving, and so does this one.
                 for push in [
                     Push::hello(),
                     Push::Snapshot(Box::new(WireSnapshot::new(1, state, shortcut))),
                 ] {
-                    stream
-                        .write_all(
-                            format!("{}\n", serde_json::to_string(&push).unwrap()).as_bytes(),
-                        )
-                        .unwrap();
+                    let line = format!("{}\n", serde_json::to_string(&push).unwrap());
+                    if let Err(error) = stream.write_all(line.as_bytes()) {
+                        eprintln!("fake daemon lost its subscriber: {error}");
+                        break;
+                    }
                 }
             }
             "shutdown" => {
