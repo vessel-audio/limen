@@ -105,7 +105,7 @@ settings.light: 浅色
 settings.dark: 深色
 settings.language: 语言
 settings.system_language: 跟随系统
-settings.font_size: 字体大小
+settings.font_size: 文字大小
 settings.service: 后台服务
 requests.average: 平均
 requests.failed: 失败
@@ -118,7 +118,7 @@ settings.lightweight: 轻量模式
 settings.lightweight_hint: 关闭动画效果，降低渲染开销
 settings.appearance_hint: 浅色、深色或跟随系统
 settings.language_hint: 界面显示语言
-settings.font_size_hint: 界面文字的基准字号
+settings.font_size_hint: 界面文字的缩放比例
 settings.interface_font_hint: 窗口内所有文字使用的字体
 settings.service_hint: 重启或停止听写后台服务
 nav.section: 工作区
@@ -127,5 +127,10 @@ requests.title: 请求
 requests.count: 个请求
 requests.kept: 后台服务保留最近 20 个
 requests.failed_status: 转写失败
-settings.font_decrease: 减小字号
-settings.font_increase: 增大字号
+action.apply: 应用
+provider.title: ASR 服务
+toast.provider_applied: 已应用新的 ASR 服务
+toast.provider_saved: 已保存 ASR 服务，后台服务启动时生效
+provider.route: 路径
+settings.off: 关闭
+settings.on: 开启

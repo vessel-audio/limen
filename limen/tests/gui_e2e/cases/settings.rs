@@ -79,13 +79,12 @@ pub fn language_choice_renames_the_interface() -> Result<()> {
     Ok(())
 }
 
-/// The font size steps by one pixel between 12 and 22, pressing past either
-/// limit changes nothing, and text grows with it. The buttons' disabled
-/// look is not exposed to assistive technology by the component.
-pub fn font_size_steps_within_its_limits() -> Result<()> {
+/// The text size is one choice among scales: choosing one checks it alone,
+/// 125% makes text taller, and 100% restores it.
+pub fn the_text_scale_resizes_the_interface() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("open-settings")?;
-    session.named("font-size", "16 px")?;
+    session.state("font-scale-100", State::Checked, true)?;
     let height = || -> Result<i32> {
         Ok(session
             .settled("settings-tab-general")?
@@ -94,24 +93,16 @@ pub fn font_size_steps_within_its_limits() -> Result<()> {
             .height)
     };
     let normal = height()?;
-    session.click("font-increase")?;
-    session.named("font-size", "17 px")?;
+    session.reveal("font-scale-125")?;
+    session.click("font-scale-125")?;
+    session.state("font-scale-125", State::Checked, true)?;
+    session.state("font-scale-100", State::Checked, false)?;
     ensure!(height()? > normal, "text did not grow");
-    for size in (12..=16).rev() {
-        session.click("font-decrease")?;
-        session.named("font-size", &format!("{size} px"))?;
-    }
-    session.click("font-decrease")?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    session.named("font-size", "12 px")?;
-    ensure!(height()? < normal, "text did not shrink");
-    for size in 13..=22 {
-        session.click("font-increase")?;
-        session.named("font-size", &format!("{size} px"))?;
-    }
-    session.click("font-increase")?;
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    session.named("font-size", "22 px")?;
+    // Larger text pushes the row below the window's edge.
+    session.reveal("font-scale-100")?;
+    session.click("font-scale-100")?;
+    session.state("font-scale-100", State::Checked, true)?;
+    ensure!(height()? == normal, "text did not return to its size");
     Ok(())
 }
 
@@ -151,18 +142,14 @@ pub fn the_font_select_applies_a_family() -> Result<()> {
     Ok(())
 }
 
-/// The lightweight switch toggles, and while on, motion is skipped: the
+/// Lightweight mode turns on and off, and while on, motion is skipped: the
 /// sidebar collapses at once instead of springing.
 pub fn lightweight_mode_skips_motion() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("open-settings")?;
-    session.click(Role::ToggleButton)?;
-    session.wait("the switch on", |nodes| {
-        nodes
-            .iter()
-            .find(|node| node.role == Role::ToggleButton && node.has(State::Pressed))
-            .cloned()
-    })?;
+    session.reveal("lightweight-on")?;
+    session.click("lightweight-on")?;
+    session.state("lightweight-on", State::Checked, true)?;
     let expanded = session.settled("history-page")?.bounds.context("no tab")?;
     session.click("toggle-sidebar")?;
     let first = session.node("history-page")?.bounds.context("no tab")?;
@@ -172,13 +159,9 @@ pub fn lightweight_mode_skips_motion() -> Result<()> {
         expanded.width,
         first.width
     );
-    session.click(Role::ToggleButton)?;
-    session.wait("the switch off", |nodes| {
-        nodes
-            .iter()
-            .find(|node| node.role == Role::ToggleButton && !node.has(State::Pressed))
-            .cloned()
-    })?;
+    session.reveal("lightweight-off")?;
+    session.click("lightweight-off")?;
+    session.state("lightweight-off", State::Checked, true)?;
     Ok(())
 }
 

@@ -13,9 +13,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use limen_core::{
-    Backend, ConfigSummary, Control, DictationState, DictationStatus, HistoryEntry, HistoryOutcome,
-    Paths, PerAction, Push, RequestEntry, RequestOutcome, SessionState, Shortcut, ShortcutStatus,
-    StateSnapshot, WireSnapshot, v1,
+    Backend, Config, ConfigSummary, Control, DictationState, DictationStatus, HistoryEntry,
+    HistoryOutcome, Paths, PerAction, Push, RequestEntry, RequestOutcome, SessionState, Shortcut,
+    ShortcutStatus, StateSnapshot, WireSnapshot, v1,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -161,6 +161,8 @@ struct Daemon {
     next_history_id: u64,
     log: std::fs::File,
     snapshots: watch::Sender<Option<(StateSnapshot, ShortcutStatus)>>,
+    /// The `provider.url` of the config file as of the last reload.
+    provider_url: String,
 }
 
 impl Daemon {
@@ -186,7 +188,7 @@ impl Daemon {
             config: ConfigSummary {
                 input_method: "fcitx5".to_string(),
                 provider_model: "e2e-model".to_string(),
-                provider_url: "http://127.0.0.1:9/v1".to_string(),
+                provider_url: self.provider_url.clone(),
                 polish_enabled: false,
             },
         };
@@ -215,21 +217,22 @@ async fn run(scenario: Scenario, log: PathBuf) -> Result<()> {
             .append(true)
             .open(log)?,
         snapshots,
+        provider_url: "http://127.0.0.1:9/v1".to_string(),
     }));
     daemon.lock().await.publish();
     loop {
         let (stream, _) = listener.accept().await?;
         let daemon = Arc::clone(&daemon);
-        let socket = paths.socket.clone();
+        let paths = paths.clone();
         tokio::spawn(async move {
-            if let Err(error) = connection(stream, daemon, &socket).await {
+            if let Err(error) = connection(stream, daemon, &paths).await {
                 eprintln!("fake daemon connection: {error:#}");
             }
         });
     }
 }
 
-async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, socket: &Path) -> Result<()> {
+async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Paths) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut line = String::new();
     BufReader::new(reader).read_line(&mut line).await?;
@@ -248,7 +251,7 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, socket: &Pat
         v1::Request::Subscribe => return subscribe(writer, daemon).await,
         v1::Request::Shutdown => {
             send(&mut writer, &v1::Reply::Ok).await?;
-            std::fs::remove_file(socket)?;
+            std::fs::remove_file(&paths.socket)?;
             std::process::exit(0);
         }
         v1::Request::Start => {
@@ -280,6 +283,17 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, socket: &Pat
         v1::Request::ShortcutStatus => {
             v1::Reply::ShortcutStatus(daemon.lock().await.scenario.shortcut.clone())
         }
+        v1::Request::ProviderReload => match Config::load(&paths.config_file) {
+            Ok(config) => {
+                let mut daemon = daemon.lock().await;
+                daemon.provider_url = config.provider.url;
+                daemon.publish();
+                v1::Reply::Ok
+            }
+            Err(error) => v1::Reply::Error {
+                message: format!("{error:#}"),
+            },
+        },
     };
     send(&mut writer, &reply).await
 }

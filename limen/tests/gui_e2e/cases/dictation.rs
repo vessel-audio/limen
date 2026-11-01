@@ -1,11 +1,12 @@
 //! The dictation control strip and the request list below it.
 
 use anyhow::{Context, Result, ensure};
-use limen_core::{Delivery, v1};
+use atspi::Role;
+use limen_core::{Config, Delivery, v1};
 
-use super::failed_request;
+use super::{failed_request, retype};
 use crate::daemon::Scenario;
-use crate::desktop::Button;
+use crate::desktop::{Button, Key};
 use crate::session::Session;
 
 /// Starting records; stopping transcribes and keeps the text, which lands
@@ -140,6 +141,77 @@ pub fn recording_another_take_queues_it() -> Result<()> {
                 v1::Request::Start,
             ],
         "the queued button sent a request"
+    );
+    Ok(())
+}
+
+/// Pick the route at `index` from the list; its items have no accessible
+/// names, and the list offers `/v1/audio/transcriptions`, then `/inference`.
+fn choose_route(session: &Session, index: usize) -> Result<()> {
+    session.click(Role::ComboBox)?;
+    let item = session.settled_by("a route in the list", |nodes| {
+        nodes
+            .iter()
+            .filter(|node| node.role == Role::ListItem)
+            .nth(index)
+            .cloned()
+    })?;
+    session.click_node(&item)?;
+    session.wait("the list to close", |nodes| {
+        (!nodes.iter().any(|node| node.role == Role::List)).then_some(())
+    })
+}
+
+fn provider_reloads(session: &Session) -> Result<usize> {
+    Ok(session
+        .requests()?
+        .iter()
+        .filter(|request| **request == v1::Request::ProviderReload)
+        .count())
+}
+
+/// A server and a route from the list land in the config file and the
+/// running daemon is asked to reload them. The fake daemon's route is not in
+/// the list, so one must be chosen before Enter applies.
+pub fn the_asr_server_and_route_are_saved_and_applied() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    choose_route(&session, 1)?;
+    retype(&session, "provider-server", "http://10.0.0.2:9000")?;
+    session.chord(&[Key::RETURN])?;
+    session.named("toast", "ASR server applied")?;
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        config.provider.url == "http://10.0.0.2:9000/inference",
+        "the config holds {:?}",
+        config.provider.url
+    );
+    ensure!(
+        provider_reloads(&session)? == 1,
+        "the daemon was not asked to reload"
+    );
+    Ok(())
+}
+
+/// A server that is not a bare http(s) address is reported beside the field
+/// and neither written nor sent to the daemon.
+pub fn an_invalid_asr_server_is_reported() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    choose_route(&session, 0)?;
+    retype(&session, "provider-server", "ftp://10.0.0.2")?;
+    session.click("provider-apply")?;
+    let error = session.node("provider-error")?;
+    ensure!(
+        error.name.contains("http(s)://"),
+        "the error says {:?}",
+        error.name
+    );
+    ensure!(
+        provider_reloads(&session)? == 0,
+        "an invalid server was applied"
+    );
+    ensure!(
+        !session.paths().config_file.exists(),
+        "an invalid server was written"
     );
     Ok(())
 }

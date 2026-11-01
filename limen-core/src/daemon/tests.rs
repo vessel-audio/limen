@@ -3,14 +3,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use super::input::{InputJob, InputReport};
 use super::projection::Projection;
-use super::snapshot::StateSnapshot;
+use super::snapshot::{ConfigSummary, StateSnapshot};
 use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
-use crate::config::ShortcutConfig;
+use crate::config::{ProviderConfig, ShortcutConfig};
 use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
@@ -462,6 +463,53 @@ async fn shortcut_rebind_applies_only_a_valid_config() {
             },
             ..before
         })
+    );
+}
+
+#[test]
+fn provider_reload_applies_only_a_valid_config() {
+    let dir = std::env::temp_dir().join(format!("limen-provider-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_file = dir.join("config.toml");
+    let mut harness = harness();
+    harness.actor.config_file = config_file.clone();
+    let before = harness._snapshots.borrow_and_update().config.clone();
+
+    std::fs::write(
+        &config_file,
+        "[provider]\nurl = \"ftp://asr\"\nmodel = \"m\"\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        harness.actor.reload_provider(),
+        Reply::Error { message } if message.contains("provider.url")
+    ));
+    assert_eq!(harness.session.try_recv(), Err(TryRecvError::Empty));
+    assert!(!harness._snapshots.has_changed().unwrap());
+
+    std::fs::write(
+        &config_file,
+        "[provider]\nurl = \"https://asr.example/v1\"\nmodel = \"big\"\n",
+    )
+    .unwrap();
+    assert_eq!(harness.actor.reload_provider(), Reply::Ok);
+    assert_eq!(
+        harness.session.try_recv(),
+        Ok(SessionCommand::Provider(ProviderConfig {
+            url: "https://asr.example/v1".to_string(),
+            model: "big".to_string(),
+            language: "auto".to_string(),
+            api_key_env: None,
+        }))
+    );
+    assert_eq!(
+        harness._snapshots.borrow_and_update().config,
+        ConfigSummary {
+            provider_model: "big".to_string(),
+            provider_url: "https://asr.example/v1".to_string(),
+            ..before
+        }
     );
 }
 

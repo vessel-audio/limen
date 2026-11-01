@@ -44,6 +44,10 @@ pub enum DisabledReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Toast {
     CopiedToClipboard,
+    /// The running daemon uses the new ASR endpoint from its next take.
+    ProviderApplied,
+    /// The new ASR endpoint is saved for when the daemon next starts.
+    ProviderSaved,
 }
 
 /// Side effects requested by a pure state transition.

@@ -10,6 +10,9 @@ use anyhow::Result;
 use crate::config::Config;
 
 pub mod openai_batch;
+mod setup;
+
+pub use setup::{Endpoint, UrlChange, set_server, split_url};
 
 /// Object-safe, cancellable future used by the provider trait objects.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;

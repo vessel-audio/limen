@@ -6,6 +6,7 @@ use limen_core::{
     Backend, PerAction, SessionState, Shortcut, ShortcutConfig, ShortcutStatus, shortcut_config, v1,
 };
 
+use super::retype;
 use crate::daemon::Scenario;
 use crate::desktop::Key;
 use crate::session::{Session, Target};
@@ -15,13 +16,6 @@ const CUSTOM: &str = "org.gnome.settings-daemon.plugins.media-keys.custom-keybin
 
 fn shortcut(text: &str) -> Result<Shortcut> {
     Ok(text.parse()?)
-}
-
-/// Replace a text field's contents by typing, as a user does.
-fn retype(session: &Session, id: &str, text: &str) -> Result<()> {
-    session.click(id)?;
-    session.chord(&[Key::CONTROL, Key::char('a')])?;
-    session.x11().type_text(text)
 }
 
 fn rebinds(session: &Session) -> Result<usize> {

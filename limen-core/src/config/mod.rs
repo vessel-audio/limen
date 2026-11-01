@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
+mod provider;
 mod write;
 
+pub(crate) use provider::update_provider_url;
 pub(crate) use write::{check_writable, snippet, update_shortcut};
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
@@ -117,7 +119,7 @@ pub struct Config {
     pub shortcut: ShortcutConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub url: String,
     pub model: String,
@@ -237,6 +239,12 @@ impl Config {
         if self.provider.url.is_empty() {
             bail!("provider.url must not be empty");
         }
+        let provider_url =
+            reqwest::Url::parse(&self.provider.url).context("invalid provider.url")?;
+        match (provider_url.scheme(), provider_url.host_str()) {
+            ("http" | "https", Some(_)) => {}
+            _ => bail!("provider.url must be an http(s):// URL with a host"),
+        }
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
@@ -273,9 +281,6 @@ impl Config {
             if !(100..=30_000).contains(&self.polish.timeout_ms) {
                 bail!("polish.timeout_ms must be in 100..=30000");
             }
-        }
-        if !self.provider.url.starts_with("http") {
-            bail!("provider.url must start with http(s)://");
         }
         for (name, shortcut) in [
             ("toggle", self.shortcut.toggle),

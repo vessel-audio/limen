@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::audio::{CaptureReap, Level, SAMPLE_RATE, capture_loop, reap_capture};
-use crate::config::Config;
+use crate::config::{Config, ProviderConfig};
 use crate::dictation::Event;
 use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
@@ -39,6 +39,9 @@ pub(crate) enum SessionCommand {
     Stop,
     /// Release the take, if any. Never answered.
     Teardown,
+    /// Open later takes with this provider; a live take keeps its own.
+    /// Never answered.
+    Provider(ProviderConfig),
 }
 
 /// Address of the session actor: the only way to reach its state. Dropping it
@@ -141,6 +144,7 @@ impl SessionActor {
                 Some(SessionCommand::Start) => self.start().await,
                 Some(SessionCommand::Stop) => self.stop().await,
                 Some(SessionCommand::Teardown) => self.teardown().await,
+                Some(SessionCommand::Provider(provider)) => self.cfg.provider = provider,
                 // Every handle is gone: the daemon is shutting down.
                 None => return self.teardown().await,
             }

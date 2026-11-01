@@ -105,7 +105,7 @@ settings.light: Light
 settings.dark: Dark
 settings.language: Language
 settings.system_language: Follow system
-settings.font_size: Font size
+settings.font_size: Text size
 settings.service: Background service
 requests.average: Avg
 requests.failed: Failed
@@ -118,7 +118,7 @@ settings.lightweight: Lightweight mode
 settings.lightweight_hint: Turns off animations to reduce rendering work
 settings.appearance_hint: Light, dark, or match the system
 settings.language_hint: Language of the interface
-settings.font_size_hint: Base size of interface text
+settings.font_size_hint: Scale of interface text
 settings.interface_font_hint: Typeface used throughout the window
 settings.service_hint: Restart or stop the dictation daemon
 nav.section: Workspace
@@ -127,5 +127,10 @@ requests.title: Requests
 requests.count: requests
 requests.kept: The daemon keeps the latest 20
 requests.failed_status: Failed
-settings.font_decrease: Decrease font size
-settings.font_increase: Increase font size
+action.apply: Apply
+provider.title: ASR server
+toast.provider_applied: ASR server applied
+toast.provider_saved: ASR server saved; the daemon uses it when it starts
+provider.route: Route
+settings.off: Off
+settings.on: On

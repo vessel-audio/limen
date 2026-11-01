@@ -5,15 +5,15 @@ use gpui_kit::*;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use limen_core::{Backend, DictationState, Paths};
+use limen_core::{Backend, DictationState, Paths, ProviderUrlChange};
 
 use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
-use crate::model::{Action, GuiState, Msg};
-use crate::pages;
+use crate::model::{Action, GuiState, Msg, Toast};
+use crate::pages::{self, ProviderForm};
 use crate::recorder::RecorderState;
 use crate::settings::{
-    AppearancePreference, FontChoice, LanguagePreference, LightweightMode, SettingsPage,
+    AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, SettingsPage,
 };
 use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -39,11 +39,12 @@ pub struct AppView {
     pub hold_touched: bool,
     pub toggle_focused: bool,
     pub hold_focused: bool,
+    pub provider: ProviderForm,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
-    pub font_size: f32,
+    pub font_scale: FontScale,
     pub font_family: SharedString,
     pub font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub lightweight: LightweightMode,
@@ -95,6 +96,7 @@ impl AppView {
                 .placeholder("Super+X")
                 .default_value("Super+X")
         });
+        let (provider, provider_subscriptions) = ProviderForm::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -144,11 +146,15 @@ impl AppView {
             hold_touched: false,
             toggle_focused: false,
             hold_focused: false,
-            _subscriptions: subscriptions,
+            provider,
+            _subscriptions: subscriptions
+                .into_iter()
+                .chain(provider_subscriptions)
+                .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
-            font_size: 16.0,
+            font_scale: FontScale::DEFAULT,
             font_family: FontChoice::SYSTEM_FAMILY.into(),
             font_select,
             lightweight: LightweightMode::Off,
@@ -179,7 +185,7 @@ impl AppView {
 
     /// Re-apply font choices, which a theme reload may reset.
     pub(crate) fn apply_typography(&self, cx: &mut App) {
-        let (family, size) = (self.font_family.clone(), px(self.font_size));
+        let (family, size) = (self.font_family.clone(), self.font_scale.font_size());
         Theme::update(cx, |theme| {
             theme.font_family = family;
             theme.font_size = size;
@@ -192,6 +198,7 @@ impl AppView {
         if matches!(event, BridgeEvent::Msg(Msg::DaemonReplaced)) {
             self.toggle_touched = false;
             self.hold_touched = false;
+            self.provider.error = None;
             self.backend_selected = false;
         }
         if let BridgeEvent::Msg(Msg::Snapshot(snapshot)) = &event
@@ -217,6 +224,17 @@ impl AppView {
             }
             BridgeEvent::ShortcutReport(report) => {
                 self.shortcut_report = Some(report);
+                Vec::new()
+            }
+            BridgeEvent::ProviderUrl(Ok(change)) => {
+                self.provider.finish(None);
+                vec![Action::Toast(match change {
+                    ProviderUrlChange::Applied => Toast::ProviderApplied,
+                    ProviderUrlChange::Saved => Toast::ProviderSaved,
+                })]
+            }
+            BridgeEvent::ProviderUrl(Err(message)) => {
+                self.provider.finish(Some(message));
                 Vec::new()
             }
             BridgeEvent::Toast(_) => Vec::new(),
@@ -309,8 +327,13 @@ impl AppView {
     }
 
     /// Show a GUI-owned toast for three seconds.
-    pub fn show_toast(&mut self) {
-        self.toast = Some((rust_i18n::t!("toast.copied").to_string(), Instant::now()));
+    pub fn show_toast(&mut self, toast: Toast) {
+        let key = match toast {
+            Toast::CopiedToClipboard => "toast.copied",
+            Toast::ProviderApplied => "toast.provider_applied",
+            Toast::ProviderSaved => "toast.provider_saved",
+        };
+        self.toast = Some((rust_i18n::t!(key).to_string(), Instant::now()));
     }
 
     fn toast_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -377,7 +400,7 @@ impl Render for AppView {
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(pages::dictation(self, cx)),
+                .child(pages::dictation(self, cx, window)),
             Page::History => pages::history(self, cx),
             Page::Shortcuts => div()
                 .v_flex()

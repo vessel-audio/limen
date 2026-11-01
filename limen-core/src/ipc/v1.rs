@@ -12,6 +12,7 @@
 //! | `{"v":1,"type":"subscribe"}`             | hello, snapshots, and levels             |
 //! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` once the new state shows |
 //! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
+//! | `{"v":1,"type":"provider_reload"}`       | `{"type":"ok"}`, for the next take       |
 //! | anything that fails                      | `{"type":"error","message":"..."}`       |
 
 use std::time::Duration;
@@ -61,6 +62,9 @@ pub enum Request {
     ShortcutRebind,
     /// Read the live global-shortcut backend and bindings.
     ShortcutStatus,
+    /// Apply the `[provider]` section of the config file again, from the
+    /// next take on.
+    ProviderReload,
 }
 
 /// A successful, data-bearing, or error response to a protocol request.
@@ -129,6 +133,7 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Acti
                 Request::Hold { edge } => (Command::Hold(edge, reply), super::CONN_TIMEOUT),
                 Request::ShortcutRebind => (Command::ShortcutRebind(reply), REBIND_REPLY_TIMEOUT),
                 Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
+                Request::ProviderReload => (Command::ProviderReload(reply), super::CONN_TIMEOUT),
             };
             Action::Reply(Box::new(
                 super::forward(commands, command, answer, reply_timeout)

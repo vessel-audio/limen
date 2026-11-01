@@ -73,13 +73,7 @@ pub(crate) fn update_shortcut(
     change: impl FnOnce(ShortcutConfig) -> ShortcutConfig,
 ) -> Result<ShortcutConfig> {
     let _lock = lock_dir(path)?;
-    let (text, mode) = match fs::read_to_string(path) {
-        Ok(text) => (text, Some(fs::metadata(path)?.permissions().mode())),
-        Err(error) if error.kind() == ErrorKind::NotFound => (DEFAULT_CONFIG.to_string(), None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to read {}", path.display()));
-        }
-    };
+    let (text, mode) = read_text(path)?;
     let current: Config = toml::from_str(&text)
         .with_context(|| format!("failed to parse config: {}", path.display()))?;
     current.validate()?;
@@ -102,6 +96,16 @@ pub(crate) fn update_shortcut(
     Ok(shortcut)
 }
 
+/// The config file at `path` as text, and its mode. A missing file reads as
+/// the annotated default, without a mode. Callers hold the directory lock.
+pub(super) fn read_text(path: &Path) -> Result<(String, Option<u32>)> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok((text, Some(fs::metadata(path)?.permissions().mode()))),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok((DEFAULT_CONFIG.to_string(), None)),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
 /// Write the annotated default config to `path`, unless a config appeared
 /// there meanwhile, e.g. written by a concurrent `limen shortcut`.
 pub(super) fn create_default(path: &Path) -> Result<()> {
@@ -119,7 +123,7 @@ pub(super) fn create_default(path: &Path) -> Result<()> {
 
 /// Lock the directory of the config file at `path`, creating it, against
 /// other writers of the config. Held until the returned file is dropped.
-fn lock_dir(path: &Path) -> Result<File> {
+pub(super) fn lock_dir(path: &Path) -> Result<File> {
     let dir = path
         .parent()
         .context("config path has no parent directory")?;
