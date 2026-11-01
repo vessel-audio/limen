@@ -13,7 +13,7 @@ use crate::model::{Action, GuiState, Msg, Toast};
 use crate::pages::{self, ProviderForm};
 use crate::recorder::RecorderState;
 use crate::settings::{
-    AppearancePreference, FontChoice, LanguagePreference, LightweightMode, SettingsPage,
+    AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, SettingsPage,
 };
 use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -44,7 +44,7 @@ pub struct AppView {
     pub sidebar_mode: crate::sidebar::SidebarMode,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
-    pub font_size: f32,
+    pub font_scale: FontScale,
     pub font_family: SharedString,
     pub font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub lightweight: LightweightMode,
@@ -154,7 +154,7 @@ impl AppView {
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
-            font_size: 16.0,
+            font_scale: FontScale::DEFAULT,
             font_family: FontChoice::SYSTEM_FAMILY.into(),
             font_select,
             lightweight: LightweightMode::Off,
@@ -185,7 +185,7 @@ impl AppView {
 
     /// Re-apply font choices, which a theme reload may reset.
     pub(crate) fn apply_typography(&self, cx: &mut App) {
-        let (family, size) = (self.font_family.clone(), px(self.font_size));
+        let (family, size) = (self.font_family.clone(), self.font_scale.font_size());
         Theme::update(cx, |theme| {
             theme.font_family = family;
             theme.font_size = size;

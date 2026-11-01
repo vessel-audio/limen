@@ -3,9 +3,9 @@
 //! Controls and the status they report expose their element ID as their
 //! accessible ID (AT-SPI `AccessibleId`), so assistive technology and the
 //! desktop E2E suite can address them independently of the interface
-//! language. The lightweight switch and the font select are the exceptions:
-//! their components build the semantic node internally without an ID hook,
-//! and each is the only control of its role in the window.
+//! language. The font select is the exception: its component builds the
+//! semantic node internally without an ID hook, and it is the only combo box
+//! in the settings.
 //!
 //! Status text is a live region, so screen readers announce its changes
 //! without the user moving focus to it.

@@ -56,10 +56,11 @@ impl Node {
 }
 
 /// The bounds of the nearest scroll view around `nodes[index]`. AccessKit
-/// reports scroll views to AT-SPI as panels.
+/// reports scroll views to AT-SPI as panels, and labelled groups such as a
+/// radio group as panels too; only the scroll views are anonymous.
 pub fn viewport(nodes: &[Node], index: usize) -> Option<Bounds> {
     std::iter::successors(nodes[index].parent, |parent| nodes[*parent].parent)
-        .find(|ancestor| nodes[*ancestor].role == Role::Panel)
+        .find(|ancestor| nodes[*ancestor].role == Role::Panel && nodes[*ancestor].name.is_empty())
         .and_then(|ancestor| nodes[ancestor].bounds)
 }
 

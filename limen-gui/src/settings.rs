@@ -2,18 +2,20 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Sizable, StyledExt,
-    button::{Button, ButtonVariants},
-    scroll::ScrollbarMode,
-    searchable_list::SearchableListItem,
-    select::Select,
-    switch::Switch,
+    ActiveTheme, Icon, Sizable, StyledExt, scroll::ScrollbarMode,
+    searchable_list::SearchableListItem, select::Select,
 };
 use gpui_kit::*;
 
 use crate::a11y;
 use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
+
+mod font_scale;
+mod segmented;
+
+pub use font_scale::FontScale;
+use segmented::{Segment, segmented};
 
 /// Settings subpages shown below the sidebar's Settings item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,50 +99,57 @@ pub enum LanguagePreference {
 }
 
 pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
-    let appearance = [
-        (
-            "appearance-system",
-            rust_i18n::t!("settings.follow_system").to_string(),
-            AppearancePreference::System,
-        ),
-        (
-            "appearance-light",
-            rust_i18n::t!("settings.light").to_string(),
-            AppearancePreference::Light,
-        ),
-        (
-            "appearance-dark",
-            rust_i18n::t!("settings.dark").to_string(),
-            AppearancePreference::Dark,
-        ),
-    ]
-    .map(|(id, label, appearance)| {
-        choice(id, label, view.appearance == appearance).on_click(cx.listener(
-            move |this, _, window, cx| {
-                this.appearance = appearance;
-                this.apply_appearance(window, cx);
+    let appearance = segmented(
+        "appearance",
+        rust_i18n::t!("settings.appearance").to_string(),
+        rems(6.5),
+        vec![
+            Segment {
+                id: "appearance-system".into(),
+                label: rust_i18n::t!("settings.follow_system").to_string(),
+                value: AppearancePreference::System,
             },
-        ))
-    });
-    let language = [
-        (
-            "language-system",
-            rust_i18n::t!("settings.system_language").to_string(),
-            LanguagePreference::System,
-        ),
-        (
-            "language-english",
-            "English".to_string(),
-            LanguagePreference::English,
-        ),
-        (
-            "language-chinese",
-            "简体中文".to_string(),
-            LanguagePreference::Chinese,
-        ),
-    ]
-    .map(|(id, label, language)| {
-        choice(id, label, view.language == language).on_click(cx.listener(move |this, _, _, cx| {
+            Segment {
+                id: "appearance-light".into(),
+                label: rust_i18n::t!("settings.light").to_string(),
+                value: AppearancePreference::Light,
+            },
+            Segment {
+                id: "appearance-dark".into(),
+                label: rust_i18n::t!("settings.dark").to_string(),
+                value: AppearancePreference::Dark,
+            },
+        ],
+        view.appearance,
+        |this, appearance, window, cx| {
+            this.appearance = appearance;
+            this.apply_appearance(window, cx);
+        },
+        cx,
+    );
+    let language = segmented(
+        "language",
+        rust_i18n::t!("settings.language").to_string(),
+        rems(6.5),
+        vec![
+            Segment {
+                id: "language-system".into(),
+                label: rust_i18n::t!("settings.system_language").to_string(),
+                value: LanguagePreference::System,
+            },
+            Segment {
+                id: "language-english".into(),
+                label: "English".to_string(),
+                value: LanguagePreference::English,
+            },
+            Segment {
+                id: "language-chinese".into(),
+                label: "简体中文".to_string(),
+                value: LanguagePreference::Chinese,
+            },
+        ],
+        view.language,
+        |this, language, _, cx| {
             this.language = language;
             match language {
                 LanguagePreference::System => crate::locale::initialize(),
@@ -148,8 +157,33 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                 LanguagePreference::Chinese => crate::locale::Locale::ZhCn.initialize(),
             }
             cx.notify();
-        }))
-    });
+        },
+        cx,
+    );
+    let lightweight = segmented(
+        "lightweight",
+        rust_i18n::t!("settings.lightweight").to_string(),
+        rems(4.),
+        vec![
+            Segment {
+                id: "lightweight-off".into(),
+                label: rust_i18n::t!("settings.off").to_string(),
+                value: LightweightMode::Off,
+            },
+            Segment {
+                id: "lightweight-on".into(),
+                label: rust_i18n::t!("settings.on").to_string(),
+                value: LightweightMode::On,
+            },
+        ],
+        view.lightweight,
+        |this, lightweight, _, cx| {
+            this.lightweight = lightweight;
+            cx.set_reduce_motion(lightweight == LightweightMode::On);
+            cx.notify();
+        },
+        cx,
+    );
     let scroll = &view.settings_scroll;
     let content = div()
         .v_flex()
@@ -166,62 +200,9 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                 .bg(cx.theme().muted.opacity(0.18))
                 .children(
                     [
-                        setting(
-                            "settings.appearance",
-                            div().h_flex().gap_2().children(appearance),
-                            cx,
-                        ),
-                        setting(
-                            "settings.language",
-                            div().h_flex().gap_2().children(language),
-                            cx,
-                        ),
-                        setting(
-                            "settings.font_size",
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    a11y::button("font-decrease")
-                                        .small()
-                                        .outline()
-                                        .label("−")
-                                        .accessibility_label(
-                                            rust_i18n::t!("settings.font_decrease").to_string(),
-                                        )
-                                        .disabled(view.font_size <= 12.0)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.font_size = (this.font_size - 1.0).max(12.0);
-                                            this.apply_typography(cx);
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .id("font-size")
-                                        .accessibility_id("font-size")
-                                        .role(Role::Label)
-                                        .aria_value(format!("{} px", view.font_size))
-                                        .w(px(64.))
-                                        .text_center()
-                                        .child(format!("{} px", view.font_size)),
-                                )
-                                .child(
-                                    a11y::button("font-increase")
-                                        .small()
-                                        .outline()
-                                        .label("+")
-                                        .accessibility_label(
-                                            rust_i18n::t!("settings.font_increase").to_string(),
-                                        )
-                                        .disabled(view.font_size >= 22.0)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.font_size = (this.font_size + 1.0).min(22.0);
-                                            this.apply_typography(cx);
-                                        })),
-                                ),
-                            cx,
-                        ),
+                        setting("settings.appearance", appearance, cx),
+                        setting("settings.language", language, cx),
+                        setting("settings.font_size", font_scale::picker(view, cx), cx),
                         setting(
                             "settings.interface_font",
                             div().w(px(220.)).child(
@@ -236,23 +217,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                             ),
                             cx,
                         ),
-                        setting(
-                            "settings.lightweight",
-                            Switch::new("lightweight")
-                                .accessibility_label(
-                                    rust_i18n::t!("settings.lightweight").to_string(),
-                                )
-                                .checked(view.lightweight == LightweightMode::On)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.lightweight = match checked {
-                                        true => LightweightMode::On,
-                                        false => LightweightMode::Off,
-                                    };
-                                    cx.set_reduce_motion(*checked);
-                                    cx.notify();
-                                })),
-                            cx,
-                        ),
+                        setting("settings.lightweight", lightweight, cx),
                         setting(
                             "settings.service",
                             div()
@@ -407,14 +372,6 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     }),
                 ),
         )
-}
-
-fn choice(id: &'static str, label: String, selected: bool) -> Button {
-    let button = a11y::button(id).small().label(label);
-    match selected {
-        true => button.primary(),
-        false => button.outline(),
-    }
 }
 
 /// One settings row: the title and description under `key` beside a control.

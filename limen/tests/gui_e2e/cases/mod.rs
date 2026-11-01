@@ -52,7 +52,7 @@ pub const ALL: &[Case] = cases![
     settings::settings_tabs_switch_between_general_and_about,
     settings::appearance_follows_the_choice_and_the_system,
     settings::language_choice_renames_the_interface,
-    settings::font_size_steps_within_its_limits,
+    settings::the_text_scale_resizes_the_interface,
     settings::the_font_select_applies_a_family,
     settings::lightweight_mode_skips_motion,
     settings::the_scrollbar_drags_the_settings_page,
