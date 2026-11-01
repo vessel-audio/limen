@@ -250,28 +250,7 @@ impl Config {
             bail!("audio.chunk_ms must be in 1..=1000");
         }
         if self.polish.enabled {
-            let polish_url = reqwest::Url::parse(&self.polish.url).context("invalid polish.url")?;
-            let Some(polish_host) = polish_url.host_str() else {
-                bail!("polish.url must include a host");
-            };
-            match polish_url.scheme() {
-                "https" => {}
-                "http" => {
-                    let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
-                        || polish_host
-                            .trim_start_matches('[')
-                            .trim_end_matches(']')
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|address| address.is_loopback());
-                    if !is_loopback {
-                        bail!("polish.url must use HTTPS, or HTTP on a loopback address");
-                    }
-                }
-                _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
-            }
-            if !polish_url.username().is_empty() || polish_url.password().is_some() {
-                bail!("polish.url must not contain credentials");
-            }
+            check_polish_url(&self.polish.url)?;
             if self.polish.model.trim().is_empty() {
                 bail!("polish.model must not be empty when polishing is enabled");
             }
@@ -301,6 +280,34 @@ impl Config {
         let var = self.provider.api_key_env.as_ref()?;
         std::env::var(var).ok().filter(|v| !v.is_empty())
     }
+}
+
+/// Check that `url` may carry the polishing API key: HTTPS, or HTTP on a
+/// loopback address, without credentials of its own.
+pub(crate) fn check_polish_url(url: &str) -> Result<()> {
+    let polish_url = reqwest::Url::parse(url).context("invalid polish.url")?;
+    let Some(polish_host) = polish_url.host_str() else {
+        bail!("polish.url must include a host");
+    };
+    match polish_url.scheme() {
+        "https" => {}
+        "http" => {
+            let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
+                || polish_host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback());
+            if !is_loopback {
+                bail!("polish.url must use HTTPS, or HTTP on a loopback address");
+            }
+        }
+        _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
+    }
+    if !polish_url.username().is_empty() || polish_url.password().is_some() {
+        bail!("polish.url must not contain credentials");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

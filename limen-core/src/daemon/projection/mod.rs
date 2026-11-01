@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 use super::snapshot::{
     CONFIG_CAP, ConfigSummary, DictationStatus, ERROR_CAP, ErrorEntry, FIELD_CAP, HistoryEntry,
-    HistoryOutcome, RequestEntry, RequestOutcome, StateSnapshot, capped,
+    HistoryOutcome, RequestEntry, RequestOutcome, StateSnapshot, capped, endpoint,
 };
 use crate::config::{Config, PolishConfig, ProviderConfig};
 use crate::dictation::{DictationState, DictationView};
@@ -227,7 +227,7 @@ impl Projection {
         self.snapshot.config = ConfigSummary {
             polish_enabled: polish.enabled,
             polish_model: capped(&polish.model, CONFIG_CAP).0,
-            polish_url: capped(&polish.url, CONFIG_CAP).0,
+            polish_url: capped(&endpoint(&polish.url), CONFIG_CAP).0,
             ..self.snapshot.config.clone()
         };
     }

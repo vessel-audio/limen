@@ -26,16 +26,17 @@ pub enum ModelRole {
     Polish,
 }
 
-/// The `…/models` URL beside `endpoint`, which ends in `route`.
+/// The `…/models` URL beside `endpoint`, whose path ends in `route`, keeping
+/// its query, which some servers need, such as `?api-version=`.
 fn models_url(endpoint: &str, route: &str) -> Option<reqwest::Url> {
     let mut url = reqwest::Url::parse(endpoint).ok()?;
     let prefix = url
         .path()
+        .trim_end_matches('/')
         .strip_suffix(route)
         .filter(|prefix| prefix.ends_with('/'))?
         .to_string();
     url.set_path(&format!("{prefix}models"));
-    url.set_query(None);
     Some(url)
 }
 
@@ -59,13 +60,18 @@ pub async fn list_models(paths: &Paths, role: ModelRole) -> Result<Vec<String>> 
             "audio/transcriptions",
             config.api_key(),
         ),
-        ModelRole::Polish => (
-            &config.polish.url,
-            "chat/completions",
-            std::env::var(&config.polish.api_key_env)
-                .ok()
-                .filter(|key| !key.is_empty()),
-        ),
+        ModelRole::Polish => {
+            // The key goes out even while polishing is disabled, when the
+            // config does not check the URL: guard it as the polisher would.
+            config::check_polish_url(&config.polish.url)?;
+            (
+                &config.polish.url,
+                "chat/completions",
+                std::env::var(&config.polish.api_key_env)
+                    .ok()
+                    .filter(|key| !key.is_empty()),
+            )
+        }
     };
     let url = models_url(endpoint, route)
         .with_context(|| format!("{endpoint} does not end in /{route}, so it lists no models"))?;
@@ -147,11 +153,11 @@ mod tests {
         assert_eq!(
             [
                 (
-                    "http://127.0.0.1:8000/v1/audio/transcriptions?x=1",
+                    "http://127.0.0.1:8000/v1/audio/transcriptions/",
                     "audio/transcriptions"
                 ),
                 (
-                    "https://api.deepseek.com/chat/completions",
+                    "https://ai.example/openai/chat/completions?api-version=1",
                     "chat/completions"
                 ),
                 ("http://127.0.0.1:8080/inference", "audio/transcriptions"),
@@ -163,7 +169,7 @@ mod tests {
             .map(|(endpoint, route)| models_url(endpoint, route).map(String::from)),
             [
                 Some("http://127.0.0.1:8000/v1/models".to_string()),
-                Some("https://api.deepseek.com/models".to_string()),
+                Some("https://ai.example/openai/models?api-version=1".to_string()),
                 None,
                 None,
             ]
@@ -202,6 +208,21 @@ mod tests {
 
         assert_eq!(models, ["b", "a"]);
         assert!(server.await.unwrap().starts_with("GET /v1/models "));
+    }
+
+    #[tokio::test]
+    async fn the_polish_key_never_goes_to_plain_http_elsewhere() {
+        let paths = scratch(
+            "models-insecure",
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n\n[polish]\nenabled = false\nurl = \"http://192.0.2.1/v1/chat/completions\"\n",
+        );
+
+        let error = list_models(&paths, ModelRole::Polish).await.unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "polish.url must use HTTPS, or HTTP on a loopback address"
+        );
     }
 
     #[tokio::test]

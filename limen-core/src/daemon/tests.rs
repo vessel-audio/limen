@@ -539,22 +539,24 @@ fn polish_reload_hands_the_section_to_the_input_worker() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\n",
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\nurl = \"https://ai.example/chat/completions?key=secret\"\n",
     )
     .unwrap();
     assert_eq!(harness.actor.reload_polish(), Reply::Ok);
     let polish = PolishConfig {
         enabled: true,
         model: "deepseek-chat".to_string(),
+        url: "https://ai.example/chat/completions?key=secret".to_string(),
         ..PolishConfig::default()
     };
     assert_eq!(*harness.actor.polish.borrow(), polish);
+    // The query may hold a key, so subscribers never see it.
     assert_eq!(
         harness._snapshots.borrow_and_update().config,
         ConfigSummary {
             polish_enabled: true,
             polish_model: polish.model,
-            polish_url: polish.url,
+            polish_url: "https://ai.example/chat/completions".to_string(),
             ..before
         }
     );
