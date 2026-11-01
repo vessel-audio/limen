@@ -5,7 +5,7 @@ use gpui_kit::*;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use limen_core::{Backend, DictationState, Paths, ProviderUrlChange};
+use limen_core::{Backend, ConfigChange, DictationState, Paths};
 
 use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
@@ -229,8 +229,8 @@ impl AppView {
             BridgeEvent::ProviderUrl(Ok(change)) => {
                 self.provider.finish(None);
                 vec![Action::Toast(match change {
-                    ProviderUrlChange::Applied => Toast::ProviderApplied,
-                    ProviderUrlChange::Saved => Toast::ProviderSaved,
+                    ConfigChange::Applied => Toast::ProviderApplied,
+                    ConfigChange::Saved => Toast::ProviderSaved,
                 })]
             }
             BridgeEvent::ProviderUrl(Err(message)) => {

@@ -3,9 +3,9 @@
 use std::future::Future;
 
 use anyhow::Result;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
-use crate::config::Config;
+use crate::config::{Config, PolishConfig};
 use crate::dictation::InputOutcome;
 use crate::input_method::{InputMethod, default_backend, sanitize_control_characters};
 use crate::ipc::v1::Delivery;
@@ -96,8 +96,10 @@ async fn process(
 }
 
 /// Start the serial input worker, returning its job and report mailboxes.
+/// Each job is polished as `polish` reads when the job begins.
 pub(crate) fn spawn(
     config: &Config,
+    mut polish: watch::Receiver<PolishConfig>,
 ) -> Result<(
     mpsc::UnboundedSender<InputJob>,
     mpsc::UnboundedReceiver<InputReport>,
@@ -106,11 +108,20 @@ pub(crate) fn spawn(
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputJob>();
     let (report_tx, reports) = mpsc::unbounded_channel::<InputReport>();
     let backend = default_backend(config.input_method.backend);
-    let polisher = Polisher::from_config(&config.polish)?;
+    let mut polisher = Polisher::from_config(&polish.borrow_and_update())?;
     tracing::info!(?backend, "input method backend");
     let task = tokio::spawn(async move {
         let mut input_method = InputMethod::new(backend);
         while let Some(job) = input_rx.recv().await {
+            if polish.has_changed().is_ok_and(|changed| changed) {
+                match Polisher::from_config(&polish.borrow_and_update()) {
+                    Ok(reloaded) => polisher = reloaded,
+                    Err(error) => tracing::warn!(
+                        error = %format!("{error:#}"),
+                        "keeping the previous polishing settings"
+                    ),
+                }
+            }
             let report = process(job, &input_rx, &mut input_method, &polisher).await;
             if report_tx.send(report).is_err() {
                 break;

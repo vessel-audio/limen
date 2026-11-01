@@ -6,7 +6,8 @@
 use anyhow::{Context, Result, bail};
 
 use crate::config::{self, Paths};
-use crate::ipc::{self, v1};
+use crate::ipc::v1;
+use crate::reload::{ConfigChange, reload};
 
 /// The transcription route on the ASR server, after its address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,15 +36,6 @@ impl Endpoint {
     }
 }
 
-/// Where a new ASR server took effect.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UrlChange {
-    /// The running daemon uses it from its next take on.
-    Applied,
-    /// No daemon is running; the next one starts with it.
-    Saved,
-}
-
 /// Split a provider URL into its server and the rest, e.g.
 /// `http://127.0.0.1:8000` and `/v1/audio/transcriptions`. `None` when the
 /// URL names no host.
@@ -63,7 +55,7 @@ pub fn split_url(url: &str) -> Option<(String, String)> {
 
 /// Point `provider.url` at `endpoint` on `server`, an http(s) origin such as
 /// `http://127.0.0.1:8000`, and have a running daemon apply it.
-pub async fn set_server(paths: &Paths, server: &str, endpoint: Endpoint) -> Result<UrlChange> {
+pub async fn set_server(paths: &Paths, server: &str, endpoint: Endpoint) -> Result<ConfigChange> {
     let parsed = reqwest::Url::parse(server)
         .with_context(|| format!("{server:?} is not a server address"))?;
     let origin = parsed.origin().ascii_serialization();
@@ -79,28 +71,21 @@ pub async fn set_server(paths: &Paths, server: &str, endpoint: Endpoint) -> Resu
         paths.config_file.clone(),
         format!("{origin}{}", endpoint.path()),
     );
-    tokio::task::spawn_blocking(move || config::update_provider_url(&file, &url))
-        .await
-        .context("the config writer stopped")??;
-    match ipc::request(paths, &v1::Request::ProviderReload).await {
-        Ok(v1::Reply::Ok) => Ok(UrlChange::Applied),
-        Ok(v1::Reply::Error { message }) => {
-            bail!("saved, but the daemon did not apply it: {message}")
-        }
-        Ok(v1::Reply::ShortcutStatus(_) | v1::Reply::Accepted { .. }) => {
-            bail!("the daemon answered something else")
-        }
-        Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => Ok(UrlChange::Saved),
-        Err(error) => Err(error),
-    }
+    tokio::task::spawn_blocking(move || {
+        config::update_value(&file, config::Key::ProviderUrl, &url)
+    })
+    .await
+    .context("the config writer stopped")??;
+    reload(paths, &v1::Request::ProviderReload).await
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use super::{Endpoint, UrlChange, set_server, split_url};
+    use super::{Endpoint, set_server, split_url};
     use crate::config::{Config, Paths};
+    use crate::reload::ConfigChange;
 
     const CONFIG: &str =
         "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n";
@@ -157,7 +142,7 @@ mod tests {
                 Config::load(&paths.config_file).unwrap().provider.url
             ),
             (
-                UrlChange::Saved,
+                ConfigChange::Saved,
                 "https://asr.example:9000/inference".to_string()
             )
         );

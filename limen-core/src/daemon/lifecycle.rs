@@ -1,7 +1,7 @@
 //! Daemon startup and the common shutdown/cleanup path.
 
 use anyhow::Result;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::Projection;
 use super::input;
@@ -23,7 +23,8 @@ pub(crate) struct ActorExit {
 pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
-    let (input_tx, input_reports, input_worker) = input::spawn(&cfg)?;
+    let (polish, polish_rx) = watch::channel(cfg.polish.clone());
+    let (input_tx, input_reports, input_worker) = input::spawn(&cfg, polish_rx)?;
 
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
@@ -36,6 +37,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let actor = DictationActor::new(
         session,
         input_tx,
+        polish,
         notify,
         paths.config_file.clone(),
         shortcuts,

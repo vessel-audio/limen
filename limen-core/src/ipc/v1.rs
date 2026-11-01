@@ -13,6 +13,7 @@
 //! | `{"v":1,"type":"shortcut_rebind"}`       | `{"type":"ok"}` once the new state shows |
 //! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
 //! | `{"v":1,"type":"provider_reload"}`       | `{"type":"ok"}`, for the next take       |
+//! | `{"v":1,"type":"polish_reload"}`         | `{"type":"ok"}`, for the next transcript |
 //! | anything that fails                      | `{"type":"error","message":"..."}`       |
 
 use std::time::Duration;
@@ -65,6 +66,9 @@ pub enum Request {
     /// Apply the `[provider]` section of the config file again, from the
     /// next take on.
     ProviderReload,
+    /// Apply the `[polish]` section of the config file again, from the next
+    /// transcript on.
+    PolishReload,
 }
 
 /// A successful, data-bearing, or error response to a protocol request.
@@ -134,6 +138,7 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Acti
                 Request::ShortcutRebind => (Command::ShortcutRebind(reply), REBIND_REPLY_TIMEOUT),
                 Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
                 Request::ProviderReload => (Command::ProviderReload(reply), super::CONN_TIMEOUT),
+                Request::PolishReload => (Command::PolishReload(reply), super::CONN_TIMEOUT),
             };
             Action::Reply(Box::new(
                 super::forward(commands, command, answer, reply_timeout)

@@ -22,6 +22,8 @@ fn snapshot(state: DictationState, history: Vec<HistoryEntry>) -> WireSnapshot {
                 provider_model: "model".to_string(),
                 provider_url: "http://127.0.0.1".to_string(),
                 polish_enabled: false,
+                polish_model: "polish".to_string(),
+                polish_url: "https://api.deepseek.com/chat/completions".to_string(),
             },
         },
         shortcut: ShortcutStatus {

@@ -8,10 +8,9 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
-    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths,
-    ProviderEndpoint, ProviderUrlChange, Push, Report, SetupError, Shortcut, clear,
-    daemon_peer_pid, edit, set, set_provider_server, setup, spawn_daemon, subscribe,
-    terminate_daemon, v1,
+    Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, Keys, Launch,
+    Paths, ProviderEndpoint, Push, Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set,
+    set_provider_server, setup, spawn_daemon, subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -65,7 +64,7 @@ pub enum BridgeEvent {
     Msg(Msg),
     OfferTerminate,
     ShortcutReport(Result<Report, ShortcutFailure>),
-    ProviderUrl(Result<ProviderUrlChange, String>),
+    ProviderUrl(Result<ConfigChange, String>),
     Toast(Toast),
 }
 

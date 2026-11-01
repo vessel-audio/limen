@@ -161,8 +161,9 @@ struct Daemon {
     next_history_id: u64,
     log: std::fs::File,
     snapshots: watch::Sender<Option<(StateSnapshot, ShortcutStatus)>>,
-    /// The `provider.url` of the config file as of the last reload.
-    provider_url: String,
+    /// The provider and polishing settings of the config file as of the last
+    /// reload.
+    config: ConfigSummary,
 }
 
 impl Daemon {
@@ -185,12 +186,7 @@ impl Daemon {
             history: self.scenario.history.clone(),
             last_error: None,
             requests: self.scenario.requests.clone(),
-            config: ConfigSummary {
-                input_method: "fcitx5".to_string(),
-                provider_model: "e2e-model".to_string(),
-                provider_url: self.provider_url.clone(),
-                polish_enabled: false,
-            },
+            config: self.config.clone(),
         };
         self.snapshots
             .send_replace(Some((state, self.scenario.shortcut.clone())));
@@ -217,7 +213,14 @@ async fn run(scenario: Scenario, log: PathBuf) -> Result<()> {
             .append(true)
             .open(log)?,
         snapshots,
-        provider_url: "http://127.0.0.1:9/v1".to_string(),
+        config: ConfigSummary {
+            input_method: "fcitx5".to_string(),
+            provider_model: "e2e-model".to_string(),
+            provider_url: "http://127.0.0.1:9/v1".to_string(),
+            polish_enabled: false,
+            polish_model: "e2e-polish".to_string(),
+            polish_url: "http://127.0.0.1:9/v1/chat/completions".to_string(),
+        },
     }));
     daemon.lock().await.publish();
     loop {
@@ -286,7 +289,27 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
         v1::Request::ProviderReload => match Config::load(&paths.config_file) {
             Ok(config) => {
                 let mut daemon = daemon.lock().await;
-                daemon.provider_url = config.provider.url;
+                daemon.config = ConfigSummary {
+                    provider_model: config.provider.model,
+                    provider_url: config.provider.url,
+                    ..daemon.config.clone()
+                };
+                daemon.publish();
+                v1::Reply::Ok
+            }
+            Err(error) => v1::Reply::Error {
+                message: format!("{error:#}"),
+            },
+        },
+        v1::Request::PolishReload => match Config::load(&paths.config_file) {
+            Ok(config) => {
+                let mut daemon = daemon.lock().await;
+                daemon.config = ConfigSummary {
+                    polish_enabled: config.polish.enabled,
+                    polish_model: config.polish.model,
+                    polish_url: config.polish.url,
+                    ..daemon.config.clone()
+                };
                 daemon.publish();
                 v1::Reply::Ok
             }

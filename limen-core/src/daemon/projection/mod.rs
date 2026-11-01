@@ -6,7 +6,7 @@ use super::snapshot::{
     CONFIG_CAP, ConfigSummary, DictationStatus, ERROR_CAP, ErrorEntry, FIELD_CAP, HistoryEntry,
     HistoryOutcome, RequestEntry, RequestOutcome, StateSnapshot, capped,
 };
-use crate::config::{Config, ProviderConfig};
+use crate::config::{Config, PolishConfig, ProviderConfig};
 use crate::dictation::{DictationState, DictationView};
 use crate::input_method::sanitize_control_characters;
 
@@ -218,6 +218,16 @@ impl Projection {
         self.snapshot.config = ConfigSummary {
             provider_model: capped(&provider.model, CONFIG_CAP).0,
             provider_url: capped(&provider.url, CONFIG_CAP).0,
+            ..self.snapshot.config.clone()
+        };
+    }
+
+    /// Show the polishing that later transcripts use.
+    pub(crate) fn set_polish(&mut self, polish: &PolishConfig) {
+        self.snapshot.config = ConfigSummary {
+            polish_enabled: polish.enabled,
+            polish_model: capped(&polish.model, CONFIG_CAP).0,
+            polish_url: capped(&polish.url, CONFIG_CAP).0,
             ..self.snapshot.config.clone()
         };
     }

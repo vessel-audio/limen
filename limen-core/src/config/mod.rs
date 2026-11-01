@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
-mod provider;
+mod value;
 mod write;
 
-pub(crate) use provider::update_provider_url;
+pub(crate) use value::{Key, update_value};
 pub(crate) use write::{check_writable, snippet, update_shortcut};
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
@@ -157,7 +157,7 @@ pub struct InputMethodConfig {
     pub backend: Option<crate::input_method::Backend>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PolishConfig {
     pub enabled: bool,

@@ -9,9 +9,11 @@ mod daemon;
 mod dictation;
 mod input_method;
 mod ipc;
+mod models;
 mod notify;
 mod polish;
 mod provider;
+mod reload;
 mod session;
 mod shortcut;
 mod task;
@@ -28,10 +30,12 @@ pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};
+pub use models::{ModelRole, list_models, set_model};
 pub use provider::{
-    Endpoint as ProviderEndpoint, UrlChange as ProviderUrlChange, probe,
-    set_server as set_provider_server, split_url as split_provider_url,
+    Endpoint as ProviderEndpoint, probe, set_server as set_provider_server,
+    split_url as split_provider_url,
 };
+pub use reload::ConfigChange;
 pub use shortcut::desktop_entry::{APP_ID, Launch};
 pub use shortcut::program::Program;
 pub use shortcut::setup::{GnomeBinding, GnomeStatus, configured as shortcut_config};

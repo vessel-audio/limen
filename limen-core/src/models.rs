@@ -1,0 +1,247 @@
+//! Choosing the ASR and polishing models: the models their servers offer,
+//! and writing the chosen one to the config for a running daemon to apply.
+//!
+//! Both servers are asked through the OpenAI-compatible `GET …/models`
+//! route beside the configured one. Servers without it, such as the
+//! whisper.cpp server, list nothing, and any model name may still be set.
+
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+
+use crate::config::{self, Config, Paths};
+use crate::ipc::v1;
+use crate::reload::{ConfigChange, reload};
+
+/// How long a server may take to list its models.
+const LIST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Which model is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRole {
+    /// `provider.model`, which transcribes each take.
+    Asr,
+    /// `polish.model`, which corrects each transcript.
+    Polish,
+}
+
+/// The `…/models` URL beside `endpoint`, which ends in `route`.
+fn models_url(endpoint: &str, route: &str) -> Option<reqwest::Url> {
+    let mut url = reqwest::Url::parse(endpoint).ok()?;
+    let prefix = url
+        .path()
+        .strip_suffix(route)
+        .filter(|prefix| prefix.ends_with('/'))?
+        .to_string();
+    url.set_path(&format!("{prefix}models"));
+    url.set_query(None);
+    Some(url)
+}
+
+#[derive(Deserialize)]
+struct ModelList {
+    data: Vec<ListedModel>,
+}
+
+#[derive(Deserialize)]
+struct ListedModel {
+    id: String,
+}
+
+/// The models the configured server for `role` offers, in its order.
+pub async fn list_models(paths: &Paths, role: ModelRole) -> Result<Vec<String>> {
+    let config = Config::load(&paths.config_file)?;
+    // The configured endpoint, and the route at its end that `models` replaces.
+    let (endpoint, route, api_key) = match role {
+        ModelRole::Asr => (
+            &config.provider.url,
+            "audio/transcriptions",
+            config.api_key(),
+        ),
+        ModelRole::Polish => (
+            &config.polish.url,
+            "chat/completions",
+            std::env::var(&config.polish.api_key_env)
+                .ok()
+                .filter(|key| !key.is_empty()),
+        ),
+    };
+    let url = models_url(endpoint, route)
+        .with_context(|| format!("{endpoint} does not end in /{route}, so it lists no models"))?;
+    let http = reqwest::Client::builder()
+        .timeout(LIST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("failed to build the HTTP client")?;
+    let request = match api_key {
+        Some(key) => http.get(url.clone()).bearer_auth(key),
+        None => http.get(url.clone()),
+    };
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("failed to ask {url} for its models"))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("{url} returned HTTP {status}");
+    }
+    let list = response
+        .json::<ModelList>()
+        .await
+        .with_context(|| format!("{url} did not return a model list"))?;
+    let mut models: Vec<String> = Vec::new();
+    for model in list.data {
+        if !models.contains(&model.id) {
+            models.push(model.id);
+        }
+    }
+    Ok(models)
+}
+
+/// Set the model for `role` and have a running daemon apply it.
+pub async fn set_model(paths: &Paths, role: ModelRole, model: &str) -> Result<ConfigChange> {
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        bail!("enter a model name");
+    }
+    let (key, request) = match role {
+        ModelRole::Asr => (config::Key::ProviderModel, v1::Request::ProviderReload),
+        ModelRole::Polish => (config::Key::PolishModel, v1::Request::PolishReload),
+    };
+    // The write waits on a file lock; keep it off the caller's runtime thread.
+    let file = paths.config_file.clone();
+    tokio::task::spawn_blocking(move || config::update_value(&file, key, &model))
+        .await
+        .context("the config writer stopped")??;
+    reload(paths, &request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::{ModelRole, list_models, models_url, set_model};
+    use crate::config::{Config, Paths};
+    use crate::reload::ConfigChange;
+
+    /// Paths in a fresh directory holding `config`, where no daemon listens.
+    fn scratch(name: &str, config: &str) -> Paths {
+        let dir = std::env::temp_dir().join(format!("limen-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.toml"), config).unwrap();
+        Paths {
+            socket: dir.join("limen.sock"),
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+            config_file: dir.join("config.toml"),
+        }
+    }
+
+    #[test]
+    fn the_models_route_sits_beside_the_configured_one() {
+        assert_eq!(
+            [
+                (
+                    "http://127.0.0.1:8000/v1/audio/transcriptions?x=1",
+                    "audio/transcriptions"
+                ),
+                (
+                    "https://api.deepseek.com/chat/completions",
+                    "chat/completions"
+                ),
+                ("http://127.0.0.1:8080/inference", "audio/transcriptions"),
+                (
+                    "http://127.0.0.1:8000/v1/xaudio/transcriptions",
+                    "audio/transcriptions"
+                ),
+            ]
+            .map(|(endpoint, route)| models_url(endpoint, route).map(String::from)),
+            [
+                Some("http://127.0.0.1:8000/v1/models".to_string()),
+                Some("https://api.deepseek.com/models".to_string()),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_lists_each_model_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 4096];
+            let read = socket.read(&mut request).await.unwrap();
+            let body = r#"{"object":"list","data":[{"id":"b"},{"id":"a"},{"id":"b"}]}"#;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&request[..read]).into_owned()
+        });
+        let paths = scratch(
+            "models-list",
+            &format!(
+                "[provider]\nurl = \"http://{address}/v1/audio/transcriptions\"\nmodel = \"m\"\n"
+            ),
+        );
+
+        let models = list_models(&paths, ModelRole::Asr).await.unwrap();
+
+        assert_eq!(models, ["b", "a"]);
+        assert!(server.await.unwrap().starts_with("GET /v1/models "));
+    }
+
+    #[tokio::test]
+    async fn the_chosen_model_is_saved_trimmed() {
+        let paths = scratch(
+            "models-set",
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n",
+        );
+
+        let changes = [
+            set_model(&paths, ModelRole::Asr, " Qwen/Qwen3-ASR-1.7B ")
+                .await
+                .unwrap(),
+            set_model(&paths, ModelRole::Polish, "deepseek-chat")
+                .await
+                .unwrap(),
+        ];
+
+        let config = Config::load(&paths.config_file).unwrap();
+        assert_eq!(
+            (
+                changes,
+                config.provider.model.as_str(),
+                config.polish.model.as_str()
+            ),
+            (
+                [ConfigChange::Saved, ConfigChange::Saved],
+                "Qwen/Qwen3-ASR-1.7B",
+                "deepseek-chat"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_model_is_refused() {
+        let config =
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n";
+        let paths = scratch("models-blank", config);
+
+        assert!(set_model(&paths, ModelRole::Asr, "  ").await.is_err());
+        assert_eq!(fs::read_to_string(&paths.config_file).unwrap(), config);
+    }
+}
