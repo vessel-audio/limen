@@ -44,12 +44,13 @@ pub fn artifacts_for(name: &str) -> PathBuf {
         .join(name.replace("::", "/"))
 }
 
-/// How a case names a node: by accessible ID, or by role for the controls
-/// whose components set no ID.
+/// How a case names a node: by accessible ID, or by role, and name where a
+/// page has several, for the controls whose components set no ID.
 #[derive(Debug, Clone, Copy)]
 pub enum Target<'a> {
     Id(&'a str),
     Role(Role),
+    Named(Role, &'a str),
 }
 
 impl Target<'_> {
@@ -57,6 +58,7 @@ impl Target<'_> {
         match self {
             Self::Id(id) => node.id == *id,
             Self::Role(role) => node.role == *role,
+            Self::Named(role, name) => node.role == *role && node.name == *name,
         }
     }
 }

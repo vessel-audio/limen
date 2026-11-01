@@ -7,7 +7,7 @@ use limen_core::{Config, Delivery, v1};
 use super::{failed_request, retype};
 use crate::daemon::Scenario;
 use crate::desktop::{Button, Key};
-use crate::session::Session;
+use crate::session::{Session, Target};
 
 /// Starting records; stopping transcribes and keeps the text, which lands
 /// on the clipboard with a toast instead of being typed.
@@ -148,7 +148,7 @@ pub fn recording_another_take_queues_it() -> Result<()> {
 /// Pick the route at `index` from the list; its items have no accessible
 /// names, and the list offers `/v1/audio/transcriptions`, then `/inference`.
 fn choose_route(session: &Session, index: usize) -> Result<()> {
-    session.click(Role::ComboBox)?;
+    session.click(Target::Named(Role::ComboBox, "Route"))?;
     let item = session.settled_by("a route in the list", |nodes| {
         nodes
             .iter()
@@ -212,6 +212,54 @@ pub fn an_invalid_asr_server_is_reported() -> Result<()> {
     ensure!(
         !session.paths().config_file.exists(),
         "an invalid server was written"
+    );
+    Ok(())
+}
+
+/// A model name the servers do not list is typed into each model's search
+/// and applied at once: the config holds it and the daemon reloads it.
+pub fn typed_models_are_saved_and_applied() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    for (select, model, toast) in [
+        ("ASR model", "Qwen/Qwen3-ASR-1.7B", "ASR model applied"),
+        ("Polish model", "deepseek-chat", "Polish model applied"),
+    ] {
+        session.click(Target::Named(Role::ComboBox, select))?;
+        session.node(Role::List)?;
+        session.x11().type_text(model)?;
+        session.wait(&format!("only {model} offered"), |nodes| {
+            // List items carry no name; the typed one is the only match.
+            (nodes
+                .iter()
+                .filter(|node| node.role == Role::ListItem)
+                .count()
+                == 1)
+                .then_some(())
+        })?;
+        session.chord(&[Key::RETURN])?;
+        session.named("toast", toast)?;
+    }
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        (config.provider.model.as_str(), config.polish.model.as_str())
+            == ("Qwen/Qwen3-ASR-1.7B", "deepseek-chat"),
+        "the config holds {:?} and {:?}",
+        config.provider.model,
+        config.polish.model
+    );
+    let reloads: Vec<_> = session
+        .requests()?
+        .into_iter()
+        .filter(|request| {
+            matches!(
+                request,
+                v1::Request::ProviderReload | v1::Request::PolishReload
+            )
+        })
+        .collect();
+    ensure!(
+        reloads == [v1::Request::ProviderReload, v1::Request::PolishReload],
+        "the daemon was asked for {reloads:?}"
     );
     Ok(())
 }

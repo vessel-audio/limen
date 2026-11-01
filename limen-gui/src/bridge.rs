@@ -9,8 +9,9 @@ use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, Keys, Launch,
-    Paths, ProviderEndpoint, Push, Report, SetupError, Shortcut, clear, daemon_peer_pid, edit, set,
-    set_provider_server, setup, spawn_daemon, subscribe, terminate_daemon, v1,
+    ModelRole, Paths, ProviderEndpoint, Push, Report, SetupError, Shortcut, clear, daemon_peer_pid,
+    edit, list_models, set, set_model, set_provider_server, setup, spawn_daemon, subscribe,
+    terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -39,6 +40,13 @@ pub enum BridgeCommand {
         server: String,
         endpoint: ProviderEndpoint,
     },
+    /// Ask the configured server which models it offers for `role`.
+    ListModels(ModelRole),
+    /// Set the model for `role` and apply it in a running daemon.
+    SetModel {
+        role: ModelRole,
+        model: String,
+    },
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
@@ -65,6 +73,15 @@ pub enum BridgeEvent {
     OfferTerminate,
     ShortcutReport(Result<Report, ShortcutFailure>),
     ProviderUrl(Result<ConfigChange, String>),
+    /// The models a server offers; empty when it lists none.
+    Models {
+        role: ModelRole,
+        models: Vec<String>,
+    },
+    ModelSet {
+        role: ModelRole,
+        result: Result<ConfigChange, String>,
+    },
     Toast(Toast),
 }
 
@@ -487,6 +504,28 @@ async fn handle_command(
                 .map_err(|_| "daemon request timed out".to_string())
                 .and_then(|result| result.map_err(|error| format!("{error:#}")));
                 let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
+            });
+        }
+        BridgeCommand::ListModels(role) => {
+            let (paths, events) = (paths.clone(), events.clone());
+            tokio::spawn(async move {
+                // Servers such as whisper.cpp list no models; any name still works.
+                let models = list_models(&paths, role).await.unwrap_or_else(|error| {
+                    tracing::debug!(?role, error = %format!("{error:#}"), "no model list");
+                    Vec::new()
+                });
+                let _ = events.send(BridgeEvent::Models { role, models }).await;
+            });
+        }
+        BridgeCommand::SetModel { role, model } => {
+            let (paths, events) = (paths.clone(), events.clone());
+            tokio::spawn(async move {
+                let result =
+                    tokio::time::timeout(Duration::from_secs(3), set_model(&paths, role, &model))
+                        .await
+                        .map_err(|_| "daemon request timed out".to_string())
+                        .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                let _ = events.send(BridgeEvent::ModelSet { role, result }).await;
             });
         }
         BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),

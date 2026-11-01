@@ -209,7 +209,8 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>, window: &mut Window)
                 ),
         )
         .child(waveform)
-        .child(super::provider::provider(view, cx, window));
+        .child(super::provider::provider(view, cx, window))
+        .child(super::models::models(view, cx));
     div()
         .v_flex()
         .flex_1()

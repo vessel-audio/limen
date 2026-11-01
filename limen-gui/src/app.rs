@@ -5,12 +5,12 @@ use gpui_kit::*;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use limen_core::{Backend, ConfigChange, DictationState, Paths};
+use limen_core::{Backend, ConfigChange, DictationState, ModelRole, Paths};
 
 use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, GuiState, Msg, Toast};
-use crate::pages::{self, ProviderForm};
+use crate::pages::{self, ModelForms, ProviderForm};
 use crate::recorder::RecorderState;
 use crate::settings::{
     AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, SettingsPage,
@@ -40,6 +40,7 @@ pub struct AppView {
     pub toggle_focused: bool,
     pub hold_focused: bool,
     pub provider: ProviderForm,
+    pub models: ModelForms,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     pub appearance: AppearancePreference,
@@ -97,6 +98,7 @@ impl AppView {
                 .default_value("Super+X")
         });
         let (provider, provider_subscriptions) = ProviderForm::new(window, cx);
+        let (models, model_subscriptions) = ModelForms::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -147,9 +149,11 @@ impl AppView {
             toggle_focused: false,
             hold_focused: false,
             provider,
+            models,
             _subscriptions: subscriptions
                 .into_iter()
                 .chain(provider_subscriptions)
+                .chain(model_subscriptions)
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             appearance: AppearancePreference::System,
@@ -199,6 +203,7 @@ impl AppView {
             self.toggle_touched = false;
             self.hold_touched = false;
             self.provider.error = None;
+            self.models.reset();
             self.backend_selected = false;
         }
         if let BridgeEvent::Msg(Msg::Snapshot(snapshot)) = &event
@@ -207,6 +212,7 @@ impl AppView {
             self.selected_backend = snapshot.shortcut.backend;
         }
         let actions = self.apply_event(event);
+        pages::request_model_lists(self);
         self.update_level_tracking(level_event);
         actions
     }
@@ -237,6 +243,11 @@ impl AppView {
                 self.provider.finish(Some(message));
                 Vec::new()
             }
+            BridgeEvent::Models { role, models } => {
+                self.models.listed(role, models);
+                Vec::new()
+            }
+            BridgeEvent::ModelSet { role, result } => self.models.finish(role, result),
             BridgeEvent::Toast(_) => Vec::new(),
         }
     }
@@ -332,6 +343,10 @@ impl AppView {
             Toast::CopiedToClipboard => "toast.copied",
             Toast::ProviderApplied => "toast.provider_applied",
             Toast::ProviderSaved => "toast.provider_saved",
+            Toast::ModelApplied(ModelRole::Asr) => "toast.asr_model_applied",
+            Toast::ModelSaved(ModelRole::Asr) => "toast.asr_model_saved",
+            Toast::ModelApplied(ModelRole::Polish) => "toast.polish_model_applied",
+            Toast::ModelSaved(ModelRole::Polish) => "toast.polish_model_saved",
         };
         self.toast = Some((rust_i18n::t!(key).to_string(), Instant::now()));
     }
@@ -395,6 +410,7 @@ impl Render for AppView {
         ] {
             scroll.step(window);
         }
+        pages::follow_models(self, window, cx);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()

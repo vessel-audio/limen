@@ -15,6 +15,9 @@ use crate::bridge::BridgeCommand;
 
 type EndpointSelect = SelectState<SearchableVec<&'static str>>;
 
+/// Width of the labels before the strip's fields, so the fields line up.
+pub const LABEL_WIDTH: Pixels = px(80.);
+
 /// State of the ASR server row. The fields follow the daemon until the user
 /// edits them, and again once a change the user made has been applied.
 pub struct ProviderForm {
@@ -126,6 +129,7 @@ pub fn provider(view: &AppView, cx: &mut Context<AppView>, window: &mut Window) 
                 .child(
                     div()
                         .flex_shrink_0()
+                        .w(LABEL_WIDTH)
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(title.clone()),

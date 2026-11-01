@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use limen_core::{DictationState, Level, StateSnapshot, WireSnapshot};
+use limen_core::{DictationState, Level, ModelRole, StateSnapshot, WireSnapshot};
 
 /// Connection and daemon-launch state shown across every page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +48,10 @@ pub enum Toast {
     ProviderApplied,
     /// The new ASR endpoint is saved for when the daemon next starts.
     ProviderSaved,
+    /// The running daemon uses the chosen model from now on.
+    ModelApplied(ModelRole),
+    /// The chosen model is saved for when the daemon next starts.
+    ModelSaved(ModelRole),
 }
 
 /// Side effects requested by a pure state transition.

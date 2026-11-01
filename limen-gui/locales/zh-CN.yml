@@ -134,3 +134,10 @@ toast.provider_saved: 已保存 ASR 服务，后台服务启动时生效
 provider.route: 路径
 settings.off: 关闭
 settings.on: 开启
+models.asr: ASR 模型
+models.polish: 润色模型
+models.search: 搜索或输入模型
+toast.asr_model_applied: 已应用新的 ASR 模型
+toast.asr_model_saved: 已保存 ASR 模型，后台服务启动时生效
+toast.polish_model_applied: 已应用新的润色模型
+toast.polish_model_saved: 已保存润色模型，后台服务启动时生效

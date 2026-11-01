@@ -134,3 +134,10 @@ toast.provider_saved: ASR server saved; the daemon uses it when it starts
 provider.route: Route
 settings.off: Off
 settings.on: On
+models.asr: ASR model
+models.polish: Polish model
+models.search: Search or enter a model
+toast.asr_model_applied: ASR model applied
+toast.asr_model_saved: ASR model saved; the daemon uses it when it starts
+toast.polish_model_applied: Polish model applied
+toast.polish_model_saved: Polish model saved; the daemon uses it when it starts
