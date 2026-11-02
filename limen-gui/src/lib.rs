@@ -2,6 +2,7 @@
 
 mod a11y;
 mod app;
+mod assets;
 mod bridge;
 mod chrome;
 mod instance;
@@ -46,7 +47,7 @@ pub fn run(paths: Paths) -> Result<()> {
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
             gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);

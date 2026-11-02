@@ -83,8 +83,9 @@ impl AppView {
                                     .items_center()
                                     .justify_center()
                                     .child(
-                                        Icon::new(IconName::Mic)
-                                            .size(px(14.))
+                                        Icon::empty()
+                                            .path(crate::assets::MARK)
+                                            .size(px(16.))
                                             .text_color(cx.theme().primary_foreground),
                                     ),
                             )

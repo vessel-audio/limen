@@ -1,6 +1,5 @@
 //! User-interface preferences and the settings subpages.
 
-use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt, scroll::ScrollbarMode,
     searchable_list::SearchableListItem, select::Select,
@@ -276,7 +275,8 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         .px_16()
         .py_12()
         .child(
-            Icon::new(IconName::Mic)
+            Icon::empty()
+                .path(crate::assets::MARK)
                 .size(px(36.))
                 .text_color(cx.theme().primary),
         )
