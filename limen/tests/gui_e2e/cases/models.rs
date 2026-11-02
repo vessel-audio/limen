@@ -12,8 +12,9 @@ use crate::daemon::Scenario;
 use crate::desktop::{Key, Node};
 use crate::session::{Launch, Session, Target};
 
-/// Answer every connection with an OpenAI-compatible list of `models`, and
-/// return the server's address and the requests it received.
+/// An OpenAI-compatible server that lists `models`, transcribes every
+/// take to nothing, and corrects every text; returns its address and the
+/// requests it received.
 fn serve_models(models: &'static [&'static str]) -> Result<(String, Arc<Mutex<Vec<String>>>)> {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -22,17 +23,42 @@ fn serve_models(models: &'static [&'static str]) -> Result<(String, Arc<Mutex<Ve
     let received = Arc::clone(&requests);
     std::thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
-            let mut request = [0; 4096];
-            let read = stream.read(&mut request).unwrap_or_default();
-            received
-                .lock()
-                .unwrap()
-                .push(String::from_utf8_lossy(&request[..read]).into_owned());
-            let data: Vec<String> = models
-                .iter()
-                .map(|model| format!(r#"{{"id":"{model}"}}"#))
-                .collect();
-            let body = format!(r#"{{"object":"list","data":[{}]}}"#, data.join(","));
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            // Read the whole request, so an upload is never cut off.
+            loop {
+                let read = stream.read(&mut chunk).unwrap_or_default();
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request);
+                let complete = text.split_once("\r\n\r\n").is_some_and(|(head, _)| {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    request.len() >= head.len() + 4 + length
+                });
+                if read == 0 || complete {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request).into_owned();
+            let line = request.lines().next().unwrap_or_default().to_string();
+            received.lock().unwrap().push(request);
+            let body = match () {
+                () if line.contains("/chat/completions") => r#"{"id":"r","object":"chat.completion","model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"This is a test."}}]}"#.to_string(),
+                () if line.contains("/audio/transcriptions") => r#"{"text":""}"#.to_string(),
+                () => {
+                    let data: Vec<String> = models
+                        .iter()
+                        .map(|model| format!(r#"{{"id":"{model}"}}"#))
+                        .collect();
+                    format!(r#"{{"object":"list","data":[{}]}}"#, data.join(","))
+                }
+            };
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -440,6 +466,76 @@ pub fn the_model_is_detected_from_the_typed_server() -> Result<()> {
                 .any(|request| request.starts_with("GET /v1/models ")),
         "saved {:?}; the server was asked {asked:?}",
         provider.url
+    );
+    Ok(())
+}
+
+/// Detect asks for the models at once, and says so when there is no
+/// server to ask.
+pub fn the_models_are_detected_on_request() -> Result<()> {
+    let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
+    let session = Session::fake(Scenario::default())?;
+    session.click("asr-page")?;
+    session.node("asr-server")?;
+    session.click("asr-detect")?;
+    session.named("asr-error", "Enter the server first")?;
+    retype(&session, "asr-server", &server)?;
+    session.click("asr-detect")?;
+    session.until("the listed models to be offered", || {
+        session.click(Target::Named(Role::ComboBox, "Model"))?;
+        session.node(Role::List)?;
+        let offered = session.wait("the open list", |nodes| Some(list_items(nodes)))? == 2;
+        session.chord(&[Key::ESCAPE])?;
+        closed(&session)?;
+        Ok(offered)
+    })?;
+    let asked = requests.lock().unwrap().clone();
+    ensure!(
+        asked
+            .iter()
+            .any(|request| request.starts_with("GET /v1/models ")),
+        "the server was asked {asked:?}"
+    );
+    Ok(())
+}
+
+/// Test asks the chosen model to do its job with the fields as typed, and
+/// saves nothing.
+pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
+    let (server, requests) = serve_models(&["only-model"])?;
+    let session = Session::fake(Scenario::default())?;
+    session.click("asr-page")?;
+    retype(&session, "asr-server", &server)?;
+    // Test turns on once the server's only model fills the field.
+    session.state("asr-test", State::Focusable, true)?;
+    session.click("asr-test")?;
+    session.named("toast", "The ASR model answered")?;
+    session.click("polish-page")?;
+    retype(
+        &session,
+        "polish-url",
+        &format!("{server}/v1/chat/completions"),
+    )?;
+    session.state("polish-test", State::Focusable, true)?;
+    session.click("polish-test")?;
+    session.named("toast", "The polish model answered")?;
+    let asked = requests.lock().unwrap().clone();
+    ensure!(
+        [
+            "POST /v1/audio/transcriptions ",
+            "POST /v1/chat/completions "
+        ]
+        .iter()
+        .all(|route| asked.iter().any(|request| request.starts_with(route))),
+        "the server was asked {:?}",
+        asked
+            .iter()
+            .map(|request| request.lines().next().unwrap_or_default())
+            .collect::<Vec<_>>()
+    );
+    ensure!(
+        !session.paths().config_file.exists(),
+        "testing a model saved it"
     );
     Ok(())
 }

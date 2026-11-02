@@ -68,6 +68,10 @@ pub struct ProviderForm {
     pub clear_key: bool,
     /// When the address, key, or service was last edited.
     edited_at: Option<Instant>,
+    /// The user asked for the models, so a failure to list them shows.
+    detecting: bool,
+    /// The model check in flight.
+    checking: Option<u64>,
     /// Counts key edits, so a list asked with an older key is told apart
     /// without keeping the key itself.
     key_edits: u64,
@@ -215,6 +219,8 @@ impl ModelForms {
                 unlisted_route: None,
                 clear_key: false,
                 edited_at: None,
+                detecting: false,
+                checking: None,
                 key_edits: 0,
                 touched: false,
                 next_request: 0,
@@ -311,6 +317,7 @@ impl ProviderForm {
         let restart = |form: &mut Self| {
             form.edited_at = Some(Instant::now());
             form.listing = Listing::Unknown;
+            form.detecting = false;
         };
         match field {
             EditedField::Service => {
@@ -467,5 +474,6 @@ mod discovery;
 mod fields;
 mod save;
 
+pub use discovery::{check, detect};
 pub use fields::{Address, EditedField};
 pub use save::save;

@@ -149,7 +149,13 @@ models.remove_key: Remove
 models.model: Model
 models.search: Search or enter a model
 models.save: Save
+models.detect: Detect
+models.test: Test
+models.no_models: The server listed no models
+models.enter_server: Enter the server first
 toast.asr_applied: ASR settings applied
 toast.asr_saved: ASR settings saved; the daemon uses them when it starts
 toast.polish_applied: Polish settings applied
+toast.asr_model_works: The ASR model answered
+toast.polish_model_works: The polish model answered
 toast.polish_saved: Polish settings saved; the daemon uses them when it starts

@@ -241,6 +241,7 @@ impl AppView {
                 self.models.listed(role, request, models);
                 Vec::new()
             }
+            BridgeEvent::ModelChecked { role, id, result } => self.models.checked(role, id, result),
             BridgeEvent::Toast(_) => Vec::new(),
         }
     }
@@ -338,6 +339,8 @@ impl AppView {
             Toast::ProviderSaved(ModelRole::Asr) => "toast.asr_saved",
             Toast::ProviderApplied(ModelRole::Polish) => "toast.polish_applied",
             Toast::ProviderSaved(ModelRole::Polish) => "toast.polish_saved",
+            Toast::ModelWorks(ModelRole::Asr) => "toast.asr_model_works",
+            Toast::ModelWorks(ModelRole::Polish) => "toast.polish_model_works",
         };
         self.toast = Some((rust_i18n::t!(key).to_string(), Instant::now()));
     }

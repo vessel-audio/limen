@@ -17,7 +17,7 @@ mod form;
 
 pub use form::{ModelForms, follow};
 
-use form::{Address, EditedField, save};
+use form::{Address, EditedField, check, detect, save};
 
 pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
     let (form, prefix, title) = match role {
@@ -140,11 +140,34 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                     });
                 }))
         }));
-    let model = Select::new(&form.model)
-        .id(SharedString::from(format!("{prefix}-model")))
-        .accessibility_label(rust_i18n::t!("models.model").to_string())
-        .placeholder(rust_i18n::t!("models.model").to_string())
-        .search_placeholder(rust_i18n::t!("models.search").to_string());
+    let model = div()
+        .h_flex()
+        .gap_2()
+        .child(
+            div().flex_1().min_w_0().child(
+                Select::new(&form.model)
+                    .id(SharedString::from(format!("{prefix}-model")))
+                    .accessibility_label(rust_i18n::t!("models.model").to_string())
+                    .placeholder(rust_i18n::t!("models.model").to_string())
+                    .search_placeholder(rust_i18n::t!("models.search").to_string()),
+            ),
+        )
+        .child(
+            a11y::button(format!("{prefix}-detect"))
+                .ghost()
+                .label(rust_i18n::t!("models.detect").to_string())
+                .flex_shrink_0()
+                .disabled(form.loaded.is_none() || form.detecting())
+                .on_click(cx.listener(move |this, _, _, cx| detect(this, role, cx))),
+        )
+        .child(
+            a11y::button(format!("{prefix}-test"))
+                .ghost()
+                .label(rust_i18n::t!("models.test").to_string())
+                .flex_shrink_0()
+                .disabled(!form.can_check())
+                .on_click(cx.listener(move |this, _, _, cx| check(this, role, cx))),
+        );
     let rows = address.into_iter().chain([
         (
             rust_i18n::t!("models.key").to_string(),

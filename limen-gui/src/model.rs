@@ -48,6 +48,8 @@ pub enum Toast {
     ProviderApplied(ModelRole),
     /// The provider is saved for when the daemon next starts.
     ProviderSaved(ModelRole),
+    /// The model answered a check.
+    ModelWorks(ModelRole),
 }
 
 /// Side effects requested by a pure state transition.
