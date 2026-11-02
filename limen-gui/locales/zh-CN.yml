@@ -149,7 +149,13 @@ models.remove_key: 删除
 models.model: 模型
 models.search: 搜索或输入模型
 models.save: 保存
+models.detect: 检测
+models.test: 测试
+models.no_models: 服务器未列出任何模型
+models.enter_server: 请先填写服务器
 toast.asr_applied: 已应用 ASR 设置
 toast.asr_saved: 已保存 ASR 设置，后台服务启动时生效
 toast.polish_applied: 已应用润色设置
+toast.asr_model_works: ASR 模型可用
+toast.polish_model_works: 润色模型可用
 toast.polish_saved: 已保存润色设置，后台服务启动时生效

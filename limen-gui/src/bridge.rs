@@ -11,8 +11,8 @@ use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeyChange,
     KeySource, Keys, Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError,
-    Shortcut, clear, daemon_peer_pid, edit, list_models, load_provider, save_provider, set, setup,
-    spawn_daemon, subscribe, terminate_daemon, v1,
+    Shortcut, check_model, clear, daemon_peer_pid, edit, list_models, load_provider, save_provider,
+    set, setup, spawn_daemon, subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -53,6 +53,14 @@ pub enum BridgeCommand {
     ListModels {
         role: ModelRole,
         request: u64,
+        provider: Provider,
+        key: KeyChange,
+    },
+    /// Ask the model a page's unsaved fields name to answer one request;
+    /// the reply carries `id` back.
+    CheckModel {
+        role: ModelRole,
+        id: u64,
         provider: Provider,
         key: KeyChange,
     },
@@ -98,6 +106,12 @@ pub enum BridgeEvent {
         role: ModelRole,
         request: u64,
         models: Result<Vec<String>, String>,
+    },
+    /// Whether the model answered, or why it did not.
+    ModelChecked {
+        role: ModelRole,
+        id: u64,
+        result: Result<(), String>,
     },
     Toast(Toast),
 }
@@ -568,6 +582,23 @@ async fn handle_command(
                         request,
                         models,
                     })
+                    .await;
+            });
+        }
+        BridgeCommand::CheckModel {
+            role,
+            id,
+            provider,
+            key,
+        } => {
+            let (paths, events) = (paths.clone(), events.clone());
+            let backend = env.models.clone();
+            tokio::spawn(async move {
+                let result = check_model(&paths, &provider, &key, &*backend)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = events
+                    .send(BridgeEvent::ModelChecked { role, id, result })
                     .await;
             });
         }

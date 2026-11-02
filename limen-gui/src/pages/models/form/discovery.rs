@@ -1,6 +1,6 @@
 //! Asking the server a page names for its models while the page is
-//! edited, offering them in the model select, and choosing the only one a
-//! server offers.
+//! edited or when the user asks, offering them in the model select,
+//! choosing the only one a server offers, and trying the chosen model.
 
 use std::time::{Duration, Instant};
 
@@ -8,9 +8,10 @@ use gpui_kit::*;
 use limen_core::{ModelRole, Provider};
 use tokio::sync::mpsc;
 
-use super::{EditedField, ModelForms, ProviderForm, save};
+use super::{Address, EditedField, ModelForms, ProviderForm, save};
 use crate::app::AppView;
 use crate::bridge::BridgeCommand;
+use crate::model::{Action, Toast};
 use crate::pages::models::choices::ModelChoices;
 
 /// How long an endpoint that could not list models waits before it is asked
@@ -46,6 +47,16 @@ impl ModelForms {
             && *asked == request
         {
             let endpoint = endpoint.clone();
+            if form.detecting {
+                form.detecting = false;
+                form.error = match &models {
+                    Ok(models) if models.is_empty() => {
+                        Some(rust_i18n::t!("models.no_models").to_string())
+                    }
+                    Ok(_) => None,
+                    Err(message) => Some(message.clone()),
+                };
+            }
             // A server that offers exactly one model has decided it, unless
             // the user or the saved settings chose one.
             if let Ok([only]) = models.as_deref()
@@ -71,6 +82,95 @@ impl ModelForms {
                 }
             };
         }
+    }
+}
+
+impl ModelForms {
+    /// Record how the model check `id` ended, if it is the one in flight.
+    pub fn checked(&mut self, role: ModelRole, id: u64, result: Result<(), String>) -> Vec<Action> {
+        let form = self.form(role);
+        if form.checking != Some(id) {
+            return Vec::new();
+        }
+        form.checking = None;
+        match result {
+            Ok(()) => vec![Action::Toast(Toast::ModelWorks(role))],
+            Err(message) => {
+                form.error = Some(message);
+                Vec::new()
+            }
+        }
+    }
+}
+
+impl ProviderForm {
+    /// The server is being asked for its models.
+    pub fn detecting(&self) -> bool {
+        matches!(self.listing, Listing::Asked(..))
+    }
+
+    /// A model is chosen and no check of one is in flight.
+    pub fn can_check(&self) -> bool {
+        self.loaded.is_some() && self.chosen.is_some() && self.checking.is_none()
+    }
+}
+
+/// The page's fields, or why they name no server to ask.
+fn named(form: &ProviderForm, cx: &App) -> Result<(Provider, limen_core::KeyChange), String> {
+    let address = match &form.address {
+        Address::Server { server } => server.read(cx).value(),
+        Address::Url { url, .. } => url.read(cx).value(),
+    };
+    match (form.chosen_service.uses_url(), address.trim().is_empty()) {
+        (true, true) => Err(rust_i18n::t!("models.enter_server").to_string()),
+        (true, false) | (false, _) => save::fields(form, cx).map_err(|error| format!("{error:#}")),
+    }
+}
+
+/// Ask the server the fields name for its models now, without waiting for
+/// them to settle or for a failed list to be retried.
+pub fn detect(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
+    let form = view.models.form(role);
+    if form.loaded.is_none() {
+        return;
+    }
+    match named(form, cx) {
+        Ok(_) => {
+            form.listing = Listing::Unknown;
+            form.edited_at = None;
+            form.detecting = true;
+            form.error = None;
+        }
+        Err(message) => form.error = Some(message),
+    }
+}
+
+/// Ask the chosen model to answer one request with the fields as they are.
+pub fn check(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
+    let form = view.models.form(role);
+    if !form.can_check() {
+        return;
+    }
+    let (provider, key) = match named(form, cx) {
+        Ok(fields) => fields,
+        Err(message) => {
+            form.error = Some(message);
+            return;
+        }
+    };
+    form.next_request += 1;
+    let id = form.next_request;
+    match view.commands.try_send(BridgeCommand::CheckModel {
+        role,
+        id,
+        provider,
+        key,
+    }) {
+        Ok(()) => {
+            form.checking = Some(id);
+            form.error = None;
+        }
+        Err(error) => form.error = Some(error.to_string()),
     }
 }
 

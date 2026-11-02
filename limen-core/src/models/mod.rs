@@ -1,7 +1,8 @@
 //! The ASR and polishing model providers: their settings as saved, saving
 //! them for a running daemon to apply, and the models their servers offer.
 //!
-//! Servers are asked for their models through the backend. Servers it does
+//! Servers are asked for their models through the backend, and a model can
+//! be tried with one request before it is saved. Servers the backend does
 //! not reach, such as the whisper.cpp server, list nothing, and any model
 //! name may still be set.
 
@@ -13,8 +14,10 @@ use crate::backend::ModelBackend;
 use crate::config::{self, ApiKey, Config, KeyChange, Paths, Service};
 use crate::connection::{self, AsrRoute};
 
+mod check;
 mod settings;
 
+pub use check::check_model;
 pub use settings::{KeySource, KeyState, Polishing, Provider, load_provider, save_provider};
 
 /// How long a server may take to list its models.
@@ -29,19 +32,13 @@ pub enum ModelRole {
     Polish,
 }
 
-/// The models the server `provider` names offers, in its order, as
-/// `backend` lists them. The page asks while it is being edited, so
-/// `provider` and `key` are its unsaved fields. A key the user typed is
-/// sent wherever they point it; a stored one, saved or named by
-/// `api_key_env`, only to the service and server it was saved for, so a
+/// The config as the page's unsaved fields would leave it for `provider`'s
+/// role: its service, URL, and model, and which key it sends. A key the
+/// user typed is sent wherever they point it; a stored one, saved or named
+/// by `api_key_env`, only to the service and server it was saved for, so a
 /// half-typed address never receives it. Elsewhere only the service's own
 /// variable, such as OPENAI_API_KEY, is read.
-pub async fn list_models(
-    paths: &Paths,
-    provider: &Provider,
-    key: &KeyChange,
-    backend: &dyn ModelBackend,
-) -> Result<Vec<String>> {
+fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config> {
     let (mut config, keys) = {
         let _lock = config::lock_dir(&paths.config_file)?;
         config::recover_provider_save(&paths.config_file)?;
@@ -67,8 +64,12 @@ pub async fn list_models(
     let same = |saved: Service, saved_url: &str, chosen: Service, url: &str| {
         chosen == saved && (!chosen.uses_url() || normalized(saved_url) == normalized(url))
     };
-    let (service, endpoint, connection) = match provider {
-        Provider::Asr { service, url, .. } => {
+    match provider {
+        Provider::Asr {
+            service,
+            url,
+            model,
+        } => {
             let same = same(
                 config.provider.service(),
                 &config.provider.url,
@@ -76,6 +77,7 @@ pub async fn list_models(
                 url,
             );
             config.provider.saved_key = stored(keys.asr, same);
+            config.provider.model = model.trim().to_string();
             match same {
                 true => {}
                 false => {
@@ -84,17 +86,16 @@ pub async fn list_models(
                     config.provider.api_key_env = None;
                 }
             }
-            match connection::asr(&config)? {
-                AsrRoute::Api(connection) => (*service, url, connection),
-                // Limen's own upload has no models route to ask.
-                AsrRoute::Upload(url) => {
-                    anyhow::bail!("{} lists no models", config::display_url(&url))
-                }
-            }
         }
-        Provider::Polish { service, url, .. } => {
+        Provider::Polish {
+            service,
+            url,
+            model,
+            ..
+        } => {
             let same = same(config.polish.service(), &config.polish.url, *service, url);
             config.polish.saved_key = stored(keys.polish, same);
+            config.polish.model = model.trim().to_string();
             match same {
                 true => {}
                 false => {
@@ -109,12 +110,34 @@ pub async fn list_models(
                 config::check_polish_url(url.trim())?;
                 config::check_polish_route(url.trim())?;
             }
-            (
-                *service,
-                url,
-                connection::polish(&config.polish, config.polish.api_key())?,
-            )
         }
+    }
+    Ok(config)
+}
+
+/// The models the server `provider` names offers, in its order, as
+/// `backend` lists them. The page asks while it is being edited, so
+/// `provider` and `key` are its unsaved fields, sent as [`edited`] says.
+pub async fn list_models(
+    paths: &Paths,
+    provider: &Provider,
+    key: &KeyChange,
+    backend: &dyn ModelBackend,
+) -> Result<Vec<String>> {
+    let config = edited(paths, provider, key)?;
+    let (service, endpoint, connection) = match provider {
+        Provider::Asr { service, url, .. } => match connection::asr(&config)? {
+            AsrRoute::Api(connection) => (*service, url, connection),
+            // Limen's own upload has no models route to ask.
+            AsrRoute::Upload(url) => {
+                anyhow::bail!("{} lists no models", config::display_url(&url))
+            }
+        },
+        Provider::Polish { service, url, .. } => (
+            *service,
+            url,
+            connection::polish(&config.polish, config.polish.api_key())?,
+        ),
     };
     // Errors may quote the server; the endpoint alone is safe to show.
     let shown = match service.uses_url() {

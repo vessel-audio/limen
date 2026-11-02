@@ -199,6 +199,49 @@ pub(crate) mod testing {
         }
     }
 
+    /// A backend whose models answer: the transcriber with `transcript`,
+    /// the chat model with `reply`.
+    pub(crate) struct Answering {
+        pub(crate) transcript: String,
+        pub(crate) reply: Reply,
+    }
+
+    struct Answer(String, Reply);
+
+    impl Transcriber for Answer {
+        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<String>> {
+            let transcript = self.0.clone();
+            Box::pin(async move { Ok(transcript) })
+        }
+    }
+
+    impl ChatModel for Answer {
+        fn reply<'a>(&'a self, _: Exchange<'a>) -> BoxFuture<'a, Result<Reply>> {
+            let reply = self.1.clone();
+            Box::pin(async move { Ok(reply) })
+        }
+    }
+
+    impl ModelBackend for Answering {
+        fn transcriber(&self, _: Connection, _: String) -> Result<Box<dyn Transcriber>> {
+            Ok(Box::new(Answer(
+                self.transcript.clone(),
+                self.reply.clone(),
+            )))
+        }
+
+        fn chat(&self, _: Connection, _: String) -> Result<Box<dyn ChatModel>> {
+            Ok(Box::new(Answer(
+                self.transcript.clone(),
+                self.reply.clone(),
+            )))
+        }
+
+        fn models(&self, _: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
     impl ModelBackend for Recording {
         fn transcriber(
             &self,
