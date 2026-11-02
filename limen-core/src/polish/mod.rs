@@ -28,14 +28,17 @@ impl Polisher {
         if !config.enabled {
             return Ok(Self::Disabled);
         }
-        let Some(api_key) = config.api_key() else {
+        let api_key = config.api_key();
+        // A server Limen is pointed at may need no key; a vendor always does.
+        if api_key.is_none() && !config.service().uses_url() {
             tracing::warn!(
-                variable = %config.api_key_env,
+                service = config.service().as_str(),
+                variable = ?config.key_env(),
                 "polishing is enabled but no API key is saved or set; using original transcripts"
             );
             return Ok(Self::MissingKey);
-        };
-        let connection = connection::polish(config, Some(api_key))?;
+        }
+        let connection = connection::polish(config, api_key)?;
         Ok(Self::Enabled {
             model: backend.chat(connection, config.model.clone())?,
             timeout: Duration::from_millis(config.timeout_ms),
@@ -122,7 +125,7 @@ mod tests {
     use super::{CONSERVATIVE_PROMPT, MAX_TOKENS, Polisher};
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, BoxFuture, ChatModel, Connection, Exchange, Finish, Reply};
-    use crate::config::{ApiKey, PolishConfig};
+    use crate::config::{ApiKey, PolishConfig, Service};
 
     /// How a scripted model answers.
     type Answer = fn() -> Result<Reply>;
@@ -276,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_polishing_builds_its_model_at_the_api_root_with_its_key() {
+    fn a_server_polishes_with_or_without_a_key() {
         let config = PolishConfig {
             enabled: true,
             url: "https://ai.example/v1/chat/completions".to_string(),
@@ -284,33 +287,54 @@ mod tests {
             saved_key: Some(ApiKey::new("sk-polish".to_string())),
             ..PolishConfig::default()
         };
+        let keyless = PolishConfig {
+            url: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
+            saved_key: None,
+            api_key_env: Some("LIMEN_TEST_DEFINITELY_MISSING_POLISH_KEY".to_string()),
+            ..config.clone()
+        };
         let backend = Recording::default();
 
-        let polisher = Polisher::from_config(&config, &backend).unwrap();
+        let polishers = [&config, &keyless].map(|config| Polisher::from_config(config, &backend));
 
-        assert!(matches!(polisher, Polisher::Enabled { .. }));
+        assert!(
+            polishers
+                .iter()
+                .all(|polisher| matches!(polisher, Ok(Polisher::Enabled { .. })))
+        );
         assert_eq!(
             backend.built.lock().unwrap().clone(),
-            [Built::Chat(
-                Connection {
-                    api: Api::Compatible,
-                    base_url: Some("https://ai.example/v1".to_string()),
-                    api_key: Some("sk-polish".to_string()),
-                },
-                "corrector".to_string()
-            )]
+            [
+                Built::Chat(
+                    Connection {
+                        api: Api::Compatible,
+                        base_url: Some("https://ai.example/v1".to_string()),
+                        api_key: Some("sk-polish".to_string()),
+                    },
+                    "corrector".to_string()
+                ),
+                Built::Chat(
+                    Connection {
+                        api: Api::Compatible,
+                        base_url: Some("http://127.0.0.1:8080/v1".to_string()),
+                        api_key: None,
+                    },
+                    "corrector".to_string()
+                ),
+            ]
         );
     }
 
     #[tokio::test]
     async fn missing_key_and_disabled_config_do_not_create_a_client() {
-        let mut missing_config = PolishConfig {
+        let missing_config = PolishConfig {
             enabled: true,
-            url: "http://127.0.0.1:1/chat/completions".to_string(),
+            service: Some(Service::OpenAi),
+            model: "corrector".to_string(),
+            api_key_env: Some("LIMEN_TEST_DEFINITELY_MISSING_POLISH_KEY".to_string()),
             timeout_ms: 100,
             ..PolishConfig::default()
         };
-        missing_config.api_key_env = "LIMEN_TEST_DEFINITELY_MISSING_POLISH_KEY".to_string();
         let missing = Polisher::from_config(&missing_config, &Refusing).unwrap();
         assert!(matches!(missing, Polisher::MissingKey));
         assert_eq!(missing.polish("原文".to_string()).await, "原文");

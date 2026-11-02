@@ -1,8 +1,10 @@
-//! The ASR server's address: a server and one of the known transcription
-//! routes, rather than a whole URL; a hand-edited config may still use any
-//! URL.
+//! The ASR server's address: a server and the transcription route its
+//! service uses, rather than a whole URL; a hand-edited config may still
+//! use any URL.
 
 use anyhow::{Result, bail};
+
+use crate::config::Service;
 
 /// The transcription route on the ASR server, after its address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,8 +16,6 @@ pub enum Endpoint {
 }
 
 impl Endpoint {
-    pub const ALL: [Self; 2] = [Self::Transcriptions, Self::Inference];
-
     pub fn path(self) -> &'static str {
         match self {
             Self::Transcriptions => "/v1/audio/transcriptions",
@@ -23,11 +23,21 @@ impl Endpoint {
         }
     }
 
-    /// The route whose path is exactly `path`.
-    pub fn from_path(path: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|endpoint| endpoint.path() == path)
+    /// The route `service` takes on its server; `None` for a vendor's own
+    /// API, which has no server to name.
+    pub fn of(service: Service) -> Option<Self> {
+        match service {
+            Service::OpenAiCompatible => Some(Self::Transcriptions),
+            Service::WhisperCpp => Some(Self::Inference),
+            Service::OpenAi
+            | Service::Anthropic
+            | Service::Gemini
+            | Service::DeepSeek
+            | Service::Mistral
+            | Service::Groq
+            | Service::OpenRouter
+            | Service::XAi => None,
+        }
     }
 }
 

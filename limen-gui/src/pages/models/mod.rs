@@ -28,36 +28,39 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
             rust_i18n::t!("models.polish_title"),
         ),
     };
+    let service = (
+        rust_i18n::t!("models.service").to_string(),
+        div()
+            .h_flex()
+            .child(
+                div().w(px(260.)).child(
+                    Select::new(&form.service)
+                        .id(SharedString::from(format!("{prefix}-service")))
+                        .accessibility_label(rust_i18n::t!("models.service").to_string()),
+                ),
+            )
+            .into_any_element(),
+    );
+    // A vendor's own API has no server to name.
+    let server = form.chosen_service.uses_url();
     let address = match &form.address {
-        Address::Server { server, route } => vec![(
-            rust_i18n::t!("models.server").to_string(),
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    div().flex_1().min_w_0().child(
-                        Input::new(server)
-                            .accessibility_id("asr-server")
-                            .aria_label(rust_i18n::t!("models.server").to_string()),
-                    ),
+        Address::Server { server: input } => [
+            Some(service),
+            server.then(|| {
+                (
+                    rust_i18n::t!("models.server").to_string(),
+                    Input::new(input)
+                        .accessibility_id("asr-server")
+                        .aria_label(rust_i18n::t!("models.server").to_string())
+                        .into_any_element(),
                 )
-                .child(
-                    div().flex_shrink_0().w(px(220.)).child(
-                        Select::new(route)
-                            .id("asr-route")
-                            .accessibility_label(rust_i18n::t!("models.route").to_string())
-                            // Names a hand-edited route the list does not offer.
-                            .placeholder(
-                                form.unlisted_route
-                                    .clone()
-                                    .unwrap_or_else(|| rust_i18n::t!("models.route").to_string()),
-                            ),
-                    ),
-                )
-                .into_any_element(),
-        )],
-        Address::Url { polishing, url } => vec![
-            (
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
+        Address::Url { polishing, url } => [
+            Some((
                 rust_i18n::t!("models.polishing").to_string(),
                 // A row of its own, so the track keeps the width of its options.
                 div()
@@ -92,15 +95,21 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                         cx,
                     ))
                     .into_any_element(),
-            ),
-            (
-                rust_i18n::t!("models.url").to_string(),
-                Input::new(url)
-                    .accessibility_id("polish-url")
-                    .aria_label(rust_i18n::t!("models.url").to_string())
-                    .into_any_element(),
-            ),
-        ],
+            )),
+            Some(service),
+            server.then(|| {
+                (
+                    rust_i18n::t!("models.url").to_string(),
+                    Input::new(url)
+                        .accessibility_id("polish-url")
+                        .aria_label(rust_i18n::t!("models.url").to_string())
+                        .into_any_element(),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>(),
     };
     let saved_key = matches!(form.loaded, Some((_, KeyState::Saved))) && !form.clear_key;
     let key = div()

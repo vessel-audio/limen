@@ -1,8 +1,10 @@
-//! The models a model select offers, and a typed name it takes.
+//! The models a model select offers, and a typed name it takes; and the
+//! services a service select offers.
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem};
 use gpui_kit::*;
+use limen_core::Service;
 
 /// The models a select offers: the current one first, then those the server
 /// lists. While searching it shows the ones that match and, last, the typed
@@ -57,5 +59,42 @@ impl SearchableListDelegate for ModelChoices {
             .chain(typed)
             .collect();
         Task::ready(())
+    }
+}
+
+/// A service a provider page offers, under the name the user knows it by.
+#[derive(Debug, Clone)]
+pub struct ServiceChoice {
+    service: Service,
+    label: SharedString,
+}
+
+impl ServiceChoice {
+    pub fn new(service: Service) -> Self {
+        let label = match service {
+            Service::OpenAiCompatible => rust_i18n::t!("models.service_compatible").into(),
+            Service::WhisperCpp => rust_i18n::t!("models.service_whisper").into(),
+            Service::OpenAi => "OpenAI".into(),
+            Service::Anthropic => "Anthropic".into(),
+            Service::Gemini => "Gemini".into(),
+            Service::DeepSeek => "DeepSeek".into(),
+            Service::Mistral => "Mistral".into(),
+            Service::Groq => "Groq".into(),
+            Service::OpenRouter => "OpenRouter".into(),
+            Service::XAi => "xAI".into(),
+        };
+        Self { service, label }
+    }
+}
+
+impl SearchableListItem for ServiceChoice {
+    type Value = Service;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Service {
+        &self.service
     }
 }

@@ -8,21 +8,22 @@ use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 use limen_core::{
-    ConfigChange, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint, split_provider_url,
+    ConfigChange, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint, Service,
+    split_provider_url,
 };
 
-use super::choices::ModelChoices;
+use super::choices::{ModelChoices, ServiceChoice};
 use crate::app::{AppView, Page};
 use crate::bridge::BridgeCommand;
 use crate::model::{Action, Toast};
 
-pub type EndpointSelect = SelectState<SearchableVec<&'static str>>;
+pub type ServiceSelect = SelectState<SearchableVec<ServiceChoice>>;
 
 /// Fields edited before the first settings load; all of them on later loads.
 #[derive(Default, Clone, Copy)]
 struct DirtyFields {
+    service: bool,
     address: bool,
-    route: bool,
     key: bool,
     model: bool,
     polishing: bool,
@@ -49,6 +50,9 @@ enum Listing {
 /// the page opens, unless the user has edited them, and once more after
 /// they are saved.
 pub struct ProviderForm {
+    pub service: Entity<ServiceSelect>,
+    /// The service chosen in the select, which decides the rows shown.
+    pub chosen_service: Service,
     pub address: Address,
     pub key: Entity<InputState>,
     pub model: Entity<SelectState<ModelChoices>>,
@@ -71,7 +75,7 @@ pub struct ProviderForm {
     /// The model chosen in the select and the models it offers, as last set.
     chosen: Option<SharedString>,
     offered: Vec<SharedString>,
-    /// The saved ASR route when the route list does not offer it.
+    /// The saved ASR route when it is not the one its service uses.
     pub unlisted_route: Option<String>,
     /// The saved key is to be removed.
     pub clear_key: bool,
@@ -96,35 +100,45 @@ impl ModelForms {
     pub fn new(window: &mut Window, cx: &mut Context<AppView>) -> (Self, Vec<Subscription>) {
         let mut subscriptions = Vec::new();
         let mut form = |role: ModelRole, cx: &mut Context<AppView>| {
-            let address = match role {
-                ModelRole::Asr => Address::Server {
-                    server: cx
-                        .new(|cx| InputState::new(window, cx).placeholder("http://127.0.0.1:8000")),
-                    route: cx.new(|cx| {
-                        SelectState::new(
-                            SearchableVec::new(
-                                ProviderEndpoint::ALL.map(ProviderEndpoint::path).to_vec(),
-                            ),
-                            None,
-                            window,
-                            cx,
-                        )
-                    }),
-                },
-                ModelRole::Polish => Address::Url {
-                    polishing: Polishing::Off,
-                    url: cx.new(|cx| {
-                        InputState::new(window, cx)
-                            .placeholder("https://api.deepseek.com/chat/completions")
-                    }),
-                },
+            let (services, address) = match role {
+                ModelRole::Asr => (
+                    Service::TRANSCRIBING.to_vec(),
+                    Address::Server {
+                        server: cx.new(|cx| {
+                            InputState::new(window, cx).placeholder("http://127.0.0.1:8000")
+                        }),
+                    },
+                ),
+                ModelRole::Polish => (
+                    Service::POLISHING.to_vec(),
+                    Address::Url {
+                        polishing: Polishing::Off,
+                        url: cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder("http://127.0.0.1:8080/v1/chat/completions")
+                        }),
+                    },
+                ),
             };
+            let service = cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(
+                        services
+                            .into_iter()
+                            .map(ServiceChoice::new)
+                            .collect::<Vec<_>>(),
+                    ),
+                    None,
+                    window,
+                    cx,
+                )
+            });
             let key = cx.new(|cx| InputState::new(window, cx).masked(true));
             let model = cx.new(|cx| {
                 SelectState::new(ModelChoices::new(Vec::new()), None, window, cx).searchable(true)
             });
             let inputs = match &address {
-                Address::Server { server, .. } => {
+                Address::Server { server } => {
                     vec![
                         (server.clone(), EditedField::Address),
                         (key.clone(), EditedField::Key),
@@ -148,19 +162,19 @@ impl ModelForms {
                     },
                 ));
             }
-            if let Address::Server { route, .. } = &address {
-                subscriptions.push(cx.subscribe_in(
-                    route,
-                    window,
-                    move |this, _, event: &SelectEvent<SearchableVec<&'static str>>, _, _| {
-                        match event {
-                            SelectEvent::Confirm(_) => {
-                                this.models.form(role).edited(EditedField::Route)
-                            }
-                        }
-                    },
-                ));
-            }
+            subscriptions.push(cx.subscribe_in(
+                &service,
+                window,
+                move |this, _, event: &SelectEvent<SearchableVec<ServiceChoice>>, _, _| match event
+                {
+                    SelectEvent::Confirm(Some(service)) => {
+                        let form = this.models.form(role);
+                        form.chosen_service = *service;
+                        form.edited(EditedField::Service);
+                    }
+                    SelectEvent::Confirm(None) => {}
+                },
+            ));
             subscriptions.push(cx.subscribe_in(
                 &model,
                 window,
@@ -175,6 +189,8 @@ impl ModelForms {
             ));
             ProviderForm {
                 closed_focus: model.read(cx).focus_handle(cx),
+                service,
+                chosen_service: Service::OpenAiCompatible,
                 address,
                 key,
                 model,
@@ -307,8 +323,8 @@ impl ProviderForm {
     pub fn edited(&mut self, field: EditedField) {
         self.touched = true;
         match field {
+            EditedField::Service => self.dirty.service = true,
             EditedField::Address => self.dirty.address = true,
-            EditedField::Route => self.dirty.route = true,
             EditedField::Key => self.dirty.key = true,
             EditedField::Model => self.dirty.model = true,
             EditedField::Polishing => self.dirty.polishing = true,
@@ -350,8 +366,11 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
             }
             (_, _, None) => {}
         }
+        // The saved service and its URL name what the list is about.
         let endpoint = form.loaded.as_ref().map(|(provider, _)| match provider {
-            Provider::Asr { url, .. } | Provider::Polish { url, .. } => url.clone(),
+            Provider::Asr { service, url, .. } | Provider::Polish { service, url, .. } => {
+                format!("{} {url}", service.as_str())
+            }
         });
         let ask = match (&form.listing, endpoint.as_deref()) {
             (_, None) => false,
@@ -416,24 +435,27 @@ fn fill(
 ) {
     let preserve = !form.filled;
     let dirty = form.dirty;
+    let service = match provider {
+        Provider::Asr { service, .. } | Provider::Polish { service, .. } => *service,
+    };
+    if !(preserve && dirty.service) {
+        form.chosen_service = service;
+        form.service.update(cx, |select, cx| {
+            select.set_selected_value(&service, window, cx)
+        });
+    }
     let model = match (provider, &mut form.address) {
-        (Provider::Asr { url, model }, Address::Server { server, route }) => {
+        (Provider::Asr { url, model, .. }, Address::Server { server }) => {
             // A URL without a host shows whole, so the user sees what to repair.
             let (origin, path) =
                 split_provider_url(url).unwrap_or_else(|| (url.clone(), String::new()));
             if !(preserve && dirty.address) {
                 server.update(cx, |input, cx| input.set_value(origin, window, cx));
             }
-            if !(preserve && dirty.route) {
-                let known = ProviderEndpoint::from_path(&path).map(ProviderEndpoint::path);
-                form.unlisted_route = known
-                    .is_none()
-                    .then(|| path.clone())
-                    .filter(|path| !path.is_empty());
-                route.update(cx, |select, cx| match known {
-                    Some(path) => select.set_selected_value(&path, window, cx),
-                    None => select.set_selected_index(None, window, cx),
-                });
+            if !(preserve && dirty.service) {
+                let route = ProviderEndpoint::of(service).map(ProviderEndpoint::path);
+                form.unlisted_route =
+                    (route != Some(path.as_str()) && !path.is_empty()).then(|| path.clone());
             }
             model
         }
@@ -442,6 +464,7 @@ fn fill(
                 polishing,
                 url,
                 model,
+                ..
             },
             Address::Url {
                 polishing: shown,

@@ -38,27 +38,32 @@ pub async fn list_models(
 ) -> Result<Vec<String>> {
     let config = Config::load(&paths.config_file)
         .map_err(|_| anyhow::anyhow!("cannot load the provider settings"))?;
-    let (endpoint, connection) = match role {
-        ModelRole::Asr => match connection::asr(&config) {
-            AsrRoute::Api(connection) => (&config.provider.url, connection),
-            AsrRoute::Upload(url) => anyhow::bail!(
-                "{} does not end in {}, so it lists no models",
-                config::display_url(&url),
-                connection::TRANSCRIPTIONS
-            ),
+    let (service, endpoint, connection) = match role {
+        ModelRole::Asr => match connection::asr(&config)? {
+            AsrRoute::Api(connection) => {
+                (config.provider.service(), &config.provider.url, connection)
+            }
+            AsrRoute::Upload(_) => anyhow::bail!("the whisper.cpp server lists no models"),
         },
         ModelRole::Polish => {
+            let service = config.polish.service();
             // The key goes out even while polishing is disabled, when the
             // config does not check the URL: guard it as the polisher would.
-            config::check_polish_url(&config.polish.url)?;
+            if service.uses_url() {
+                config::check_polish_url(&config.polish.url)?;
+            }
             (
+                service,
                 &config.polish.url,
                 connection::polish(&config.polish, config.polish.api_key())?,
             )
         }
     };
     // Errors may quote the server; the endpoint alone is safe to show.
-    let shown = config::display_url(endpoint);
+    let shown = match service.uses_url() {
+        true => config::display_url(endpoint),
+        false => service.as_str().to_string(),
+    };
     let listed = tokio::time::timeout(LIST_TIMEOUT, backend.models(connection))
         .await
         .map_err(|_| anyhow::anyhow!("{shown} took too long to list its models"))?
@@ -131,10 +136,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "http://127.0.0.1:8080/inference does not end in /audio/transcriptions, so it lists no models"
-        );
+        assert_eq!(error.to_string(), "the whisper.cpp server lists no models");
     }
 
     #[tokio::test]

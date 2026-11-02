@@ -65,11 +65,11 @@ pub trait EventSource: Send {
     fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
-/// Build the buffered transcription provider for the configured server:
-/// through `backend`, unless the URL is one only Limen's own upload serves.
+/// Build the buffered transcription provider for the configured service:
+/// through `backend`, unless it is Limen's own upload.
 pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn AsrProvider>> {
     let model = cfg.provider.model.clone();
-    let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg) {
+    let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg)? {
         AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())),
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
@@ -131,8 +131,13 @@ fn load_wav_16k_mono(path: &Path) -> Result<Vec<i16>> {
 
 #[cfg(test)]
 mod tests {
-    use super::from_config;
-    use crate::backend::testing::{Built, Recording};
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::{SessionConfig, from_config};
+    use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, Connection};
     use crate::config::Config;
 
@@ -141,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_transcriptions_route_goes_through_the_backend() {
+    fn only_whisper_cpp_skips_the_backend() {
         let backend = Recording::default();
 
         for url in [
@@ -163,5 +168,52 @@ mod tests {
                 "asr".to_string()
             )]
         );
+    }
+
+    #[tokio::test]
+    async fn a_whisper_cpp_take_is_uploaded_and_reported_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            // The upload ends with the closing multipart boundary.
+            while !request.ends_with(b"--\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "the upload ended early");
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let body = r#"{"text":"完整文本"}"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        let config = config(&format!("http://{address}/inference"));
+        let session = from_config(&config, &Refusing)
+            .unwrap()
+            .start_session(&SessionConfig {
+                language: "auto".to_string(),
+                sample_rate: 16_000,
+            })
+            .await
+            .unwrap();
+        let (mut sink, mut events) = session.split();
+        sink.send_audio(&[1, 2, 3]).await.unwrap();
+        sink.finalize().await.unwrap();
+
+        let mut reported = Vec::new();
+        while let Some(event) = tokio::time::timeout(Duration::from_secs(2), events.next_event())
+            .await
+            .unwrap()
+        {
+            reported.push(format!("{event:?}"));
+        }
+
+        assert!(server.await.unwrap().starts_with("POST /inference "));
+        assert_eq!(reported, [r#"Stable("完整文本")"#, "Completed"]);
     }
 }

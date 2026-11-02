@@ -24,7 +24,7 @@ pub use audio::Level;
 pub use backend::{
     Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
 };
-pub use config::{ApiKey, Config, KeyChange, Paths, ShortcutConfig};
+pub use config::{ApiKey, Config, KeyChange, Paths, Service, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
