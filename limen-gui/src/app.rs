@@ -228,11 +228,11 @@ impl AppView {
                 self.shortcut_report = Some(report);
                 Vec::new()
             }
-            BridgeEvent::ProviderLoaded { role, result } => {
-                self.models.loaded(role, result);
+            BridgeEvent::ProviderLoaded { role, id, result } => {
+                self.models.loaded(role, id, result);
                 Vec::new()
             }
-            BridgeEvent::ProviderSaved { role, result } => self.models.saved(role, result),
+            BridgeEvent::ProviderSaved { role, id, result } => self.models.saved(role, id, result),
             BridgeEvent::Models {
                 role,
                 endpoint,

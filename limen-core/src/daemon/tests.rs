@@ -492,14 +492,14 @@ fn provider_reload_applies_only_a_valid_config() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"https://asr.example/v1\"\nmodel = \"big\"\n",
+        "[provider]\nurl = \"https://asr.example/v1?api-version=1\"\nmodel = \"big\"\n",
     )
     .unwrap();
     assert_eq!(harness.actor.reload_provider(), Reply::Ok);
     assert_eq!(
         harness.session.try_recv(),
         Ok(SessionCommand::Provider(ProviderConfig {
-            url: "https://asr.example/v1".to_string(),
+            url: "https://asr.example/v1?api-version=1".to_string(),
             model: "big".to_string(),
             language: "auto".to_string(),
             api_key_env: None,

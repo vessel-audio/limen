@@ -240,3 +240,61 @@ pub fn a_saved_key_is_removed() -> Result<()> {
     ensure!(left == "asr = \"sk-asr\"\n", "the key file holds {left:?}");
     Ok(())
 }
+
+/// Credentials belong in the key field, not in a provider URL. Rejecting
+/// the URL writes neither the config nor the key file.
+pub fn a_url_credential_is_rejected() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("polish-page")?;
+    retype(
+        &session,
+        "polish-url",
+        "https://ai.example/v1/chat/completions?api_key=do-not-save",
+    )?;
+    session.click("polish-save")?;
+    let error = session.node("polish-error")?;
+    ensure!(
+        error.name.contains("must not contain credentials"),
+        "the error says {:?}",
+        error.name
+    );
+    ensure!(
+        !session.paths().config_file.exists()
+            && !session
+                .paths()
+                .config_file
+                .with_file_name("keys.toml")
+                .exists(),
+        "a rejected provider was written"
+    );
+    ensure!(
+        reloads(&session, &v1::Request::PolishReload)? == 0,
+        "a rejected provider was applied"
+    );
+    Ok(())
+}
+
+/// Editing while a save is in flight keeps the newer text. The first
+/// success neither clears it nor replaces it with a reload, so it can be
+/// saved next.
+pub fn edits_made_while_saving_survive() -> Result<()> {
+    let session = Session::fake(Scenario {
+        provider_reload_ms: 2000,
+        ..Scenario::default()
+    })?;
+    session.click("asr-page")?;
+    choose_route(&session, 0)?;
+    retype(&session, "asr-server", "http://10.0.0.2:9000")?;
+    session.click("asr-save")?;
+    retype(&session, "asr-server", "http://10.0.0.3:9000")?;
+    session.named("toast", "ASR settings applied")?;
+    session.click("asr-save")?;
+    session.until("the edits made during the first save to be saved", || {
+        let url = Config::load(&session.paths().config_file)
+            .map(|config| config.provider.url)
+            .unwrap_or_default();
+        Ok(url == "http://10.0.0.3:9000/v1/audio/transcriptions"
+            && reloads(&session, &v1::Request::ProviderReload)? == 2)
+    })?;
+    Ok(())
+}

@@ -77,13 +77,19 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySta
 }
 
 /// Save `provider` and the `key` change, then have a running daemon apply
-/// them. The config is written first, in one edit that must leave it valid;
-/// the key follows.
+/// them. Both files are edited and checked under one lock before either is
+/// written, so a refused value or key changes neither.
 pub async fn save_provider(
     paths: &Paths,
     provider: Provider,
     key: KeyChange,
 ) -> Result<ConfigChange> {
+    match &provider {
+        Provider::Asr { .. } => {}
+        // The key may be listed even while polishing is off, so a provider
+        // saved through the GUI always gets the polisher's URL checks.
+        Provider::Polish { url, .. } => config::check_polish_url(url.trim())?,
+    }
     let text = |text: String| config::Value::Text(text.trim().to_string());
     let (role, values, request) = match provider {
         Provider::Asr { url, model } => (
@@ -118,12 +124,9 @@ pub async fn save_provider(
     }
     let file = paths.config_file.clone();
     // The writes wait on a file lock; keep them off the caller's runtime thread.
-    tokio::task::spawn_blocking(move || {
-        config::update_values(&file, &values)?;
-        config::update_key(&file, role, &key)
-    })
-    .await
-    .context("the config writer stopped")??;
+    tokio::task::spawn_blocking(move || config::update_provider(&file, &values, role, &key))
+        .await
+        .context("the config writer stopped")??;
     reload(paths, &request).await
 }
 

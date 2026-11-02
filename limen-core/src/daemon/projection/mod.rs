@@ -217,7 +217,7 @@ impl Projection {
     pub(crate) fn set_provider(&mut self, provider: &ProviderConfig) {
         self.snapshot.config = ConfigSummary {
             provider_model: capped(&provider.model, CONFIG_CAP).0,
-            provider_url: capped(&provider.url, CONFIG_CAP).0,
+            provider_url: capped(&crate::config::display_url(&provider.url), CONFIG_CAP).0,
             ..self.snapshot.config.clone()
         };
     }

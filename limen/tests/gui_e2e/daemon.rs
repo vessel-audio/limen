@@ -37,6 +37,9 @@ pub struct Scenario {
     pub shortcut: ShortcutStatus,
     /// How long a stopped take stays in transcription.
     pub transcribe_ms: u64,
+    /// How long a provider reload waits before answering, for edits made
+    /// while a save is in flight.
+    pub provider_reload_ms: u64,
 }
 
 impl Default for Scenario {
@@ -57,6 +60,7 @@ impl Default for Scenario {
                 last_error: None,
             },
             transcribe_ms: 300,
+            provider_reload_ms: 0,
         }
     }
 }
@@ -284,21 +288,25 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
         v1::Request::ShortcutStatus => {
             v1::Reply::ShortcutStatus(daemon.lock().await.scenario.shortcut.clone())
         }
-        v1::Request::ProviderReload => match Config::load(&paths.config_file) {
-            Ok(config) => {
-                let mut daemon = daemon.lock().await;
-                daemon.config = ConfigSummary {
-                    provider_model: config.provider.model,
-                    provider_url: config.provider.url,
-                    ..daemon.config.clone()
-                };
-                daemon.publish();
-                v1::Reply::Ok
+        v1::Request::ProviderReload => {
+            let delay = daemon.lock().await.scenario.provider_reload_ms;
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            match Config::load(&paths.config_file) {
+                Ok(config) => {
+                    let mut daemon = daemon.lock().await;
+                    daemon.config = ConfigSummary {
+                        provider_model: config.provider.model,
+                        provider_url: config.provider.url,
+                        ..daemon.config.clone()
+                    };
+                    daemon.publish();
+                    v1::Reply::Ok
+                }
+                Err(error) => v1::Reply::Error {
+                    message: format!("{error:#}"),
+                },
             }
-            Err(error) => v1::Reply::Error {
-                message: format!("{error:#}"),
-            },
-        },
+        }
         v1::Request::PolishReload => match Config::load(&paths.config_file) {
             Ok(config) => {
                 let mut daemon = daemon.lock().await;

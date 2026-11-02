@@ -22,8 +22,8 @@ mod value;
 mod write;
 
 pub use keys::KeyChange;
-pub(crate) use keys::{saved_keys, update_key};
-pub(crate) use value::{Key, Value, update_values};
+pub(crate) use keys::saved_keys;
+pub(crate) use value::{Key, Value, update_provider};
 pub(crate) use write::{check_writable, snippet, update_shortcut};
 
 /// An API key saved from the GUI. Its `Debug` output never shows the key,
@@ -291,6 +291,7 @@ impl Config {
             ("http" | "https", Some(_)) => {}
             _ => bail!("provider.url must be an http(s):// URL with a host"),
         }
+        check_no_url_credentials(&provider_url, "provider.url")?;
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
@@ -370,10 +371,56 @@ pub(crate) fn check_polish_url(url: &str) -> Result<()> {
         }
         _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
     }
-    if !polish_url.username().is_empty() || polish_url.password().is_some() {
-        bail!("polish.url must not contain credentials");
+    check_no_url_credentials(&polish_url, "polish.url")?;
+    Ok(())
+}
+
+/// Refuse credentials in an endpoint itself, including the usual query
+/// parameters that carry them. Other query parameters, such as
+/// `api-version`, remain supported.
+fn check_no_url_credentials(url: &reqwest::Url, field: &str) -> Result<()> {
+    let credential_query = url.query_pairs().any(|(name, _)| {
+        let name = name.to_ascii_lowercase().replace(['-', '_'], "");
+        matches!(
+            name.as_str(),
+            "key"
+                | "apikey"
+                | "xapikey"
+                | "subscriptionkey"
+                | "token"
+                | "accesstoken"
+                | "refreshtoken"
+                | "sessiontoken"
+                | "auth"
+                | "authorization"
+                | "password"
+                | "secret"
+                | "clientsecret"
+                | "credential"
+                | "credentials"
+                | "signature"
+                | "sig"
+        )
+    });
+    if !url.username().is_empty() || url.password().is_some() || credential_query {
+        bail!("{field} must not contain credentials; use an API key instead");
     }
     Ok(())
+}
+
+/// An endpoint safe to show in snapshots, logs, and errors: no userinfo,
+/// query, or fragment. An invalid URL is never echoed back.
+pub(crate) fn display_url(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) => {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.into()
+        }
+        Err(_) => "<invalid URL>".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -413,6 +460,41 @@ mod tests {
         assert!(config.validate().is_err());
         config.polish.url = "https://user:pw@api.deepseek.com/chat/completions".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn endpoint_queries_allow_versions_but_not_credentials() {
+        let mut config = base_config();
+        for parameter in ["api_key", "token", "X-API-Key", "clientsecret"] {
+            config.provider.url =
+                format!("https://asr.example/v1/audio/transcriptions?{parameter}=do-not-echo");
+            assert!(config.validate().is_err(), "{parameter}");
+            config.polish.enabled = true;
+            config.polish.url =
+                format!("https://ai.example/chat/completions?{parameter}=do-not-echo");
+            assert!(config.validate().is_err(), "{parameter}");
+        }
+        config.provider.url =
+            "https://asr.example/v1/audio/transcriptions?api-version=2026-01-01".to_string();
+        config.polish.url =
+            "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn displayed_endpoints_drop_credentials_queries_and_fragments() {
+        assert_eq!(
+            [
+                super::display_url(
+                    "https://user:pw@ai.example/v1/chat/completions?api_key=secret#token"
+                ),
+                super::display_url("https://user:pw@"),
+            ],
+            [
+                "https://ai.example/v1/chat/completions".to_string(),
+                "<invalid URL>".to_string()
+            ]
+        );
     }
 
     #[test]

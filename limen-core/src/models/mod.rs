@@ -55,7 +55,8 @@ struct ListedModel {
 
 /// The models the configured server for `role` offers, in its order.
 pub async fn list_models(paths: &Paths, role: ModelRole) -> Result<Vec<String>> {
-    let config = Config::load(&paths.config_file)?;
+    let config = Config::load(&paths.config_file)
+        .map_err(|_| anyhow::anyhow!("cannot load the provider settings"))?;
     // The configured endpoint, and the route at its end that `models` replaces.
     let (endpoint, route, api_key) = match role {
         ModelRole::Asr => (
@@ -74,8 +75,13 @@ pub async fn list_models(paths: &Paths, role: ModelRole) -> Result<Vec<String>> 
             )
         }
     };
-    let url = models_url(endpoint, route)
-        .with_context(|| format!("{endpoint} does not end in /{route}, so it lists no models"))?;
+    let url = models_url(endpoint, route).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} does not end in /{route}, so it lists no models",
+            config::display_url(endpoint)
+        )
+    })?;
+    let shown = config::display_url(url.as_str());
     let http = reqwest::Client::builder()
         .timeout(LIST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
@@ -88,15 +94,15 @@ pub async fn list_models(paths: &Paths, role: ModelRole) -> Result<Vec<String>> 
     let response = request
         .send()
         .await
-        .with_context(|| format!("failed to ask {url} for its models"))?;
+        .map_err(|_| anyhow::anyhow!("failed to ask {shown} for its models"))?;
     let status = response.status();
     if !status.is_success() {
-        bail!("{url} returned HTTP {status}");
+        bail!("{shown} returned HTTP {status}");
     }
     let list = response
         .json::<ModelList>()
         .await
-        .with_context(|| format!("{url} did not return a model list"))?;
+        .map_err(|_| anyhow::anyhow!("{shown} did not return a model list"))?;
     let mut models: Vec<String> = Vec::new();
     for model in list.data {
         if !models.contains(&model.id) {

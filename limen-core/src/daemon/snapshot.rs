@@ -130,7 +130,11 @@ impl ConfigSummary {
         Self {
             input_method: capped(backend, CONFIG_CAP).0,
             provider_model: capped(&config.provider.model, CONFIG_CAP).0,
-            provider_url: capped(&config.provider.url, CONFIG_CAP).0,
+            provider_url: capped(
+                &crate::config::display_url(&config.provider.url),
+                CONFIG_CAP,
+            )
+            .0,
             polish_enabled: config.polish.enabled,
         }
     }

@@ -2,7 +2,7 @@
 //! routes, rather than a whole URL; a hand-edited config may still use any
 //! URL.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 /// The transcription route on the ASR server, after its address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +52,7 @@ pub fn split_url(url: &str) -> Option<(String, String)> {
 /// as `http://127.0.0.1:8000`.
 pub fn server_url(server: &str, endpoint: Endpoint) -> Result<String> {
     let parsed = reqwest::Url::parse(server)
-        .with_context(|| format!("{server:?} is not a server address"))?;
+        .map_err(|_| anyhow::anyhow!("enter a valid http(s):// server address"))?;
     let origin = parsed.origin().ascii_serialization();
     match (
         parsed.scheme(),

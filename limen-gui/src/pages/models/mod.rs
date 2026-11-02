@@ -211,7 +211,7 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                         .primary()
                         .label(rust_i18n::t!("models.save").to_string())
                         .flex_shrink_0()
-                        .disabled(!form.touched || form.pending || form.loaded.is_none())
+                        .disabled(!form.touched || form.saving.is_some() || form.loaded.is_none())
                         .on_click(cx.listener(move |this, _, _, cx| save(this, role, cx))),
                 ),
         )

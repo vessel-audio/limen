@@ -11,7 +11,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use toml_edit::{DocumentMut, ImDocument, Item};
 
 use super::Config;
+use super::keys::{self, KeyChange};
 use super::write::{check_writable, lock_dir, read_text, replace};
+use crate::models::ModelRole;
 
 /// A value of the config that the GUI edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,37 +95,51 @@ fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
     }
 }
 
-/// Set each key to its value in the config file at `path`, under the same
-/// lock as shortcut writes. A missing file is created from the annotated
-/// default. Nothing is written when every value stays the same, or when the
-/// edited file would no longer be a valid config.
-pub(crate) fn update_values(path: &Path, values: &[(Key, Value)]) -> Result<()> {
+/// Save a provider: set each key to its value in the config file at `path`
+/// and apply `change` to the key `role` sends, under the same lock as
+/// shortcut writes. Both files are edited and checked before either is
+/// written, so a refused value or key leaves both as they were. A missing
+/// config is created from the annotated default; a config whose values stay
+/// the same is never written, so a managed one can still get a new key.
+pub(crate) fn update_provider(
+    path: &Path,
+    values: &[(Key, Value)],
+    role: ModelRole,
+    change: &KeyChange,
+) -> Result<()> {
     let _lock = lock_dir(path)?;
     let (text, mode) = read_text(path)?;
     // Only the edited file must be valid, so a broken value can be repaired.
     let current: Config = toml::from_str(&text)
         .with_context(|| format!("failed to parse config: {}", path.display()))?;
-    check_writable(path).map_err(|refusal| anyhow!("{refusal}; edit it there instead"))?;
     let unchanged = values
         .iter()
         .all(|(key, value)| key.read(&current) == *value);
-    // A missing config is written even unchanged, like shortcut setup does.
-    if unchanged && mode.is_some() {
-        return Ok(());
-    }
-    let edited = values
-        .iter()
-        .try_fold(text, |text, (key, value)| with_value(&text, *key, value))?;
-    let config = Config::parse(&edited)?;
-    match values
-        .iter()
-        .find(|(key, value)| key.read(&config) != *value)
-    {
-        None => replace(path, &edited, mode),
-        Some((key, _)) => {
-            let (section, name) = key.path();
-            bail!("{section}.{name} of {} could not be edited", path.display())
+    let config = match (unchanged, mode) {
+        (true, Some(_)) => None,
+        (false, _) | (true, None) => {
+            check_writable(path).map_err(|refusal| anyhow!("{refusal}; edit it there instead"))?;
+            let edited = values
+                .iter()
+                .try_fold(text, |text, (key, value)| with_value(&text, *key, value))?;
+            let config = Config::parse(&edited)?;
+            if let Some((key, _)) = values
+                .iter()
+                .find(|(key, value)| key.read(&config) != *value)
+            {
+                let (section, name) = key.path();
+                bail!("{section}.{name} of {} could not be edited", path.display());
+            }
+            Some(edited)
         }
+    };
+    let key = keys::edit_key(path, role, change)?;
+    if let Some(key) = key {
+        replace(&keys::path(path), &key, Some(0o600))?;
+    }
+    match config {
+        Some(config) => replace(path, &config, mode),
+        None => Ok(()),
     }
 }
 
@@ -132,8 +148,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{Key, Value, update_values};
+    use super::{Key, Value, update_provider};
     use crate::config::DEFAULT_CONFIG;
+    use crate::config::{ApiKey, KeyChange};
+    use crate::models::ModelRole;
 
     /// A fresh, empty directory for one test.
     fn scratch(name: &str) -> PathBuf {
@@ -143,8 +161,12 @@ mod tests {
         dir
     }
 
+    fn save(path: &std::path::Path, values: &[(Key, Value)]) -> anyhow::Result<()> {
+        update_provider(path, values, ModelRole::Asr, &KeyChange::Keep)
+    }
+
     fn set(path: &std::path::Path, key: Key, text: &str) -> anyhow::Result<()> {
-        update_values(path, &[(key, Value::Text(text.to_string()))])
+        save(path, &[(key, Value::Text(text.to_string()))])
     }
 
     #[test]
@@ -152,7 +174,7 @@ mod tests {
         let path = scratch("provider-values").join("config.toml");
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
-        update_values(
+        save(
             &path,
             &[
                 (Key::PolishEnabled, Value::Switch(true)),
@@ -182,7 +204,7 @@ mod tests {
         let path = scratch("provider-insecure").join("config.toml");
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
-        let error = update_values(
+        let error = save(
             &path,
             &[
                 (Key::PolishEnabled, Value::Switch(true)),
@@ -199,6 +221,33 @@ mod tests {
             (
                 "polish.url must use HTTPS, or HTTP on a loopback address".to_string(),
                 DEFAULT_CONFIG.to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_refused_key_leaves_the_config_untouched() {
+        let path = scratch("provider-key-refused").join("config.toml");
+        fs::write(&path, DEFAULT_CONFIG).unwrap();
+
+        let error = update_provider(
+            &path,
+            &[(Key::ProviderModel, Value::Text("new-model".to_string()))],
+            ModelRole::Asr,
+            &KeyChange::Set(ApiKey::new("bad\r\nkey".to_string())),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (
+                error.to_string(),
+                fs::read_to_string(&path).unwrap(),
+                path.with_file_name("keys.toml").exists(),
+            ),
+            (
+                "an API key cannot contain control characters".to_string(),
+                DEFAULT_CONFIG.to_string(),
+                false
             )
         );
     }

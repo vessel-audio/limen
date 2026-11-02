@@ -1,13 +1,14 @@
 //! State of the model provider pages: the fields of each provider, filled
 //! from the config file when a page opens, and saved together.
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 use limen_core::{
-    ApiKey, ConfigChange, KeyChange, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint,
-    provider_server_url, split_provider_url,
+    ConfigChange, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint, split_provider_url,
 };
 
 use super::choices::ModelChoices;
@@ -31,6 +32,10 @@ pub enum Address {
     },
 }
 
+/// How long an endpoint that could not list models waits before it is asked
+/// again while its page is open.
+const RETRY: Duration = Duration::from_secs(15);
+
 /// What the GUI knows of the models the saved endpoint offers. Each state
 /// names the endpoint it is about, so a list that arrives for an endpoint
 /// saved over since is dropped.
@@ -40,6 +45,8 @@ enum Listing {
     Unknown,
     Asked(String),
     Listed(String, Vec<SharedString>),
+    /// The endpoint failed or listed no models; asked again after [`RETRY`].
+    Failed(String, Instant),
 }
 
 /// One provider page. Its fields are filled from the config file each time
@@ -68,9 +75,13 @@ pub struct ProviderForm {
     pub unlisted_route: Option<String>,
     /// The saved key is to be removed.
     pub clear_key: bool,
-    /// The user edited a field since it was filled.
+    /// The user edited a field since it was filled or last sent to be saved.
     pub touched: bool,
-    pub pending: bool,
+    /// Identifies load and save requests, so only the latest reply applies.
+    next_request: u64,
+    loading: Option<u64>,
+    /// The save in flight; the fields remain editable meanwhile.
+    pub saving: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -165,7 +176,9 @@ impl ModelForms {
                 unlisted_route: None,
                 clear_key: false,
                 touched: false,
-                pending: false,
+                next_request: 0,
+                loading: None,
+                saving: None,
                 error: None,
             }
         };
@@ -182,27 +195,40 @@ impl ModelForms {
     }
 
     /// Load the settings again when their page next shows, as the daemon
-    /// that was replaced may have left another config behind.
+    /// that was replaced may have left another config behind. Older reads
+    /// are ignored; a save still ends with its own reply before another can
+    /// start, so concurrent saves cannot overwrite each other.
     pub fn reset(&mut self) {
         for form in [&mut self.asr, &mut self.polish] {
             form.stale = true;
+            form.loading = None;
+            form.arrived = None;
             form.error = None;
         }
     }
 
-    /// Record settings read from the config file; the fields take them on
-    /// the next frame, unless the user edited them meanwhile.
-    pub fn loaded(&mut self, role: ModelRole, result: Result<(Provider, KeyState), String>) {
+    /// Record settings read by the current request. They fill the fields on
+    /// the next frame unless the user edited meanwhile; then they only update
+    /// the saved baseline used when saving those edits.
+    pub fn loaded(
+        &mut self,
+        role: ModelRole,
+        id: u64,
+        result: Result<(Provider, KeyState), String>,
+    ) {
         let form = self.form(role);
-        match (result, form.touched) {
-            (Ok(settings), false) => form.arrived = Some(settings),
-            (Ok(_), true) => {}
-            (Err(message), _) => form.error = Some(message),
+        if form.loading == Some(id) {
+            form.loading = None;
+            match (result, form.touched) {
+                (Ok(settings), false) => form.arrived = Some(settings),
+                (Ok(settings), true) => form.loaded = Some(settings),
+                (Err(message), _) => form.error = Some(message),
+            }
         }
     }
 
     /// Record the models `endpoint` listed, if it is still the one asked.
-    /// Failures leave the select with the chosen model, which still works.
+    /// Failures and empty lists are retried while the page stays open.
     pub fn listed(
         &mut self,
         role: ModelRole,
@@ -211,33 +237,51 @@ impl ModelForms {
     ) {
         let form = self.form(role);
         if form.listing == Listing::Asked(endpoint.clone()) {
-            let models = models.unwrap_or_else(|error| {
-                tracing::debug!(?role, %error, "no model list");
-                Vec::new()
-            });
-            form.listing = Listing::Listed(
-                endpoint,
-                models.into_iter().map(SharedString::from).collect(),
-            );
+            form.listing = match models {
+                Ok(models) if !models.is_empty() => Listing::Listed(
+                    endpoint,
+                    models.into_iter().map(SharedString::from).collect(),
+                ),
+                Ok(_) => Listing::Failed(endpoint, Instant::now()),
+                Err(_) => {
+                    // Errors are deliberately not logged: endpoints can have
+                    // sensitive hand-edited queries even though display_url
+                    // already keeps those out of the core's messages.
+                    tracing::debug!(?role, "the model server listed no models");
+                    Listing::Failed(endpoint, Instant::now())
+                }
+            };
         }
     }
 
-    /// Record how saving ended; a saved page loads its settings again, so
-    /// the key's state and the model list follow what was written.
-    pub fn saved(&mut self, role: ModelRole, result: Result<ConfigChange, String>) -> Vec<Action> {
+    /// Record how the current save ended. With no edits since it started,
+    /// load the saved settings again; otherwise keep those edits for another
+    /// save instead of replacing them with the older saved values.
+    pub fn saved(
+        &mut self,
+        role: ModelRole,
+        id: u64,
+        result: Result<ConfigChange, String>,
+    ) -> Vec<Action> {
         let form = self.form(role);
-        form.pending = false;
+        if form.saving != Some(id) {
+            return Vec::new();
+        }
+        form.saving = None;
         match result {
             Ok(change) => {
-                form.touched = false;
-                form.clear_key = false;
-                form.stale = true;
+                form.error = None;
+                if !form.touched {
+                    form.clear_key = false;
+                    form.stale = true;
+                }
                 vec![Action::Toast(match change {
                     ConfigChange::Applied => Toast::ProviderApplied(role),
                     ConfigChange::Saved => Toast::ProviderSaved(role),
                 })]
             }
             Err(message) => {
+                form.touched = true;
                 form.error = Some(message);
                 Vec::new()
             }
@@ -266,21 +310,41 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
             form.stale = true;
         }
         form.visible = visible;
-        if visible
-            && form.stale
-            && !form.pending
-            && commands.try_send(BridgeCommand::LoadProvider(role)).is_ok()
-        {
-            form.stale = false;
+        if visible && form.stale && form.saving.is_none() && form.loading.is_none() {
+            form.next_request += 1;
+            let id = form.next_request;
+            if commands
+                .try_send(BridgeCommand::LoadProvider { role, id })
+                .is_ok()
+            {
+                form.loading = Some(id);
+                form.stale = false;
+            }
         }
-        if let Some((provider, key)) = form.arrived.take() {
-            fill(form, &provider, &key, window, cx);
-            form.loaded = Some((provider, key));
+        match (form.touched, form.arrived.take()) {
+            (false, Some((provider, key))) => {
+                fill(form, &provider, &key, window, cx);
+                form.loaded = Some((provider, key));
+            }
+            (true, Some(settings)) => form.loaded = Some(settings),
+            (_, None) => {}
         }
         let endpoint = form.loaded.as_ref().map(|(provider, _)| match provider {
             Provider::Asr { url, .. } | Provider::Polish { url, .. } => url.clone(),
         });
-        if let (Listing::Unknown, Some(endpoint)) = (&form.listing, endpoint)
+        let ask = match (&form.listing, endpoint.as_deref()) {
+            (_, None) => false,
+            (Listing::Unknown, Some(_)) => true,
+            (
+                Listing::Asked(asked) | Listing::Listed(asked, _) | Listing::Failed(asked, _),
+                Some(endpoint),
+            ) if asked != endpoint => true,
+            (Listing::Failed(_, at), Some(_)) => at.elapsed() >= RETRY,
+            (Listing::Asked(_) | Listing::Listed(..), Some(_)) => false,
+        };
+        if visible
+            && ask
+            && let Some(endpoint) = endpoint
             && commands
                 .try_send(BridgeCommand::ListModels {
                     role,
@@ -292,7 +356,7 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
         }
         let listed = match &form.listing {
             Listing::Listed(_, models) => models.as_slice(),
-            Listing::Unknown | Listing::Asked(_) => &[],
+            Listing::Unknown | Listing::Asked(_) | Listing::Failed(..) => &[],
         };
         let offered: Vec<SharedString> = form
             .chosen
@@ -380,65 +444,6 @@ fn fill(
     form.touched = false;
 }
 
-/// Save the page for `role`. The ASR server is checked here, so its error
-/// shows at once; the core validates the rest.
-pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
-    let form = view.models.form(role);
-    let Some((loaded, _)) = form.loaded.clone() else {
-        return;
-    };
-    if !form.touched || form.pending {
-        return;
-    }
-    let model = form.chosen.clone().map(String::from).unwrap_or_default();
-    let provider = match (&form.address, loaded) {
-        (Address::Server { server, route }, Provider::Asr { url: saved, .. }) => {
-            let server = server.read(cx).value().trim().to_string();
-            let endpoint = route
-                .read(cx)
-                .selected_value()
-                .and_then(|path| ProviderEndpoint::from_path(path));
-            let unchanged = split_provider_url(&saved).is_some_and(|(origin, _)| origin == server);
-            let url = match (endpoint, unchanged) {
-                (Some(endpoint), _) => provider_server_url(&server, endpoint),
-                // A hand-edited route the list does not offer stays.
-                (None, true) => Ok(saved),
-                (None, false) => Err(anyhow::anyhow!(
-                    rust_i18n::t!("models.choose_route").to_string()
-                )),
-            };
-            match url {
-                Ok(url) => Provider::Asr { url, model },
-                Err(error) => {
-                    form.error = Some(format!("{error:#}"));
-                    return;
-                }
-            }
-        }
-        (Address::Url { polishing, url }, Provider::Polish { .. }) => Provider::Polish {
-            polishing: *polishing,
-            url: url.read(cx).value().to_string(),
-            model,
-        },
-        (Address::Server { .. }, Provider::Polish { .. })
-        | (Address::Url { .. }, Provider::Asr { .. }) => {
-            unreachable!("each page loads its own provider")
-        }
-    };
-    let typed = form.key.read(cx).value().trim().to_string();
-    let key = match (typed.is_empty(), form.clear_key) {
-        (false, _) => KeyChange::Set(ApiKey::new(typed)),
-        (true, true) => KeyChange::Clear,
-        (true, false) => KeyChange::Keep,
-    };
-    match view
-        .commands
-        .try_send(BridgeCommand::SaveProvider { provider, key })
-    {
-        Ok(()) => {
-            form.pending = true;
-            form.error = None;
-        }
-        Err(error) => form.error = Some(error.to_string()),
-    }
-}
+mod save;
+
+pub use save::save;

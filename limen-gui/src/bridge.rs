@@ -35,10 +35,15 @@ pub enum BridgeCommand {
     ShutdownDaemon,
     TerminateDaemon,
     Shortcut(ShortcutRequest),
-    /// Read a provider's settings from the config file.
-    LoadProvider(ModelRole),
+    /// Read a provider's settings from the config file; `id` identifies the
+    /// request in the reply so an older read cannot replace a newer one.
+    LoadProvider {
+        role: ModelRole,
+        id: u64,
+    },
     /// Save a provider and its key, and apply them in a running daemon.
     SaveProvider {
+        id: u64,
         provider: Provider,
         key: KeyChange,
     },
@@ -76,11 +81,13 @@ pub enum BridgeEvent {
     /// A provider's settings as read from the config file.
     ProviderLoaded {
         role: ModelRole,
+        id: u64,
         result: Result<(Provider, KeyState), String>,
     },
     /// How saving a provider ended.
     ProviderSaved {
         role: ModelRole,
+        id: u64,
         result: Result<ConfigChange, String>,
     },
     /// The models a server offers, or why it listed none.
@@ -499,7 +506,7 @@ async fn handle_command(
             let paths = paths.clone();
             shortcuts.spawn(async move { run_shortcut(&paths, request).await });
         }
-        BridgeCommand::LoadProvider(role) => {
+        BridgeCommand::LoadProvider { role, id } => {
             let (paths, events) = (paths.clone(), events.clone());
             tokio::spawn(async move {
                 let result = tokio::task::spawn_blocking(move || load_provider(&paths, role))
@@ -507,11 +514,11 @@ async fn handle_command(
                     .map_err(|error| error.to_string())
                     .and_then(|result| result.map_err(|error| format!("{error:#}")));
                 let _ = events
-                    .send(BridgeEvent::ProviderLoaded { role, result })
+                    .send(BridgeEvent::ProviderLoaded { role, id, result })
                     .await;
             });
         }
-        BridgeCommand::SaveProvider { provider, key } => {
+        BridgeCommand::SaveProvider { id, provider, key } => {
             // Off the loop, so snapshots and levels keep flowing meanwhile.
             let (paths, events) = (paths.clone(), events.clone());
             let role = match provider {
@@ -527,7 +534,7 @@ async fn handle_command(
                 .map_err(|_| "daemon request timed out".to_string())
                 .and_then(|result| result.map_err(|error| format!("{error:#}")));
                 let _ = events
-                    .send(BridgeEvent::ProviderSaved { role, result })
+                    .send(BridgeEvent::ProviderSaved { role, id, result })
                     .await;
             });
         }

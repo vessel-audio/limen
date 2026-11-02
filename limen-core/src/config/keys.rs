@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::io::ErrorKind;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,7 +15,7 @@ use serde::Deserialize;
 use toml_edit::DocumentMut;
 
 use super::ApiKey;
-use super::write::{check_writable, lock_dir, replace};
+use super::write::check_writable;
 use crate::models::ModelRole;
 
 /// How saving a provider changes its key.
@@ -26,14 +27,14 @@ pub enum KeyChange {
 }
 
 /// The keys in the file, by the role that sends them.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SavedKeys {
     pub(crate) asr: Option<String>,
     pub(crate) polish: Option<String>,
 }
 
-fn path(config_file: &Path) -> PathBuf {
+pub(super) fn path(config_file: &Path) -> PathBuf {
     config_file.with_file_name("keys.toml")
 }
 
@@ -42,32 +43,46 @@ fn path(config_file: &Path) -> PathBuf {
 pub(crate) fn saved_keys(config_file: &Path) -> Result<SavedKeys> {
     let path = path(config_file);
     match fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).with_context(|| format!("invalid {}", path.display())),
+        Ok(text) => toml::from_str(&text)
+            .map_err(|_| anyhow!("invalid {}; its keys were not read", path.display())),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(SavedKeys::default()),
         Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
     }
 }
 
-/// Apply `change` to the key `role` sends, keeping the other key.
-pub(crate) fn update_key(config_file: &Path, role: ModelRole, change: &KeyChange) -> Result<()> {
+/// The key file's contents after `change` to the key `role` sends, or
+/// `None` when the file stays as it is. A regular file that others may read
+/// is rewritten even when its keys stay, so it ends up private; a symlinked
+/// one is left to whatever manages it, and refused when a key changes.
+/// Callers hold the config directory's lock and write the result with mode
+/// 0600 to [`path`].
+pub(super) fn edit_key(
+    config_file: &Path,
+    role: ModelRole,
+    change: &KeyChange,
+) -> Result<Option<String>> {
     let name = match role {
         ModelRole::Asr => "asr",
         ModelRole::Polish => "polish",
     };
     let path = path(config_file);
-    let _lock = lock_dir(config_file)?;
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+    let (text, exposed) = match fs::symlink_metadata(&path) {
+        Ok(metadata) => (
+            fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?,
+            metadata.is_file() && metadata.permissions().mode() & 0o077 != 0,
+        ),
+        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false),
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
     let mut document: DocumentMut = text
         .parse()
-        .with_context(|| format!("invalid {}", path.display()))?;
+        .map_err(|_| anyhow!("invalid {}; its keys were not changed", path.display()))?;
     match change {
-        KeyChange::Keep => return Ok(()),
+        KeyChange::Keep if !exposed => return Ok(None),
+        KeyChange::Keep => {}
         KeyChange::Set(key) => {
             let key = key.expose().trim();
             if key.is_empty() {
@@ -84,7 +99,7 @@ pub(crate) fn update_key(config_file: &Path, role: ModelRole, change: &KeyChange
         }
     }
     check_writable(&path).map_err(|refusal| anyhow!("{refusal}; the key was not saved"))?;
-    replace(&path, &document.to_string(), Some(0o600))
+    Ok(Some(document.to_string()))
 }
 
 #[cfg(test)]
@@ -93,7 +108,8 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::PathBuf;
 
-    use super::{KeyChange, saved_keys, update_key};
+    use super::super::write::replace;
+    use super::{KeyChange, edit_key, path as key_path, saved_keys};
     use crate::config::ApiKey;
     use crate::models::ModelRole;
 
@@ -107,6 +123,53 @@ mod tests {
 
     fn set(key: &str) -> KeyChange {
         KeyChange::Set(ApiKey::new(key.to_string()))
+    }
+
+    fn update_key(
+        config: &std::path::Path,
+        role: ModelRole,
+        change: &KeyChange,
+    ) -> anyhow::Result<()> {
+        match edit_key(config, role, change)? {
+            Some(text) => replace(&key_path(config), &text, Some(0o600)),
+            None => Ok(()),
+        }
+    }
+
+    #[test]
+    fn an_exposed_key_file_is_made_private_even_when_its_keys_stay() {
+        let config = scratch("keys-permissions");
+        let path = config.with_file_name("keys.toml");
+        fs::write(&path, "asr = \"sk-asr\"\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        update_key(&config, ModelRole::Asr, &KeyChange::Keep).unwrap();
+
+        assert_eq!(
+            (
+                fs::read_to_string(&path).unwrap(),
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            ),
+            ("asr = \"sk-asr\"\n".to_string(), 0o600)
+        );
+    }
+
+    #[test]
+    fn a_managed_key_file_is_left_alone_when_its_keys_stay() {
+        let config = scratch("keys-managed-keep");
+        let target = config.with_file_name("managed.toml");
+        fs::write(&target, "asr = \"managed\"\n").unwrap();
+        symlink(&target, config.with_file_name("keys.toml")).unwrap();
+
+        update_key(&config, ModelRole::Asr, &KeyChange::Keep).unwrap();
+
+        assert_eq!(
+            (
+                fs::read_to_string(&target).unwrap(),
+                fs::read_link(config.with_file_name("keys.toml")).unwrap(),
+            ),
+            ("asr = \"managed\"\n".to_string(), target)
+        );
     }
 
     #[test]

@@ -41,6 +41,8 @@ pub const ALL: &[Case] = cases![
     models::an_invalid_asr_server_is_reported,
     models::polishing_is_set_up_with_a_local_server,
     models::a_saved_key_is_removed,
+    models::a_url_credential_is_rejected,
+    models::edits_made_while_saving_survive,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,
