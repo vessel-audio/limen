@@ -11,7 +11,7 @@ use super::input::{InputJob, InputReport};
 use super::projection::Projection;
 use super::snapshot::{ConfigSummary, StateSnapshot};
 use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
-use crate::config::{PolishConfig, ProviderConfig, ShortcutConfig};
+use crate::config::{ApiKey, PolishConfig, ProviderConfig, ShortcutConfig};
 use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
@@ -503,6 +503,7 @@ fn provider_reload_applies_only_a_valid_config() {
             model: "big".to_string(),
             language: "auto".to_string(),
             api_key_env: None,
+            saved_key: None,
         }))
     );
     assert_eq!(
@@ -539,24 +540,25 @@ fn polish_reload_hands_the_section_to_the_input_worker() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\nurl = \"https://ai.example/chat/completions?key=secret\"\n",
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\n",
     )
     .unwrap();
+    std::fs::write(dir.join("keys.toml"), "polish = \"sk-saved\"\n").unwrap();
     assert_eq!(harness.actor.reload_polish(), Reply::Ok);
-    let polish = PolishConfig {
-        enabled: true,
-        model: "deepseek-chat".to_string(),
-        url: "https://ai.example/chat/completions?key=secret".to_string(),
-        ..PolishConfig::default()
-    };
-    assert_eq!(*harness.actor.polish.borrow(), polish);
-    // The query may hold a key, so subscribers never see it.
+    // The key saved beside the config reaches the worker with the section.
+    assert_eq!(
+        *harness.actor.polish.borrow(),
+        PolishConfig {
+            enabled: true,
+            model: "deepseek-chat".to_string(),
+            saved_key: Some(ApiKey::new("sk-saved".to_string())),
+            ..PolishConfig::default()
+        }
+    );
     assert_eq!(
         harness._snapshots.borrow_and_update().config,
         ConfigSummary {
             polish_enabled: true,
-            polish_model: polish.model,
-            polish_url: "https://ai.example/chat/completions".to_string(),
             ..before
         }
     );

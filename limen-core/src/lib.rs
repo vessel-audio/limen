@@ -19,7 +19,7 @@ mod shortcut;
 mod task;
 
 pub use audio::Level;
-pub use config::{Config, Paths, ShortcutConfig};
+pub use config::{ApiKey, Config, KeyChange, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
@@ -30,9 +30,11 @@ pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};
-pub use models::{ModelRole, list_models, set_model};
+pub use models::{
+    KeyState, ModelRole, Polishing, Provider, list_models, load_provider, save_provider,
+};
 pub use provider::{
-    Endpoint as ProviderEndpoint, probe, set_server as set_provider_server,
+    Endpoint as ProviderEndpoint, probe, server_url as provider_server_url,
     split_url as split_provider_url,
 };
 pub use reload::ConfigChange;

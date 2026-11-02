@@ -300,6 +300,7 @@ mod tests {
             model: "test-model".to_string(),
             language: "auto".to_string(),
             api_key_env: None,
+            saved_key: None,
         })
     }
 

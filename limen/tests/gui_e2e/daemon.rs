@@ -218,8 +218,6 @@ async fn run(scenario: Scenario, log: PathBuf) -> Result<()> {
             provider_model: "e2e-model".to_string(),
             provider_url: "http://127.0.0.1:9/v1".to_string(),
             polish_enabled: false,
-            polish_model: "e2e-polish".to_string(),
-            polish_url: "http://127.0.0.1:9/v1/chat/completions".to_string(),
         },
     }));
     daemon.lock().await.publish();
@@ -306,8 +304,6 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
                 let mut daemon = daemon.lock().await;
                 daemon.config = ConfigSummary {
                     polish_enabled: config.polish.enabled,
-                    polish_model: config.polish.model,
-                    polish_url: config.polish.url,
                     ..daemon.config.clone()
                 };
                 daemon.publish();

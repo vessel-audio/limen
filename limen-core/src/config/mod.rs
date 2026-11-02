@@ -17,11 +17,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
+mod keys;
 mod value;
 mod write;
 
-pub(crate) use value::{Key, update_value};
+pub use keys::KeyChange;
+pub(crate) use keys::{saved_keys, update_key};
+pub(crate) use value::{Key, Value, update_values};
 pub(crate) use write::{check_writable, snippet, update_shortcut};
+
+/// An API key saved from the GUI. Its `Debug` output never shows the key,
+/// so configs and commands that hold one stay safe to log.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    pub fn new(key: String) -> Self {
+        Self(key)
+    }
+
+    /// The key itself, for the request that sends it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ApiKey(…)")
+    }
+}
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# Limen configuration
@@ -126,6 +151,9 @@ pub struct ProviderConfig {
     #[serde(default = "default_language")]
     pub language: String,
     pub api_key_env: Option<String>,
+    /// The key saved from the GUI, which comes before `api_key_env`.
+    #[serde(skip)]
+    pub saved_key: Option<ApiKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +193,9 @@ pub struct PolishConfig {
     pub model: String,
     pub api_key_env: String,
     pub timeout_ms: u64,
+    /// The key saved from the GUI, which comes before `api_key_env`.
+    #[serde(skip)]
+    pub saved_key: Option<ApiKey>,
 }
 
 impl Default for PolishConfig {
@@ -175,6 +206,7 @@ impl Default for PolishConfig {
             model: "deepseek-flash".to_string(),
             api_key_env: "DEEPSEEK_API_KEY".to_string(),
             timeout_ms: 5000,
+            saved_key: None,
         }
     }
 }
@@ -221,11 +253,25 @@ impl Config {
         Self::load(path)
     }
 
-    /// Read, parse, and validate the config file; never creates it.
+    /// Read, parse, and validate the config file, with the API keys saved
+    /// beside it; never creates either.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
-        Self::parse(&text).with_context(|| format!("invalid config: {}", path.display()))
+        let mut config =
+            Self::parse(&text).with_context(|| format!("invalid config: {}", path.display()))?;
+        let keys = saved_keys(path)?;
+        config.provider.saved_key = keys.asr.map(ApiKey::new);
+        config.polish.saved_key = keys.polish.map(ApiKey::new);
+        Ok(config)
+    }
+
+    /// Read and parse the config file without validating it or reading its
+    /// keys, so a config the GUI is about to repair can still be shown. A
+    /// missing file reads as the annotated default.
+    pub(crate) fn read_unchecked(path: &Path) -> Result<Self> {
+        let (text, _) = write::read_text(path)?;
+        toml::from_str(&text).with_context(|| format!("failed to parse config: {}", path.display()))
     }
 
     /// Parse and validate the text of a config file.
@@ -276,9 +322,29 @@ impl Config {
         Ok(())
     }
 
+    /// The ASR key: the one saved from the GUI, else the one in
+    /// `provider.api_key_env`.
     pub fn api_key(&self) -> Option<String> {
-        let var = self.provider.api_key_env.as_ref()?;
-        std::env::var(var).ok().filter(|v| !v.is_empty())
+        match &self.provider.saved_key {
+            Some(key) => Some(key.expose().to_string()),
+            None => {
+                let var = self.provider.api_key_env.as_ref()?;
+                std::env::var(var).ok().filter(|v| !v.is_empty())
+            }
+        }
+    }
+}
+
+impl PolishConfig {
+    /// The polishing key: the one saved from the GUI, else the one in
+    /// `api_key_env`.
+    pub fn api_key(&self) -> Option<String> {
+        match &self.saved_key {
+            Some(key) => Some(key.expose().to_string()),
+            None => std::env::var(&self.api_key_env)
+                .ok()
+                .filter(|key| !key.is_empty()),
+        }
     }
 }
 

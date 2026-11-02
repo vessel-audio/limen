@@ -106,12 +106,10 @@ pub fn history(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
 
 mod dictation;
 mod models;
-mod provider;
 mod requests;
 mod shortcuts;
 pub use dictation::dictation;
-pub use models::{ModelForms, follow as follow_models};
-pub use provider::ProviderForm;
+pub use models::{ModelForms, follow as follow_models, models};
 pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
 

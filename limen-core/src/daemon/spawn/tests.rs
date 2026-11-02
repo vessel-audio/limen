@@ -270,8 +270,6 @@ fn fake_server(paths: &CorePaths, session_only: bool) {
                         provider_model: "test".to_string(),
                         provider_url: "http://127.0.0.1".to_string(),
                         polish_enabled: false,
-                        polish_model: String::new(),
-                        polish_url: String::new(),
                     },
                 };
                 let shortcut = ShortcutStatus {

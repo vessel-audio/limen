@@ -128,16 +128,27 @@ requests.count: requests
 requests.kept: The daemon keeps the latest 20
 requests.failed_status: Failed
 action.apply: Apply
-provider.title: ASR server
-toast.provider_applied: ASR server applied
-toast.provider_saved: ASR server saved; the daemon uses it when it starts
-provider.route: Route
 settings.off: "Off"
 settings.on: "On"
-models.asr: ASR model
-models.polish: Polish model
+nav.models: Models
+nav.asr: ASR
+nav.polish: Polish
+models.asr_title: ASR model
+models.polish_title: Polish model
+models.server: Server
+models.route: Route
+models.polishing: Polishing
+models.url: URL
+models.key: API key
+models.key_saved: Saved; type to replace
+models.key_missing: None
+models.key_removed: Removed when saved
+models.remove_key: Remove
+models.model: Model
 models.search: Search or enter a model
-toast.asr_model_applied: ASR model applied
-toast.asr_model_saved: ASR model saved; the daemon uses it when it starts
-toast.polish_model_applied: Polish model applied
-toast.polish_model_saved: Polish model saved; the daemon uses it when it starts
+models.save: Save
+models.choose_route: Choose a route
+toast.asr_applied: ASR settings applied
+toast.asr_saved: ASR settings saved; the daemon uses them when it starts
+toast.polish_applied: Polish settings applied
+toast.polish_saved: Polish settings saved; the daemon uses them when it starts

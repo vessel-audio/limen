@@ -1,7 +1,7 @@
-//! Writing single values back from the GUI: the ASR server's URL and the
-//! ASR and polishing models.
+//! Writing values back from the GUI: the ASR and polishing providers' URLs
+//! and models, and whether polishing is on.
 //!
-//! Like the `[shortcut]` writer, only the value changes: every other byte of
+//! Like the `[shortcut]` writer, only the values change: every other byte of
 //! the file, comments included, stays as it was, and a symlinked or
 //! read-only config is never replaced.
 
@@ -13,12 +13,21 @@ use toml_edit::{DocumentMut, ImDocument, Item};
 use super::Config;
 use super::write::{check_writable, lock_dir, read_text, replace};
 
-/// A string value of the config that the GUI edits.
+/// A value of the config that the GUI edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Key {
     ProviderUrl,
     ProviderModel,
+    PolishEnabled,
+    PolishUrl,
     PolishModel,
+}
+
+/// A value to write: text or a switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Value {
+    Text(String),
+    Switch(bool),
 }
 
 impl Key {
@@ -27,46 +36,40 @@ impl Key {
         match self {
             Self::ProviderUrl => ("provider", "url"),
             Self::ProviderModel => ("provider", "model"),
+            Self::PolishEnabled => ("polish", "enabled"),
+            Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
         }
     }
 
-    fn read(self, config: &Config) -> &str {
+    fn read(self, config: &Config) -> Value {
         match self {
-            Self::ProviderUrl => &config.provider.url,
-            Self::ProviderModel => &config.provider.model,
-            Self::PolishModel => &config.polish.model,
+            Self::ProviderUrl => Value::Text(config.provider.url.clone()),
+            Self::ProviderModel => Value::Text(config.provider.model.clone()),
+            Self::PolishEnabled => Value::Switch(config.polish.enabled),
+            Self::PolishUrl => Value::Text(config.polish.url.clone()),
+            Self::PolishModel => Value::Text(config.polish.model.clone()),
         }
     }
 }
 
-/// Set `key` to `value` in the config file at `path`, under the same lock as
-/// shortcut writes. A missing file is created from the annotated default.
-/// Nothing is written when the value stays the same, or when the edited file
-/// would no longer be a valid config.
-pub(crate) fn update_value(path: &Path, key: Key, value: &str) -> Result<()> {
+/// `text` with `key` set to `value`, every other byte unchanged.
+fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
     let (section, name) = key.path();
-    let _lock = lock_dir(path)?;
-    let (text, mode) = read_text(path)?;
-    // Only the edited file must be valid, so a broken value can be repaired.
-    let current: Config = toml::from_str(&text)
-        .with_context(|| format!("failed to parse config: {}", path.display()))?;
-    check_writable(path)
-        .map_err(|refusal| anyhow!("{refusal}; set {section}.{name} = {value:?} there instead"))?;
-    // A missing config is written even unchanged, like shortcut setup does.
-    if key.read(&current) == value && mode.is_some() {
-        return Ok(());
-    }
-    let document = ImDocument::parse(text.as_str()).context("the config is not valid TOML")?;
+    let document = ImDocument::parse(text).context("the config is not valid TOML")?;
     let span = document
         .get(section)
         .and_then(|table| table.get(name))
         .and_then(Item::span);
-    let edited = match span {
+    match span {
         Some(span) => {
-            let mut edited = text.clone();
-            edited.replace_range(span, &toml::Value::String(value.to_string()).to_string());
-            edited
+            let written = match value {
+                Value::Text(text) => toml::Value::String(text.clone()),
+                Value::Switch(on) => toml::Value::Boolean(*on),
+            };
+            let mut edited = text.to_string();
+            edited.replace_range(span, &written.to_string());
+            Ok(edited)
         }
         // Keys with a default, such as `polish.model`, may be left out.
         None => {
@@ -78,14 +81,49 @@ pub(crate) fn update_value(path: &Path, key: Key, value: &str) -> Result<()> {
                 .with_context(|| {
                     format!("`{section}` in the config must be a [{section}] section")
                 })?
-                .insert(name, toml_edit::value(value));
-            document.to_string()
+                .insert(
+                    name,
+                    match value {
+                        Value::Text(text) => toml_edit::value(text.as_str()),
+                        Value::Switch(on) => toml_edit::value(*on),
+                    },
+                );
+            Ok(document.to_string())
         }
-    };
+    }
+}
+
+/// Set each key to its value in the config file at `path`, under the same
+/// lock as shortcut writes. A missing file is created from the annotated
+/// default. Nothing is written when every value stays the same, or when the
+/// edited file would no longer be a valid config.
+pub(crate) fn update_values(path: &Path, values: &[(Key, Value)]) -> Result<()> {
+    let _lock = lock_dir(path)?;
+    let (text, mode) = read_text(path)?;
+    // Only the edited file must be valid, so a broken value can be repaired.
+    let current: Config = toml::from_str(&text)
+        .with_context(|| format!("failed to parse config: {}", path.display()))?;
+    check_writable(path).map_err(|refusal| anyhow!("{refusal}; edit it there instead"))?;
+    let unchanged = values
+        .iter()
+        .all(|(key, value)| key.read(&current) == *value);
+    // A missing config is written even unchanged, like shortcut setup does.
+    if unchanged && mode.is_some() {
+        return Ok(());
+    }
+    let edited = values
+        .iter()
+        .try_fold(text, |text, (key, value)| with_value(&text, *key, value))?;
     let config = Config::parse(&edited)?;
-    match key.read(&config) == value {
-        true => replace(path, &edited, mode),
-        false => bail!("{section}.{name} of {} could not be edited", path.display()),
+    match values
+        .iter()
+        .find(|(key, value)| key.read(&config) != *value)
+    {
+        None => replace(path, &edited, mode),
+        Some((key, _)) => {
+            let (section, name) = key.path();
+            bail!("{section}.{name} of {} could not be edited", path.display())
+        }
     }
 }
 
@@ -94,7 +132,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{Key, update_value};
+    use super::{Key, Value, update_values};
     use crate::config::DEFAULT_CONFIG;
 
     /// A fresh, empty directory for one test.
@@ -103,6 +141,66 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn set(path: &std::path::Path, key: Key, text: &str) -> anyhow::Result<()> {
+        update_values(path, &[(key, Value::Text(text.to_string()))])
+    }
+
+    #[test]
+    fn a_whole_provider_is_written_at_once() {
+        let path = scratch("provider-values").join("config.toml");
+        fs::write(&path, DEFAULT_CONFIG).unwrap();
+
+        update_values(
+            &path,
+            &[
+                (Key::PolishEnabled, Value::Switch(true)),
+                (
+                    Key::PolishUrl,
+                    Value::Text("http://127.0.0.1:3425/v1/chat/completions".to_string()),
+                ),
+                (Key::PolishModel, Value::Text("qwen3".to_string())),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            DEFAULT_CONFIG
+                .replace("enabled = false", "enabled = true")
+                .replace(
+                    "https://api.deepseek.com/chat/completions",
+                    "http://127.0.0.1:3425/v1/chat/completions"
+                )
+                .replace("deepseek-flash", "qwen3")
+        );
+    }
+
+    #[test]
+    fn enabling_polishing_insecurely_leaves_the_file_alone() {
+        let path = scratch("provider-insecure").join("config.toml");
+        fs::write(&path, DEFAULT_CONFIG).unwrap();
+
+        let error = update_values(
+            &path,
+            &[
+                (Key::PolishEnabled, Value::Switch(true)),
+                (
+                    Key::PolishUrl,
+                    Value::Text("http://192.0.2.1/v1/chat/completions".to_string()),
+                ),
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (error.to_string(), fs::read_to_string(&path).unwrap()),
+            (
+                "polish.url must use HTTPS, or HTTP on a loopback address".to_string(),
+                DEFAULT_CONFIG.to_string()
+            )
+        );
     }
 
     #[test]
@@ -114,7 +212,7 @@ mod tests {
         )
         .unwrap();
 
-        update_value(
+        set(
             &path,
             Key::ProviderUrl,
             "https://asr.example/v1/audio/transcriptions",
@@ -131,7 +229,7 @@ mod tests {
     fn a_missing_config_starts_from_the_default() {
         let path = scratch("provider-missing").join("config.toml");
 
-        update_value(&path, Key::ProviderUrl, "http://10.0.0.2:9000/asr").unwrap();
+        set(&path, Key::ProviderUrl, "http://10.0.0.2:9000/asr").unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -147,7 +245,7 @@ mod tests {
         let path = scratch("provider-repair").join("config.toml");
         fs::write(&path, "[provider]\nurl = \"http://\"\nmodel = \"m\"\n").unwrap();
 
-        update_value(&path, Key::ProviderUrl, "http://127.0.0.1:8000/asr").unwrap();
+        set(&path, Key::ProviderUrl, "http://127.0.0.1:8000/asr").unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -161,7 +259,7 @@ mod tests {
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
         for url in ["", "127.0.0.1:8000", "ftp://host/asr", "http://"] {
-            assert!(update_value(&path, Key::ProviderUrl, url).is_err(), "{url}");
+            assert!(set(&path, Key::ProviderUrl, url).is_err(), "{url}");
         }
 
         assert_eq!(fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
@@ -172,8 +270,8 @@ mod tests {
         let path = scratch("model-edit").join("config.toml");
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
-        update_value(&path, Key::ProviderModel, "Qwen/Qwen3-ASR-1.7B").unwrap();
-        update_value(&path, Key::PolishModel, "deepseek-chat").unwrap();
+        set(&path, Key::ProviderModel, "Qwen/Qwen3-ASR-1.7B").unwrap();
+        set(&path, Key::PolishModel, "deepseek-chat").unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
@@ -192,7 +290,7 @@ mod tests {
         )
         .unwrap();
 
-        update_value(&path, Key::PolishModel, "deepseek-chat").unwrap();
+        set(&path, Key::PolishModel, "deepseek-chat").unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),

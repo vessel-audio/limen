@@ -8,6 +8,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
 use gpui_kit::*;
 
+use limen_core::ModelRole;
+
 use crate::app::{AppView, Page};
 use crate::motion;
 
@@ -49,7 +51,7 @@ struct Destination {
 
 impl AppView {
     pub(crate) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let destinations = [
+        let workspace = [
             Destination {
                 id: "dictation-page",
                 icon: IconName::Mic,
@@ -69,12 +71,61 @@ impl AppView {
                 page: Page::Shortcuts,
             },
         ];
+        let models = [
+            Destination {
+                id: "asr-page",
+                icon: IconName::AudioWaveform,
+                label: rust_i18n::t!("nav.asr").into(),
+                page: Page::Models(ModelRole::Asr),
+            },
+            Destination {
+                id: "polish-page",
+                icon: IconName::WandSparkles,
+                label: rust_i18n::t!("nav.polish").into(),
+                page: Page::Models(ModelRole::Polish),
+            },
+        ];
+        div()
+            .v_flex()
+            .h_full()
+            .min_h_0()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .px_3()
+            .gap_4()
+            .child(self.group(
+                "navigation",
+                rust_i18n::t!("nav.section").into(),
+                workspace,
+                cx,
+            ))
+            .child(self.group(
+                "model-navigation",
+                rust_i18n::t!("nav.models").into(),
+                models,
+                cx,
+            ))
+            .with_spring(
+                "sidebar-width",
+                SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.width()),
+                |sidebar, width| sidebar.w(width),
+            )
+    }
+
+    /// One labelled group of destinations, a tab list named `id`.
+    fn group<const N: usize>(
+        &self,
+        id: &'static str,
+        title: SharedString,
+        destinations: [Destination; N],
+        cx: &mut Context<Self>,
+    ) -> Div {
         let labels = self.sidebar_mode.label_opacity();
         let selected = destinations
             .iter()
             .position(|destination| destination.page == self.page);
-        // One card springs to the selected row and fades out while a page
-        // outside the sidebar, such as Settings, is shown.
+        // One card per group springs to the selected row and fades out while
+        // a page outside the group is shown.
         let highlight = div()
             .absolute()
             .left_0()
@@ -89,7 +140,7 @@ impl AppView {
                     .bg(cx.theme().background)
                     .shadow_xs()
                     .with_spring(
-                        "nav-highlight-opacity",
+                        SharedString::from(format!("{id}-highlight-opacity")),
                         SpringAnimation::new(motion::SPRING).to(match selected {
                             Some(_) => 1.,
                             None => 0.,
@@ -98,7 +149,7 @@ impl AppView {
                     ),
             )
             .with_spring(
-                "nav-highlight-top",
+                SharedString::from(format!("{id}-highlight-top")),
                 SpringAnimation::new(motion::SPRING).to(px(
                     selected.unwrap_or_default() as f32 * (ROW_HEIGHT + ROW_GAP)
                 )),
@@ -106,11 +157,6 @@ impl AppView {
             );
         div()
             .v_flex()
-            .h_full()
-            .min_h_0()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .px_3()
             .child(
                 div()
                     .h(px(28.))
@@ -121,19 +167,19 @@ impl AppView {
                     .text_xs()
                     .font_medium()
                     .text_color(cx.theme().muted_foreground)
-                    .child(rust_i18n::t!("nav.section").to_string())
+                    .child(title.clone())
                     .with_spring(
-                        "section-label",
+                        SharedString::from(format!("{id}-label")),
                         SpringAnimation::new(motion::SPRING).to(labels),
                         |label, opacity| label.opacity(opacity.clamp(0., 1.)),
                     ),
             )
             .child(
                 div()
-                    .id("navigation")
-                    .accessibility_id("navigation")
+                    .id(id)
+                    .accessibility_id(id)
                     .role(Role::TabList)
-                    .aria_label(rust_i18n::t!("nav.section").to_string())
+                    .aria_label(title)
                     .relative()
                     .v_flex()
                     .gap(px(ROW_GAP))
@@ -186,11 +232,6 @@ impl AppView {
                                 .active(|style| style.bg(cx.theme().border)),
                         }
                     })),
-            )
-            .with_spring(
-                "sidebar-width",
-                SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.width()),
-                |sidebar, width| sidebar.w(width),
             )
     }
 }

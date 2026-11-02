@@ -316,8 +316,6 @@ fn the_worst_bounded_snapshot_fits_the_push_limit() {
         provider_model: capped(&"\"".repeat(300), 256).0,
         provider_url: capped(&"\"".repeat(300), 256).0,
         polish_enabled: true,
-        polish_model: capped(&"\"".repeat(300), 256).0,
-        polish_url: capped(&"\"".repeat(300), 256).0,
     };
 
     let serialized = serde_json::to_vec(projection.snapshot()).unwrap();

@@ -118,13 +118,6 @@ pub struct ConfigSummary {
     pub provider_url: String,
     /// Whether transcript polishing is enabled.
     pub polish_enabled: bool,
-    /// The configured polishing model.
-    #[serde(default)]
-    pub polish_model: String,
-    /// The configured polishing endpoint URL, without its query, which may
-    /// hold a key.
-    #[serde(default)]
-    pub polish_url: String,
 }
 
 impl ConfigSummary {
@@ -139,22 +132,7 @@ impl ConfigSummary {
             provider_model: capped(&config.provider.model, CONFIG_CAP).0,
             provider_url: capped(&config.provider.url, CONFIG_CAP).0,
             polish_enabled: config.polish.enabled,
-            polish_model: capped(&config.polish.model, CONFIG_CAP).0,
-            polish_url: capped(&endpoint(&config.polish.url), CONFIG_CAP).0,
         }
-    }
-}
-
-/// `url` without its query and fragment; an unparsable URL shows only up to
-/// its first `?` or `#`.
-pub(crate) fn endpoint(url: &str) -> String {
-    match reqwest::Url::parse(url) {
-        Ok(mut parsed) => {
-            parsed.set_query(None);
-            parsed.set_fragment(None);
-            parsed.into()
-        }
-        Err(_) => url.split(['?', '#']).next().unwrap_or_default().to_string(),
     }
 }
 
