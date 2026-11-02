@@ -114,7 +114,12 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                     false => Polishing::Off,
                 },
                 service: config.polish.service(),
-                url: config.polish.url.clone(),
+                // A vendor inferred from its own endpoint, the old default,
+                // has no server of the user's to offer when they choose one.
+                url: match (config.polish.service, config.polish.service().uses_url()) {
+                    (None, false) => String::new(),
+                    (Some(_), _) | (None, true) => config.polish.url.clone(),
+                },
                 model: config.polish.model.clone(),
             },
             keys.polish,
@@ -374,6 +379,26 @@ mod tests {
                 .await
                 .unwrap(),
             ConfigChange::Saved
+        );
+    }
+
+    #[test]
+    fn the_old_deepseek_endpoint_is_not_offered_as_a_server() {
+        let paths = scratch("provider-old-deepseek");
+        fs::write(
+            &paths.config_file,
+            format!("{CONFIG}\n[polish]\nurl = \"https://api.deepseek.com/chat/completions\"\nmodel = \"deepseek-flash\"\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_provider(&paths, ModelRole::Polish).unwrap().0,
+            Provider::Polish {
+                polishing: Polishing::Off,
+                service: Service::DeepSeek,
+                url: String::new(),
+                model: "deepseek-flash".to_string(),
+            }
         );
     }
 
