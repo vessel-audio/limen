@@ -3,6 +3,6 @@ Type=Application
 Name=Limen
 Comment=Wayland voice input
 Exec=limen daemon
-Icon=audio-input-microphone
+Icon=io.github.Emin017.Limen
 Terminal=false
 Categories=Utility;
