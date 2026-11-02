@@ -18,6 +18,26 @@ impl AssetSource for Assets {
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        gpui_kit::assets::AllAssets.list(path)
+        gpui_kit::assets::AllAssets.list(path).map(|listed| {
+            listed
+                .into_iter()
+                .chain(MARK.starts_with(path).then(|| MARK.into()))
+                .collect()
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::AssetSource;
+
+    use super::{Assets, MARK};
+
+    #[test]
+    fn the_mark_is_listed_where_it_loads() {
+        assert_eq!(
+            Assets.list("limen/").unwrap(),
+            vec![gpui_kit::SharedString::from(MARK)]
+        );
     }
 }
