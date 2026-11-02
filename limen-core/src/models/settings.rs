@@ -45,6 +45,7 @@ pub enum KeyState {
 pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeyState)> {
     // Read the config and its keys as one snapshot relative to GUI saves.
     let _lock = config::lock_dir(&paths.config_file)?;
+    config::recover_provider_save(&paths.config_file)?;
     let config = Config::read_unchecked(&paths.config_file)?;
     let keys = config::saved_keys(&paths.config_file)?;
     let (provider, saved, variable) = match role {

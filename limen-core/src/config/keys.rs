@@ -6,7 +6,7 @@
 //! symlinked one is never replaced.
 
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ use serde::Deserialize;
 use toml_edit::DocumentMut;
 
 use super::ApiKey;
+use super::transaction::{Backup, write_contents};
 use super::write::check_writable;
 use crate::models::ModelRole;
 
@@ -75,6 +76,7 @@ impl FileIdentity {
 pub(super) struct KeyEdit {
     pub(super) text: String,
     pub(super) original: Option<FileIdentity>,
+    pub(super) backup: Backup,
 }
 
 /// The key file's contents after `change` to the key `role` sends, or
@@ -93,14 +95,35 @@ pub(super) fn edit_key(
         ModelRole::Polish => "polish",
     };
     let path = path(config_file);
-    let (text, exposed, original) = match fs::symlink_metadata(&path) {
-        Ok(metadata) => (
-            fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?,
-            metadata.is_file() && metadata.permissions().mode() & 0o077 != 0,
-            Some(FileIdentity::from_metadata(&metadata)),
-        ),
-        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, None),
+    let read = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path);
+    let (read, managed_link) = match read {
+        // A declaratively managed key file may be a symlink. It is readable,
+        // but check_writable still refuses every change to it below.
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            (OpenOptions::new().read(true).open(&path), true)
+        }
+        result => (result, false),
+    };
+    let (text, exposed, original, backup) = match read {
+        Ok(mut file) => {
+            // Contents and identity come from the same descriptor, so a path
+            // replacement cannot mix another inode's keys into this edit.
+            let metadata = file.metadata()?;
+            let mode = metadata.permissions().mode() & 0o777;
+            let mut text = String::new();
+            file.read_to_string(&mut text)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let exposed = !managed_link && metadata.is_file() && mode & 0o077 != 0;
+            let original = Some(FileIdentity::from_metadata(&metadata));
+            let backup = Backup::present(text.clone(), mode);
+            (text, exposed, original, backup)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            (String::new(), false, None, Backup::missing())
+        }
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
@@ -130,6 +153,7 @@ pub(super) fn edit_key(
     Ok(Some(KeyEdit {
         text: document.to_string(),
         original,
+        backup,
     }))
 }
 
@@ -140,9 +164,14 @@ pub(super) fn edit_key(
 /// process's keys are never overwritten. Callers hold the directory lock, so
 /// Limen readers never observe the in-place write partway through.
 pub(super) fn write_key(path: &Path, edit: KeyEdit) -> Result<()> {
+    let KeyEdit {
+        text,
+        original,
+        backup,
+    } = edit;
     let mut options = OpenOptions::new();
     options.write(true).custom_flags(libc::O_NOFOLLOW);
-    let mut file = match edit.original {
+    let mut file = match original {
         Some(expected) => {
             let file = options
                 .open(path)
@@ -158,20 +187,15 @@ pub(super) fn write_key(path: &Path, edit: KeyEdit) -> Result<()> {
             .open(path)
             .with_context(|| format!("failed to create {}", path.display()))?,
     };
-    (|| -> Result<()> {
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(edit.text.as_bytes())?;
-        // Remove any old suffix only after the new contents are written.
-        file.set_len(edit.text.len() as u64)?;
-        file.sync_all()?;
-        let dir = path
-            .parent()
-            .context("the key file has no parent directory")?;
-        fs::File::open(dir)?.sync_all()?;
-        Ok(())
-    })()
-    .with_context(|| format!("failed to write {}", path.display()))
+    match write_contents(&mut file, path, &text, 0o600) {
+        Ok(()) => Ok(()),
+        Err(error) => match backup.restore(path) {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(error.context(format!(
+                "rolling back the key file also failed: {rollback:#}"
+            ))),
+        },
+    }
 }
 
 #[cfg(test)]

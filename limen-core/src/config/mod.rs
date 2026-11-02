@@ -18,11 +18,13 @@ use serde::{Deserialize, Serialize};
 use crate::shortcut::{Backend, Shortcut};
 
 mod keys;
+mod transaction;
 mod value;
 mod write;
 
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
+pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
 pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
 
@@ -237,6 +239,10 @@ impl Config {
     /// Load the config; write the annotated default first if none exists.
     pub fn load_or_create(paths: &Paths) -> Result<Self> {
         let path = &paths.config_file;
+        {
+            let _lock = write::lock_dir(path)?;
+            transaction::recover(path)?;
+        }
         match fs::symlink_metadata(path) {
             Err(error) if error.kind() == ErrorKind::NotFound => write::create_default(path)?,
             Err(error) => {
@@ -258,6 +264,7 @@ impl Config {
     /// and keys on opposite sides of a save from being read together.
     pub fn load(path: &Path) -> Result<Self> {
         let _lock = write::lock_dir(path)?;
+        transaction::recover(path)?;
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
         let mut config =

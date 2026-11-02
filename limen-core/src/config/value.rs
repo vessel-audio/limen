@@ -12,6 +12,7 @@ use toml_edit::{DocumentMut, ImDocument, Item};
 
 use super::Config;
 use super::keys::{self, KeyChange};
+use super::transaction::{Backup, Transaction, recover};
 use super::write::{check_writable, lock_dir, read_text, replace};
 use crate::models::ModelRole;
 
@@ -108,6 +109,7 @@ pub(crate) fn update_provider(
     change: &KeyChange,
 ) -> Result<()> {
     let _lock = lock_dir(path)?;
+    recover(path)?;
     let (text, mode) = read_text(path)?;
     // Only the edited file must be valid, so a broken value can be repaired.
     let current: Config = toml::from_str(&text)
@@ -119,9 +121,9 @@ pub(crate) fn update_provider(
         (true, Some(_)) => None,
         (false, _) | (true, None) => {
             check_writable(path).map_err(|refusal| anyhow!("{refusal}; edit it there instead"))?;
-            let edited = values
-                .iter()
-                .try_fold(text, |text, (key, value)| with_value(&text, *key, value))?;
+            let edited = values.iter().try_fold(text.clone(), |text, (key, value)| {
+                with_value(&text, *key, value)
+            })?;
             let config = Config::parse(&edited)?;
             if let Some((key, _)) = values
                 .iter()
@@ -134,12 +136,40 @@ pub(crate) fn update_provider(
         }
     };
     let key = keys::edit_key(path, role, change)?;
-    if let Some(key) = key {
-        keys::write_key(&keys::path(path), key)?;
+    if config.is_none() && key.is_none() {
+        return Ok(());
     }
-    match config {
+    let config_backup = config.as_ref().map(|_| match mode {
+        Some(mode) => Backup::present(text.clone(), mode),
+        None => Backup::missing(),
+    });
+    let key_backup = key.as_ref().map(|key| key.backup.clone());
+    let transaction = Transaction::start(path, config_backup, key_backup)?;
+    let written = match key {
+        Some(key) => keys::write_key(&keys::path(path), key),
+        None => Ok(()),
+    };
+    if let Err(error) = written {
+        // write_key restored the key itself, and the config was not touched.
+        return match transaction.finish() {
+            Ok(()) => Err(error),
+            Err(finish) => Err(error.context(format!(
+                "removing the provider rollback also failed: {finish:#}"
+            ))),
+        };
+    }
+    let written = match config {
         Some(config) => replace(path, &config, mode),
         None => Ok(()),
+    };
+    match written {
+        Ok(()) => transaction.finish(),
+        Err(error) => match transaction.rollback() {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(error.context(format!(
+                "rolling back the provider save also failed: {rollback:#}"
+            ))),
+        },
     }
 }
 
