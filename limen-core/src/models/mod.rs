@@ -31,8 +31,11 @@ pub enum ModelRole {
 
 /// The models the server `provider` names offers, in its order, as
 /// `backend` lists them. The page asks while it is being edited, so
-/// `provider` and `key` are its unsaved fields; a key not typed comes from
-/// wherever saving would leave it.
+/// `provider` and `key` are its unsaved fields. A key the user typed is
+/// sent wherever they point it; a stored one, saved or named by
+/// `api_key_env`, only to the service and server it was saved for, so a
+/// half-typed address never receives it. Elsewhere only the service's own
+/// variable, such as OPENAI_API_KEY, is read.
 pub async fn list_models(
     paths: &Paths,
     provider: &Provider,
@@ -47,26 +50,28 @@ pub async fn list_models(
             config::saved_keys(&paths.config_file)?,
         )
     };
-    let saved_key = |saved: Option<String>| match key {
-        KeyChange::Set(key) => Some(key.clone()),
-        KeyChange::Clear => None,
-        KeyChange::Keep => saved.map(ApiKey::new),
+    let stored = |saved: Option<String>, same: bool| match (key, same) {
+        (KeyChange::Set(key), _) => Some(key.clone()),
+        (KeyChange::Keep, true) => saved.map(ApiKey::new),
+        (KeyChange::Clear, _) | (KeyChange::Keep, false) => None,
     };
-    // A config from before services keeps reading its key as it did while
-    // the service it infers is still the chosen one.
-    let named = |written: Option<Service>, inferred: Service, chosen: Service| match (
-        written,
-        inferred == chosen,
-    ) {
-        (None, true) => None,
-        (Some(_), _) | (None, false) => Some(chosen),
+    let same = |saved: Service, saved_url: &str, chosen: Service, url: &str| {
+        chosen == saved && (!chosen.uses_url() || saved_url.trim() == url.trim())
     };
     let (service, endpoint, connection) = match provider {
         Provider::Asr { service, url, .. } => {
-            config.provider.url = url.trim().to_string();
-            config.provider.service =
-                named(config.provider.service, config.provider.service(), *service);
-            config.provider.saved_key = saved_key(keys.asr);
+            let same = same(
+                config.provider.service(),
+                &config.provider.url,
+                *service,
+                url,
+            );
+            config.provider.saved_key = stored(keys.asr, same);
+            if !same {
+                config.provider.service = Some(*service);
+                config.provider.url = url.trim().to_string();
+                config.provider.api_key_env = None;
+            }
             match connection::asr(&config)? {
                 AsrRoute::Api(connection) => (*service, url, connection),
                 // Limen's own upload has no models route to ask.
@@ -76,14 +81,18 @@ pub async fn list_models(
             }
         }
         Provider::Polish { service, url, .. } => {
-            config.polish.url = url.trim().to_string();
-            config.polish.service = named(config.polish.service, config.polish.service(), *service);
-            config.polish.saved_key = saved_key(keys.polish);
+            let same = same(config.polish.service(), &config.polish.url, *service, url);
+            config.polish.saved_key = stored(keys.polish, same);
+            if !same {
+                config.polish.service = Some(*service);
+                config.polish.url = url.trim().to_string();
+                config.polish.api_key_env = None;
+            }
             // The key goes out before anything is saved: guard it as saving
             // and the polisher would.
             if service.uses_url() {
-                config::check_polish_url(&config.polish.url)?;
-                config::check_polish_route(&config.polish.url)?;
+                config::check_polish_url(url.trim())?;
+                config::check_polish_route(url.trim())?;
             }
             (
                 *service,
@@ -143,7 +152,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsaved_server_lists_each_model_once_with_the_saved_key() {
-        let paths = scratch("models-list", "[provider]\nurl = \"\"\n");
+        let paths = scratch(
+            "models-list",
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\n",
+        );
         fs::write(
             paths.config_file.with_file_name("keys.toml"),
             "asr = \"sk-saved\"\n",
@@ -176,6 +188,45 @@ mod tests {
                     api_key: Some("sk-saved".to_string()),
                 })]
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stored_key_never_reaches_another_server_or_service() {
+        let paths = scratch(
+            "models-stored-key",
+            "[provider]\nurl = \"\"\n\n[polish]\nservice = \"openai-compatible\"\nurl = \"https://saved.example/v1/chat/completions\"\napi_key_env = \"PATH\"\n",
+        );
+        fs::write(
+            paths.config_file.with_file_name("keys.toml"),
+            "polish = \"sk-saved\"\n",
+        )
+        .unwrap();
+        let backend = Recording::default();
+        let polish = |service, url: &str| Provider::Polish {
+            polishing: Polishing::Off,
+            service,
+            url: url.to_string(),
+            model: String::new(),
+        };
+
+        for provider in [
+            polish(
+                Service::OpenAiCompatible,
+                "https://other.example/v1/chat/completions",
+            ),
+            polish(Service::OpenAiCompatible, "https://saved.e"),
+        ] {
+            let _ = list_models(&paths, &provider, &KeyChange::Keep, &backend).await;
+        }
+
+        assert_eq!(
+            backend.built.lock().unwrap().clone(),
+            [Built::Models(Connection {
+                api: Api::Compatible,
+                base_url: Some("https://other.example/v1".to_string()),
+                api_key: None,
+            })]
         );
     }
 
