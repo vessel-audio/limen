@@ -77,16 +77,14 @@ impl AppView {
                                 div()
                                     .flex_shrink_0()
                                     .size(px(24.))
-                                    .rounded_md()
-                                    .bg(cx.theme().primary)
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .child(
                                         Icon::empty()
                                             .path(crate::assets::MARK)
-                                            .size(px(16.))
-                                            .text_color(cx.theme().primary_foreground),
+                                            .size(px(22.))
+                                            .text_color(cx.theme().primary),
                                     ),
                             )
                             .child(
