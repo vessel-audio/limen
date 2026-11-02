@@ -132,8 +132,8 @@ provider.title: ASR server
 toast.provider_applied: ASR server applied
 toast.provider_saved: ASR server saved; the daemon uses it when it starts
 provider.route: Route
-settings.off: Off
-settings.on: On
+settings.off: "Off"
+settings.on: "On"
 models.asr: ASR model
 models.polish: Polish model
 models.search: Search or enter a model
