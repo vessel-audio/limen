@@ -79,9 +79,11 @@ protocol takes effect.
 The Models pages, opened from the sidebar or the Models button on the dictation
 page, set up the ASR provider (service, server, API key, model) and the
 polishing provider (on or off, service, URL, API key, model). A service is
-either a server you name, or a vendor's own API, which needs only a key. The
-model list shows what the service offers and also takes a typed name; the
-whisper.cpp server lists none. Saving writes `config.toml` and applies the
+either a server you name, or a vendor's own API, which needs only a key. No
+server or model is set until you choose one. Once the server address or key
+stops changing, the page asks the service for its models: a server that offers
+exactly one fills it in, and otherwise the list offers them and also takes a
+typed name. The whisper.cpp server lists none. Saving writes `config.toml` and applies the
 change to a running daemon from its next take. API keys never go into
 `config.toml`: they are saved in `keys.toml` beside it with mode 0600, and a
 saved key comes before the variable named by `api_key_env`, which defaults to
@@ -107,8 +109,9 @@ the vendor's own, such as `OPENAI_API_KEY`.
    Use the same `fcitx5` package version as the running daemon; rebuild after
    Fcitx upgrades because the addon uses its C++ ABI.
 3. First run writes an annotated default config to
-   `$XDG_CONFIG_HOME/limen/config.toml`; point `provider.url` at your
-   server's `/v1/audio/transcriptions` endpoint. `input_method.backend` defaults to
+   `$XDG_CONFIG_HOME/limen/config.toml` with no ASR server or model; set them
+   on the GUI's ASR page, or point `provider.url` at your server's
+   `/v1/audio/transcriptions` endpoint and set `provider.model`. `input_method.backend` defaults to
    `fcitx5` and requires the addon from step 2.
 4. Start the daemon:
    ```bash

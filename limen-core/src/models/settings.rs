@@ -383,26 +383,6 @@ mod tests {
     }
 
     #[test]
-    fn the_old_deepseek_endpoint_is_not_offered_as_a_server() {
-        let paths = scratch("provider-old-deepseek");
-        fs::write(
-            &paths.config_file,
-            format!("{CONFIG}\n[polish]\nurl = \"https://api.deepseek.com/chat/completions\"\nmodel = \"deepseek-flash\"\n"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            load_provider(&paths, ModelRole::Polish).unwrap().0,
-            Provider::Polish {
-                polishing: Polishing::Off,
-                service: Service::DeepSeek,
-                url: String::new(),
-                model: "deepseek-flash".to_string(),
-            }
-        );
-    }
-
-    #[test]
     fn the_key_state_follows_the_chosen_service() {
         let key = KeySource {
             saved: false,

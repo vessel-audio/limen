@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::backend::ModelBackend;
-use crate::config::{self, Config, Paths};
+use crate::config::{self, ApiKey, Config, KeyChange, Paths, Service};
 use crate::connection::{self, AsrRoute};
 
 mod settings;
@@ -29,35 +29,65 @@ pub enum ModelRole {
     Polish,
 }
 
-/// The models the configured server for `role` offers, in its order, as
-/// `backend` lists them.
+/// The models the server `provider` names offers, in its order, as
+/// `backend` lists them. The page asks while it is being edited, so
+/// `provider` and `key` are its unsaved fields; a key not typed comes from
+/// wherever saving would leave it.
 pub async fn list_models(
     paths: &Paths,
-    role: ModelRole,
+    provider: &Provider,
+    key: &KeyChange,
     backend: &dyn ModelBackend,
 ) -> Result<Vec<String>> {
-    let config = Config::load(&paths.config_file)
-        .map_err(|_| anyhow::anyhow!("cannot load the provider settings"))?;
-    let (service, endpoint, connection) = match role {
-        ModelRole::Asr => match connection::asr(&config)? {
-            AsrRoute::Api(connection) => {
-                (config.provider.service(), &config.provider.url, connection)
+    let (mut config, keys) = {
+        let _lock = config::lock_dir(&paths.config_file)?;
+        config::recover_provider_save(&paths.config_file)?;
+        (
+            Config::read_unchecked(&paths.config_file)?,
+            config::saved_keys(&paths.config_file)?,
+        )
+    };
+    let saved_key = |saved: Option<String>| match key {
+        KeyChange::Set(key) => Some(key.clone()),
+        KeyChange::Clear => None,
+        KeyChange::Keep => saved.map(ApiKey::new),
+    };
+    // A config from before services keeps reading its key as it did while
+    // the service it infers is still the chosen one.
+    let named = |written: Option<Service>, inferred: Service, chosen: Service| match (
+        written,
+        inferred == chosen,
+    ) {
+        (None, true) => None,
+        (Some(_), _) | (None, false) => Some(chosen),
+    };
+    let (service, endpoint, connection) = match provider {
+        Provider::Asr { service, url, .. } => {
+            config.provider.url = url.trim().to_string();
+            config.provider.service =
+                named(config.provider.service, config.provider.service(), *service);
+            config.provider.saved_key = saved_key(keys.asr);
+            match connection::asr(&config)? {
+                AsrRoute::Api(connection) => (*service, url, connection),
+                // Limen's own upload has no models route to ask.
+                AsrRoute::Upload(url) => {
+                    anyhow::bail!("{} lists no models", config::display_url(&url))
+                }
             }
-            // Limen's own upload has no models route to ask.
-            AsrRoute::Upload(url) => {
-                anyhow::bail!("{} lists no models", config::display_url(&url))
-            }
-        },
-        ModelRole::Polish => {
-            let service = config.polish.service();
-            // The key goes out even while polishing is disabled, when the
-            // config does not check the URL: guard it as the polisher would.
+        }
+        Provider::Polish { service, url, .. } => {
+            config.polish.url = url.trim().to_string();
+            config.polish.service = named(config.polish.service, config.polish.service(), *service);
+            config.polish.saved_key = saved_key(keys.polish);
+            // The key goes out before anything is saved: guard it as saving
+            // and the polisher would.
             if service.uses_url() {
                 config::check_polish_url(&config.polish.url)?;
+                config::check_polish_route(&config.polish.url)?;
             }
             (
-                service,
-                &config.polish.url,
+                *service,
+                url,
                 connection::polish(&config.polish, config.polish.api_key())?,
             )
         }
@@ -83,10 +113,11 @@ pub async fn list_models(
 mod tests {
     use std::fs;
 
-    use super::{ModelRole, list_models};
+    use super::list_models;
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, Connection};
-    use crate::config::Paths;
+    use crate::config::{ApiKey, KeyChange, Paths, Service};
+    use crate::models::{Polishing, Provider};
 
     /// Paths in a fresh directory holding `config`, where no daemon listens.
     fn scratch(name: &str, config: &str) -> Paths {
@@ -102,18 +133,38 @@ mod tests {
         }
     }
 
+    fn asr(service: Service, url: &str) -> Provider {
+        Provider::Asr {
+            service,
+            url: url.to_string(),
+            model: String::new(),
+        }
+    }
+
     #[tokio::test]
-    async fn a_server_lists_each_model_once_from_its_api_root() {
-        let paths = scratch(
-            "models-list",
-            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n",
-        );
+    async fn an_unsaved_server_lists_each_model_once_with_the_saved_key() {
+        let paths = scratch("models-list", "[provider]\nurl = \"\"\n");
+        fs::write(
+            paths.config_file.with_file_name("keys.toml"),
+            "asr = \"sk-saved\"\n",
+        )
+        .unwrap();
         let backend = Recording {
             models: ["b", "a", "b"].map(String::from).to_vec(),
             ..Recording::default()
         };
 
-        let models = list_models(&paths, ModelRole::Asr, &backend).await.unwrap();
+        let models = list_models(
+            &paths,
+            &asr(
+                Service::OpenAiCompatible,
+                "http://127.0.0.1:8000/v1/audio/transcriptions",
+            ),
+            &KeyChange::Keep,
+            &backend,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             (models, backend.built.lock().unwrap().clone()),
@@ -122,22 +173,60 @@ mod tests {
                 vec![Built::Models(Connection {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
-                    api_key: None,
+                    api_key: Some("sk-saved".to_string()),
                 })]
             )
         );
     }
 
     #[tokio::test]
-    async fn an_upload_route_lists_no_models() {
-        let paths = scratch(
-            "models-upload",
-            "[provider]\nurl = \"http://127.0.0.1:8080/inference\"\nmodel = \"m\"\n",
-        );
+    async fn a_typed_key_is_asked_with_and_a_removed_one_is_not() {
+        let paths = scratch("models-typed-key", "[provider]\nurl = \"\"\n");
+        fs::write(
+            paths.config_file.with_file_name("keys.toml"),
+            "polish = \"sk-saved\"\n",
+        )
+        .unwrap();
+        let backend = Recording::default();
+        let polish = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::OpenAiCompatible,
+            url: " http://127.0.0.1:8080/v1/chat/completions ".to_string(),
+            model: String::new(),
+        };
 
-        let error = list_models(&paths, ModelRole::Asr, &Refusing)
-            .await
-            .unwrap_err();
+        for key in [
+            KeyChange::Set(ApiKey::new("sk-typed".to_string())),
+            KeyChange::Clear,
+        ] {
+            list_models(&paths, &polish, &key, &backend).await.unwrap();
+        }
+
+        let asked = |api_key: Option<&str>| {
+            Built::Models(Connection {
+                api: Api::Compatible,
+                base_url: Some("http://127.0.0.1:8080/v1".to_string()),
+                api_key: api_key.map(str::to_string),
+            })
+        };
+        assert_eq!(
+            backend.built.lock().unwrap().clone(),
+            [asked(Some("sk-typed")), asked(None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_upload_route_lists_no_models() {
+        let paths = scratch("models-upload", "[provider]\nurl = \"\"\n");
+
+        let error = list_models(
+            &paths,
+            &asr(Service::WhisperCpp, "http://127.0.0.1:8080/inference"),
+            &KeyChange::Keep,
+            &Refusing,
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -147,14 +236,22 @@ mod tests {
 
     #[tokio::test]
     async fn the_polish_key_never_goes_to_plain_http_elsewhere() {
-        let paths = scratch(
-            "models-insecure",
-            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n\n[polish]\nenabled = false\nurl = \"http://192.0.2.1/v1/chat/completions\"\n",
-        );
+        let paths = scratch("models-insecure", "[provider]\nurl = \"\"\n");
+        let polish = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::OpenAiCompatible,
+            url: "http://192.0.2.1/v1/chat/completions".to_string(),
+            model: String::new(),
+        };
 
-        let error = list_models(&paths, ModelRole::Polish, &Refusing)
-            .await
-            .unwrap_err();
+        let error = list_models(
+            &paths,
+            &polish,
+            &KeyChange::Set(ApiKey::new("sk".to_string())),
+            &Refusing,
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),

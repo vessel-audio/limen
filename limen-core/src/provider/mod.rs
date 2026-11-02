@@ -68,6 +68,15 @@ pub trait EventSource: Send {
 /// Build the buffered transcription provider for the configured service:
 /// through `backend`, unless it is Limen's own upload.
 pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn AsrProvider>> {
+    let unset = |text: &str| text.trim().is_empty();
+    match (
+        cfg.provider.service().uses_url() && unset(&cfg.provider.url),
+        unset(&cfg.provider.model),
+    ) {
+        (true, _) => anyhow::bail!("no ASR server is set; choose one on the ASR page"),
+        (false, true) => anyhow::bail!("no ASR model is set; choose one on the ASR page"),
+        (false, false) => {}
+    }
     let model = cfg.provider.model.clone();
     let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg)? {
         AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())),
@@ -143,6 +152,26 @@ mod tests {
 
     fn config(url: &str) -> Config {
         toml::from_str(&format!("[provider]\nurl = \"{url}\"\nmodel = \"asr\"\n")).unwrap()
+    }
+
+    #[test]
+    fn a_take_without_a_server_or_model_says_which_to_choose() {
+        let unset = |provider: &str| {
+            let config: Config = toml::from_str(&format!("[provider]\n{provider}\n")).unwrap();
+            from_config(&config, &Refusing)
+                .err()
+                .map(|error| error.to_string())
+        };
+        assert_eq!(
+            [
+                unset("service = \"openai-compatible\"\nmodel = \"asr\""),
+                unset("url = \"http://127.0.0.1:8080/inference\""),
+            ],
+            [
+                Some("no ASR server is set; choose one on the ASR page".to_string()),
+                Some("no ASR model is set; choose one on the ASR page".to_string()),
+            ]
+        );
     }
 
     #[test]

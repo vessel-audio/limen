@@ -207,6 +207,18 @@ mod tests {
         save(path, &[(key, Value::Text(text.to_string()))])
     }
 
+    /// The default config with the first `old` after `[section]` replaced,
+    /// since both providers start with the same empty values.
+    fn default_with(edits: &[(&str, &str, &str)]) -> String {
+        edits
+            .iter()
+            .fold(DEFAULT_CONFIG.to_string(), |text, (section, old, new)| {
+                let start = text.find(&format!("[{section}]")).unwrap();
+                let at = start + text[start..].find(old).unwrap();
+                format!("{}{new}{}", &text[..at], &text[at + old.len()..])
+            })
+    }
+
     #[test]
     fn a_whole_provider_is_written_at_once() {
         let path = scratch("provider-values").join("config.toml");
@@ -227,13 +239,15 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            DEFAULT_CONFIG
-                .replace("enabled = false", "enabled = true")
-                .replace(
+            default_with(&[
+                ("polish", "enabled = false", "enabled = true"),
+                (
+                    "polish",
                     "url = \"\"",
                     "url = \"http://127.0.0.1:3425/v1/chat/completions\""
-                )
-                .replace("model = \"\"", "model = \"qwen3\"")
+                ),
+                ("polish", "model = \"\"", "model = \"qwen3\""),
+            ])
         );
     }
 
@@ -325,10 +339,11 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            DEFAULT_CONFIG.replace(
-                "http://127.0.0.1:8000/v1/audio/transcriptions",
-                "http://10.0.0.2:9000/v1/audio/transcriptions"
-            )
+            default_with(&[(
+                "provider",
+                "url = \"\"",
+                "url = \"http://10.0.0.2:9000/v1/audio/transcriptions\""
+            )])
         );
     }
 
@@ -350,7 +365,7 @@ mod tests {
         let path = scratch("provider-invalid").join("config.toml");
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
-        for url in ["", "127.0.0.1:8000", "ftp://host/asr", "http://"] {
+        for url in ["127.0.0.1:8000", "ftp://host/asr", "http://"] {
             assert!(set(&path, Key::ProviderUrl, url).is_err(), "{url}");
         }
 
@@ -367,9 +382,14 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            DEFAULT_CONFIG
-                .replace("Qwen/Qwen3-ASR-0.6B", "Qwen/Qwen3-ASR-1.7B")
-                .replace("model = \"\"", "model = \"corrector\"")
+            default_with(&[
+                (
+                    "provider",
+                    "model = \"\"",
+                    "model = \"Qwen/Qwen3-ASR-1.7B\""
+                ),
+                ("polish", "model = \"\"", "model = \"corrector\""),
+            ])
         );
     }
 
