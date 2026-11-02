@@ -226,8 +226,10 @@ pub async fn save_provider(
                     config::Value::Switch(polishing == Polishing::On),
                 )),
                 Some((config::Key::PolishService, service(chosen))),
-                chosen
-                    .uses_url()
+                // A vendor's own API leaves a server's URL for switching
+                // back, but an empty field, as for a vendor named by its own
+                // endpoint, is written so that endpoint is not offered.
+                (chosen.uses_url() || url.trim().is_empty())
                     .then(|| (config::Key::PolishUrl, text(url))),
                 Some((config::Key::PolishModel, text(model))),
             ]
@@ -379,6 +381,31 @@ mod tests {
                 .await
                 .unwrap(),
             ConfigChange::Saved
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vendor_saved_with_an_empty_url_clears_the_one_left_behind() {
+        let paths = scratch("provider-vendor-empty-url");
+        fs::write(
+            &paths.config_file,
+            format!("{CONFIG}\n[polish]\nservice = \"anthropic\"\nurl = \"https://api.example/chat/completions\"\nmodel = \"m\"\n"),
+        )
+        .unwrap();
+        let provider = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::Anthropic,
+            url: String::new(),
+            model: "m".to_string(),
+        };
+
+        save_provider(&paths, provider.clone(), KeyChange::Keep)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            load_provider(&paths, ModelRole::Polish).unwrap().0,
+            provider
         );
     }
 
