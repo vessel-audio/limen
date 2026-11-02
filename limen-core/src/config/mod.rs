@@ -24,7 +24,7 @@ mod write;
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
 pub(crate) use value::{Key, Value, update_provider};
-pub(crate) use write::{check_writable, snippet, update_shortcut};
+pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
 
 /// An API key saved from the GUI. Its `Debug` output never shows the key,
 /// so configs and commands that hold one stay safe to log.

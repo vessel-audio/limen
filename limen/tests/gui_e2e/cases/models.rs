@@ -10,7 +10,7 @@ use limen_core::{Config, v1};
 use super::retype;
 use crate::daemon::Scenario;
 use crate::desktop::{Key, Node};
-use crate::session::{Session, Target};
+use crate::session::{Launch, Session, Target};
 
 /// Answer every connection with an OpenAI-compatible list of `models`, and
 /// return the server's address and the requests it received.
@@ -302,29 +302,22 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
 /// A model chosen before the first settings load survives it, while the
 /// untouched server and route are still filled from the config.
 pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::fd::AsRawFd;
 
     let session = Session::fake(Scenario::default())?;
-    let keys = session.paths().config_file.with_file_name("keys.toml");
-    std::fs::create_dir_all(keys.parent().unwrap())?;
-    let path = CString::new(keys.as_os_str().as_bytes())?;
-    // SAFETY: creates a new FIFO at this test's own path, with no readers or
-    // writers yet. The GUI's first key-file read blocks until the writer below.
-    ensure!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) } == 0);
-    let writer = keys.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        // Each open answers one reader with an empty key file. Removing the
-        // test directory ends any writer still waiting for another reader.
-        for _ in 0..32 {
-            if std::fs::write(&writer, "").is_err() {
-                break;
-            }
-        }
-    });
+    let directory = session.paths().config_file.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&directory)?;
+    let lock = std::fs::File::open(&directory)?;
+    // Hold the same directory lock as provider loads and saves, so the first
+    // load cannot finish until after the early choice below. Closing the file
+    // releases it even if the case fails.
+    // SAFETY: flock only operates on this test's own directory descriptor.
+    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0);
     session.click("asr-page")?;
     type_model(&session, "early-model")?;
+    // SAFETY: unlocks the descriptor locked above.
+    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) } == 0);
+    drop(lock);
     // Save starts disabled until the first load has filled the other fields.
     session.until("the completed form to accept a save", || {
         session.click("asr-save")?;
@@ -339,5 +332,25 @@ pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
                 && config.provider.model == "early-model",
         )
     })?;
+    Ok(())
+}
+
+/// A hand-edited route that the list does not offer follows the server when
+/// only the server address changes.
+pub fn a_custom_route_moves_to_a_new_server() -> Result<()> {
+    let session = Session::launch(Launch {
+        config: Some("[provider]\nurl = \"http://old.example/custom-transcribe\"\nmodel = \"m\"\n"),
+        ..Launch::default()
+    })?;
+    session.click("asr-page")?;
+    retype(&session, "asr-server", "http://new.example")?;
+    session.click("asr-save")?;
+    session.named("toast", "ASR settings applied")?;
+    let provider = Config::load(&session.paths().config_file)?.provider;
+    ensure!(
+        provider.url == "http://new.example/custom-transcribe",
+        "saved {:?}",
+        provider.url
+    );
     Ok(())
 }

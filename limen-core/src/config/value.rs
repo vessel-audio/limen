@@ -12,7 +12,7 @@ use toml_edit::{DocumentMut, ImDocument, Item};
 
 use super::Config;
 use super::keys::{self, KeyChange};
-use super::write::{check_writable, lock_dir, read_text, replace};
+use super::write::{check_writable, lock_dir, read_text, replace, replace_verified};
 use crate::models::ModelRole;
 
 /// A value of the config that the GUI edits.
@@ -135,7 +135,7 @@ pub(crate) fn update_provider(
     };
     let key = keys::edit_key(path, role, change)?;
     if let Some(key) = key {
-        replace(&keys::path(path), &key, Some(0o600))?;
+        replace_verified(&keys::path(path), &key.text, Some(0o600), key.original)?;
     }
     match config {
         Some(config) => replace(path, &config, mode),

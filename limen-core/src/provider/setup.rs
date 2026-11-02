@@ -51,6 +51,12 @@ pub fn split_url(url: &str) -> Option<(String, String)> {
 /// The transcription URL of `endpoint` on `server`, an http(s) origin such
 /// as `http://127.0.0.1:8000`.
 pub fn server_url(server: &str, endpoint: Endpoint) -> Result<String> {
+    server_url_with_route(server, endpoint.path())
+}
+
+/// `route`, including any query, on `server`. Used for a hand-edited route
+/// that the known endpoint list does not offer.
+pub fn server_url_with_route(server: &str, route: &str) -> Result<String> {
     let parsed = reqwest::Url::parse(server)
         .map_err(|_| anyhow::anyhow!("enter a valid http(s):// server address"))?;
     let origin = parsed.origin().ascii_serialization();
@@ -58,7 +64,8 @@ pub fn server_url(server: &str, endpoint: Endpoint) -> Result<String> {
         parsed.scheme(),
         parsed.as_str().trim_end_matches('/') == origin,
     ) {
-        ("http" | "https", true) => Ok(format!("{origin}{}", endpoint.path())),
+        ("http" | "https", true) if route.starts_with('/') => Ok(format!("{origin}{route}")),
+        ("http" | "https", true) => bail!("a provider route must start with /"),
         _ => bail!("enter only the server's http(s):// address, such as http://127.0.0.1:8000"),
     }
 }
@@ -96,6 +103,19 @@ mod tests {
             server_url("https://asr.example:9000/", Endpoint::Inference).unwrap(),
             "https://asr.example:9000/inference"
         );
+    }
+
+    #[test]
+    fn a_custom_route_moves_to_a_new_server() {
+        assert_eq!(
+            super::server_url_with_route(
+                "https://new.example:9000/",
+                "/custom-transcribe?api-version=1"
+            )
+            .unwrap(),
+            "https://new.example:9000/custom-transcribe?api-version=1"
+        );
+        assert!(super::server_url_with_route("https://new.example", "custom").is_err());
     }
 
     #[test]

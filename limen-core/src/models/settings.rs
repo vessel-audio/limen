@@ -43,6 +43,8 @@ pub enum KeyState {
 /// validating the config so that a broken one can be shown and repaired. A
 /// missing config reads as the annotated default.
 pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeyState)> {
+    // Read the config and its keys as one snapshot relative to GUI saves.
+    let _lock = config::lock_dir(&paths.config_file)?;
     let config = Config::read_unchecked(&paths.config_file)?;
     let keys = config::saved_keys(&paths.config_file)?;
     let (provider, saved, variable) = match role {

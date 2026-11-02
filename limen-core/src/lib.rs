@@ -35,7 +35,7 @@ pub use models::{
 };
 pub use provider::{
     Endpoint as ProviderEndpoint, probe, server_url as provider_server_url,
-    split_url as split_provider_url,
+    server_url_with_route as provider_server_url_with_route, split_url as split_provider_url,
 };
 pub use reload::ConfigChange;
 pub use shortcut::desktop_entry::{APP_ID, Launch};

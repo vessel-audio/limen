@@ -15,7 +15,7 @@ use serde::Deserialize;
 use toml_edit::DocumentMut;
 
 use super::ApiKey;
-use super::write::check_writable;
+use super::write::{FileIdentity, check_writable};
 use crate::models::ModelRole;
 
 /// How saving a provider changes its key.
@@ -50,6 +50,13 @@ pub(crate) fn saved_keys(config_file: &Path) -> Result<SavedKeys> {
     }
 }
 
+/// A key-file edit and the inode it was based on, checked again just before
+/// the file is replaced.
+pub(super) struct KeyEdit {
+    pub(super) text: String,
+    pub(super) original: Option<FileIdentity>,
+}
+
 /// The key file's contents after `change` to the key `role` sends, or
 /// `None` when the file stays as it is. A regular file that others may read
 /// is rewritten even when its keys stay, so it ends up private; a symlinked
@@ -62,20 +69,21 @@ pub(super) fn edit_key(
     config_file: &Path,
     role: ModelRole,
     change: &KeyChange,
-) -> Result<Option<String>> {
+) -> Result<Option<KeyEdit>> {
     let name = match role {
         ModelRole::Asr => "asr",
         ModelRole::Polish => "polish",
     };
     let path = path(config_file);
-    let (text, exposed, shared) = match fs::symlink_metadata(&path) {
+    let (text, exposed, shared, original) = match fs::symlink_metadata(&path) {
         Ok(metadata) => (
             fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?,
             metadata.is_file() && metadata.permissions().mode() & 0o077 != 0,
             metadata.is_file() && metadata.nlink() > 1,
+            Some(FileIdentity::from_metadata(&metadata)),
         ),
-        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, false),
+        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, false, None),
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
@@ -108,7 +116,10 @@ pub(super) fn edit_key(
         }
     }
     check_writable(&path).map_err(|refusal| anyhow!("{refusal}; the key was not saved"))?;
-    Ok(Some(document.to_string()))
+    Ok(Some(KeyEdit {
+        text: document.to_string(),
+        original,
+    }))
 }
 
 #[cfg(test)]
@@ -117,7 +128,7 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::PathBuf;
 
-    use super::super::write::replace;
+    use super::super::write::replace_verified;
     use super::{KeyChange, edit_key, path as key_path, saved_keys};
     use crate::config::ApiKey;
     use crate::models::ModelRole;
@@ -140,7 +151,9 @@ mod tests {
         change: &KeyChange,
     ) -> anyhow::Result<()> {
         match edit_key(config, role, change)? {
-            Some(text) => replace(&key_path(config), &text, Some(0o600)),
+            Some(edit) => {
+                replace_verified(&key_path(config), &edit.text, Some(0o600), edit.original)
+            }
             None => Ok(()),
         }
     }

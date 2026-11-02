@@ -8,7 +8,7 @@
 
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -123,7 +123,7 @@ pub(super) fn create_default(path: &Path) -> Result<()> {
 
 /// Lock the directory of the config file at `path`, creating it, against
 /// other writers of the config. Held until the returned file is dropped.
-pub(super) fn lock_dir(path: &Path) -> Result<File> {
+pub(crate) fn lock_dir(path: &Path) -> Result<File> {
     let dir = path
         .parent()
         .context("config path has no parent directory")?;
@@ -219,10 +219,44 @@ fn line_end(text: &str, index: usize) -> (usize, &'static str) {
     }
 }
 
+/// The inode and link count a sensitive file had when it was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FileIdentity {
+    device: u64,
+    inode: u64,
+    links: u64,
+}
+
+impl FileIdentity {
+    pub(super) fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            links: metadata.nlink(),
+        }
+    }
+
+    fn matches(self, metadata: &fs::Metadata) -> bool {
+        self == Self::from_metadata(metadata)
+    }
+}
+
 /// Replace `path` with `contents`: a unique temp file next to it gets `mode`,
 /// the contents, and an fsync, then is renamed over `path`, and the directory
 /// is fsynced so that the rename survives a crash too.
 pub(super) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
+    replace_verified(path, contents, mode, None)
+}
+
+/// Replace `path` only while it still names `expected`, checked again after
+/// the temporary file is durable and immediately before the rename. This
+/// catches a hard link added while a key file was being written.
+pub(super) fn replace_verified(
+    path: &Path,
+    contents: &str,
+    mode: Option<u32>,
+    expected: Option<FileIdentity>,
+) -> Result<()> {
     let dir = path
         .parent()
         .context("config path has no parent directory")?;
@@ -233,14 +267,21 @@ pub(super) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<
         }
         temp.write_all(contents.as_bytes())?;
         temp.sync_all()?;
-        // A symlink that appeared since the caller checked would be replaced by
-        // the rename: look once more, as late as possible.
-        match fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+        // A symlink or another inode that appeared since the caller checked
+        // would be replaced by the rename: look once more, as late as possible.
+        match (fs::symlink_metadata(path), expected) {
+            (Ok(metadata), _) if metadata.file_type().is_symlink() => {
                 return Err(Refusal::Symlink(path.to_path_buf()).into());
             }
-            Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
-            Ok(_) | Err(_) => {}
+            (Ok(metadata), Some(expected)) if !expected.matches(&metadata) => {
+                bail!("{} changed while it was being written", path.display());
+            }
+            (Ok(_), _) => {}
+            (Err(error), _) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
+            (Err(_), Some(_)) => {
+                bail!("{} changed while it was being written", path.display());
+            }
+            (Err(_), None) => {}
         }
         fs::rename(&temp_path, path)?;
         File::open(dir)?.sync_all()?;
@@ -287,7 +328,10 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
 
-    use super::{Refusal, check_writable, snippet, update_shortcut, with_shortcut};
+    use super::{
+        FileIdentity, Refusal, check_writable, replace_verified, snippet, update_shortcut,
+        with_shortcut,
+    };
     use crate::config::{Config, DEFAULT_CONFIG, Paths, ShortcutConfig};
     use crate::shortcut::{Action, Backend};
 
@@ -312,6 +356,32 @@ model = "test-model"
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn a_hard_link_added_before_replacement_is_refused() {
+        let dir = scratch("replace-hard-link");
+        let path = dir.join("keys.toml");
+        let other = dir.join("other.toml");
+        fs::write(&path, "asr = \"old\"\n").unwrap();
+        let expected = FileIdentity::from_metadata(&fs::metadata(&path).unwrap());
+        fs::hard_link(&path, &other).unwrap();
+
+        let error =
+            replace_verified(&path, "asr = \"new\"\n", Some(0o600), Some(expected)).unwrap_err();
+
+        assert_eq!(
+            (
+                format!("{error:#}").contains("changed while it was being written"),
+                fs::read_to_string(&path).unwrap(),
+                fs::read_to_string(&other).unwrap(),
+            ),
+            (
+                true,
+                "asr = \"old\"\n".to_string(),
+                "asr = \"old\"\n".to_string()
+            )
+        );
     }
 
     fn gnome(toggle: &str) -> ShortcutConfig {

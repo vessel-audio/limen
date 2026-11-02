@@ -3,7 +3,7 @@
 use gpui_kit::*;
 use limen_core::{
     ApiKey, KeyChange, ModelRole, Provider, ProviderEndpoint, provider_server_url,
-    split_provider_url,
+    provider_server_url_with_route, split_provider_url,
 };
 
 use super::Address;
@@ -31,11 +31,15 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
             let unchanged = split_provider_url(&saved).is_some_and(|(origin, _)| origin == server);
             let url = match (endpoint, unchanged) {
                 (Some(endpoint), _) => provider_server_url(&server, endpoint),
-                // A hand-edited route the list does not offer stays.
+                // A hand-edited route the list does not offer stays, even
+                // when only the server changes.
                 (None, true) => Ok(saved),
-                (None, false) => Err(anyhow::anyhow!(
-                    rust_i18n::t!("models.choose_route").to_string()
-                )),
+                (None, false) => match &form.unlisted_route {
+                    Some(route) => provider_server_url_with_route(&server, route),
+                    None => Err(anyhow::anyhow!(
+                        rust_i18n::t!("models.choose_route").to_string()
+                    )),
+                },
             };
             match url {
                 Ok(url) => Provider::Asr { url, model },
