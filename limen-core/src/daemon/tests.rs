@@ -11,7 +11,7 @@ use super::input::{InputJob, InputReport};
 use super::projection::Projection;
 use super::snapshot::{ConfigSummary, StateSnapshot};
 use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
-use crate::config::{ProviderConfig, ShortcutConfig};
+use crate::config::{ApiKey, PolishConfig, ProviderConfig, ShortcutConfig};
 use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
@@ -51,6 +51,7 @@ pub(super) fn harness() -> Harness {
         actor: DictationActor::new(
             SessionHandle::from_mailbox(mailbox),
             input_tx,
+            watch::channel(PolishConfig::default()).0,
             |_, _| {},
             PathBuf::from("/nonexistent/config.toml"),
             ShortcutHandle::detached(),
@@ -415,6 +416,7 @@ async fn shortcut_rebind_applies_only_a_valid_config() {
     let actor = DictationActor::new(
         SessionHandle::from_mailbox(mailbox),
         input_tx,
+        watch::channel(PolishConfig::default()).0,
         |_, _| {},
         config_file.clone(),
         shortcuts,
@@ -490,17 +492,18 @@ fn provider_reload_applies_only_a_valid_config() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"https://asr.example/v1\"\nmodel = \"big\"\n",
+        "[provider]\nurl = \"https://asr.example/v1?api-version=1\"\nmodel = \"big\"\n",
     )
     .unwrap();
     assert_eq!(harness.actor.reload_provider(), Reply::Ok);
     assert_eq!(
         harness.session.try_recv(),
         Ok(SessionCommand::Provider(ProviderConfig {
-            url: "https://asr.example/v1".to_string(),
+            url: "https://asr.example/v1?api-version=1".to_string(),
             model: "big".to_string(),
             language: "auto".to_string(),
             api_key_env: None,
+            saved_key: None,
         }))
     );
     assert_eq!(
@@ -508,6 +511,54 @@ fn provider_reload_applies_only_a_valid_config() {
         ConfigSummary {
             provider_model: "big".to_string(),
             provider_url: "https://asr.example/v1".to_string(),
+            ..before
+        }
+    );
+}
+
+#[test]
+fn polish_reload_hands_the_section_to_the_input_worker() {
+    let dir = std::env::temp_dir().join(format!("limen-polish-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_file = dir.join("config.toml");
+    let mut harness = harness();
+    harness.actor.config_file = config_file.clone();
+    let before = harness._snapshots.borrow_and_update().config.clone();
+
+    std::fs::write(
+        &config_file,
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"\"\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        harness.actor.reload_polish(),
+        Reply::Error { message } if message.contains("polish.model")
+    ));
+    assert_eq!(*harness.actor.polish.borrow(), PolishConfig::default());
+    assert!(!harness._snapshots.has_changed().unwrap());
+
+    std::fs::write(
+        &config_file,
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("keys.toml"), "polish = \"sk-saved\"\n").unwrap();
+    assert_eq!(harness.actor.reload_polish(), Reply::Ok);
+    // The key saved beside the config reaches the worker with the section.
+    assert_eq!(
+        *harness.actor.polish.borrow(),
+        PolishConfig {
+            enabled: true,
+            model: "deepseek-chat".to_string(),
+            saved_key: Some(ApiKey::new("sk-saved".to_string())),
+            ..PolishConfig::default()
+        }
+    );
+    assert_eq!(
+        harness._snapshots.borrow_and_update().config,
+        ConfigSummary {
+            polish_enabled: true,
             ..before
         }
     );

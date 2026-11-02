@@ -9,15 +9,17 @@ mod daemon;
 mod dictation;
 mod input_method;
 mod ipc;
+mod models;
 mod notify;
 mod polish;
 mod provider;
+mod reload;
 mod session;
 mod shortcut;
 mod task;
 
 pub use audio::Level;
-pub use config::{Config, Paths, ShortcutConfig};
+pub use config::{ApiKey, Config, KeyChange, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
@@ -28,10 +30,14 @@ pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};
-pub use provider::{
-    Endpoint as ProviderEndpoint, UrlChange as ProviderUrlChange, probe,
-    set_server as set_provider_server, split_url as split_provider_url,
+pub use models::{
+    KeyState, ModelRole, Polishing, Provider, list_models, load_provider, save_provider,
 };
+pub use provider::{
+    Endpoint as ProviderEndpoint, probe, server_url as provider_server_url,
+    server_url_with_route as provider_server_url_with_route, split_url as split_provider_url,
+};
+pub use reload::ConfigChange;
 pub use shortcut::desktop_entry::{APP_ID, Launch};
 pub use shortcut::program::Program;
 pub use shortcut::setup::{GnomeBinding, GnomeStatus, configured as shortcut_config};

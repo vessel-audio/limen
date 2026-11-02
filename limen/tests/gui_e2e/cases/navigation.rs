@@ -92,18 +92,24 @@ pub fn settings_button_opens_general_settings() -> Result<()> {
 /// so the walk starts from a text field.
 pub fn the_keyboard_reaches_and_presses_controls() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    let mut seen = Vec::new();
-    session.click("shortcuts-page")?;
-    session.click("backend-portal")?;
-    session.click("toggle-input")?;
-    for _ in 0..30 {
-        session.chord(&[Key::TAB])?;
-        let focused = session.wait("a focused control", |nodes| {
+    let focus = |previous: Option<&str>| {
+        session.wait("the focus to move", |nodes| {
             nodes
                 .iter()
                 .find(|node| node.has(State::Focused))
                 .map(|node| format!("{:?}:{}:{}", node.role, node.id, node.name))
-        })?;
+                .filter(|focused| Some(focused.as_str()) != previous)
+        })
+    };
+    session.click("shortcuts-page")?;
+    session.click("backend-portal")?;
+    session.click("toggle-input")?;
+    let mut seen = vec![focus(None)?];
+    for _ in 0..30 {
+        session.chord(&[Key::TAB])?;
+        // The window may not have handled the key yet; reading the focus
+        // before it moves would put Enter on a control one Tab ahead.
+        let focused = focus(seen.last().map(String::as_str))?;
         seen.push(focused.clone());
         if focused.contains(":open-settings:") {
             session.chord(&[Key::RETURN])?;

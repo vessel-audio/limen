@@ -75,6 +75,15 @@ or log, restart the background service, or stop it after confirmation. If an
 upgrade leaves an outdated daemon running, restart it from the GUI so the new
 protocol takes effect.
 
+The Models pages, opened from the sidebar or the Models button on the dictation
+page, set up the ASR provider (server and route, API key, model) and the
+polishing provider (on or off, URL, API key, model). The model list shows what
+the server offers through `GET …/models` and also takes a typed name. Saving
+writes `config.toml` and applies the change to a running daemon from its next
+take. API keys never go into `config.toml`: they are saved in `keys.toml` beside
+it with mode 0600, and a saved key comes before the variable named by
+`api_key_env`.
+
 ## Setup
 
 1. Start your ASR server, e.g. sgl-omni:
@@ -165,8 +174,8 @@ transcript for the whole take.
 
 ## Conservative DeepSeek polishing
 
-Polishing is disabled by default. Enable it explicitly and provide the API key
-in the daemon's environment, never in the config file:
+Polishing is disabled by default. Enable it on the GUI's Polish page, or in the
+config with the API key in the daemon's environment, never in the config file:
 
 ```toml
 [polish]

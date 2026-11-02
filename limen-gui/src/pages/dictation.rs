@@ -1,20 +1,20 @@
-//! The dictation page: a control strip with a live waveform and the ASR
-//! endpoint, above the daemon's recent transcription requests.
+//! The dictation page: a control strip with a live waveform and a way to the
+//! model settings, above the daemon's recent transcription requests.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, StyledExt, button::ButtonVariants};
 use gpui_kit::*;
-use limen_core::{Control, DictationState};
+use limen_core::{Control, DictationState, ModelRole};
 
 use crate::a11y;
-use crate::app::{AppView, LEVEL_BARS};
+use crate::app::{AppView, LEVEL_BARS, Page};
 use crate::bridge::BridgeCommand;
 use crate::model::{DictationButton, DisabledReason};
 use crate::motion;
 
 const WAVEFORM_HEIGHT: f32 = 28.;
 
-pub fn dictation(view: &AppView, cx: &mut Context<AppView>, window: &mut Window) -> Div {
+pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
     let state = view
         .model
         .snapshot
@@ -195,6 +195,16 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>, window: &mut Window)
                         ),
                 )
                 .child(
+                    a11y::button("open-models")
+                        .ghost()
+                        .icon(IconName::Boxes)
+                        .label(rust_i18n::t!("nav.models").to_string())
+                        .flex_shrink_0()
+                        .on_click(cx.listener(|this, _, _, _| {
+                            this.page = Page::Models(ModelRole::Asr);
+                        })),
+                )
+                .child(
                     a11y::button("dictation-primary")
                         .primary()
                         .icon(icon)
@@ -208,8 +218,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>, window: &mut Window)
                         }),
                 ),
         )
-        .child(waveform)
-        .child(super::provider::provider(view, cx, window));
+        .child(waveform);
     div()
         .v_flex()
         .flex_1()

@@ -128,9 +128,27 @@ requests.count: 个请求
 requests.kept: 后台服务保留最近 20 个
 requests.failed_status: 转写失败
 action.apply: 应用
-provider.title: ASR 服务
-toast.provider_applied: 已应用新的 ASR 服务
-toast.provider_saved: 已保存 ASR 服务，后台服务启动时生效
-provider.route: 路径
 settings.off: 关闭
 settings.on: 开启
+nav.models: 模型
+nav.asr: 语音识别
+nav.polish: 润色
+models.asr_title: ASR 模型
+models.polish_title: 润色模型
+models.server: 服务器
+models.route: 路径
+models.polishing: 润色
+models.url: 地址
+models.key: API 密钥
+models.key_saved: 已保存，输入新密钥可替换
+models.key_missing: 未设置
+models.key_removed: 保存后删除
+models.remove_key: 删除
+models.model: 模型
+models.search: 搜索或输入模型
+models.save: 保存
+models.choose_route: 请选择路径
+toast.asr_applied: 已应用 ASR 设置
+toast.asr_saved: 已保存 ASR 设置，后台服务启动时生效
+toast.polish_applied: 已应用润色设置
+toast.polish_saved: 已保存润色设置，后台服务启动时生效

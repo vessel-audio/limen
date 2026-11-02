@@ -15,6 +15,7 @@
 mod input;
 mod lifecycle;
 mod projection;
+mod reload;
 pub(crate) mod snapshot;
 mod spawn;
 
@@ -27,10 +28,10 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use crate::config::Config;
+use crate::config::{Config, PolishConfig};
 use crate::dictation::{self, Control, Dictation, Effect, Event, InputOutcome, Notification};
 use crate::ipc;
 use crate::session::{SessionCommand, SessionHandle};
@@ -52,6 +53,8 @@ struct DictationActor {
     session: SessionHandle,
     /// Mailbox of the text input worker.
     input_tx: mpsc::UnboundedSender<InputJob>,
+    /// The `[polish]` section the text input worker polishes with.
+    polish: watch::Sender<PolishConfig>,
     finalize_deadline: Option<Deadline>,
     /// Stops a hold recording whose release never arrived.
     hold_deadline: Option<Deadline>,
@@ -65,8 +68,8 @@ struct DictationActor {
     start_caller: Option<oneshot::Sender<String>>,
     /// Shows a desktop notification: `(summary, body)`.
     notify: fn(&str, &str),
-    /// Read again when a client asks to apply the `[shortcut]` or `[provider]`
-    /// section.
+    /// Read again when a client asks to apply the `[shortcut]`, `[provider]`, or
+    /// `[polish]` section.
     config_file: PathBuf,
     shortcuts: ShortcutHandle,
     outstanding_input: usize,
@@ -92,6 +95,7 @@ impl DictationActor {
     fn new(
         session: SessionHandle,
         input_tx: mpsc::UnboundedSender<InputJob>,
+        polish: watch::Sender<PolishConfig>,
         notify: fn(&str, &str),
         config_file: PathBuf,
         shortcuts: ShortcutHandle,
@@ -101,6 +105,7 @@ impl DictationActor {
             dictation: Dictation::default(),
             session,
             input_tx,
+            polish,
             finalize_deadline: None,
             hold_deadline: None,
             hold_started: None,
@@ -344,23 +349,6 @@ impl DictationActor {
         }
     }
 
-    /// Apply the `[provider]` section of the config again. The whole file must
-    /// be valid; the take in flight, if any, finishes with the old provider.
-    fn reload_provider(&mut self) -> ipc::v1::Reply {
-        match Config::load(&self.config_file) {
-            Ok(config) => {
-                self.projection.set_provider(&config.provider);
-                self.projection.publish(self.dictation.view(), unix_ms());
-                tracing::info!(url = %config.provider.url, "provider reloaded");
-                self.session.tell(SessionCommand::Provider(config.provider));
-                ipc::v1::Reply::Ok
-            }
-            Err(error) => ipc::v1::Reply::Error {
-                message: format!("{error:#}"),
-            },
-        }
-    }
-
     /// Run all mailboxes and return owned actors for the common cleanup path.
     async fn run(mut self, mut mailboxes: Mailboxes) -> lifecycle::ActorExit {
         let result = self.run_inner(&mut mailboxes).await;
@@ -413,6 +401,9 @@ impl DictationActor {
                         }
                         ipc::Command::ProviderReload(reply) => {
                             let _ = reply.send(self.reload_provider());
+                        }
+                        ipc::Command::PolishReload(reply) => {
+                            let _ = reply.send(self.reload_polish());
                         }
                     }
                 }

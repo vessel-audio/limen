@@ -37,6 +37,9 @@ pub struct Scenario {
     pub shortcut: ShortcutStatus,
     /// How long a stopped take stays in transcription.
     pub transcribe_ms: u64,
+    /// How long a provider reload waits before answering, for edits made
+    /// while a save is in flight.
+    pub provider_reload_ms: u64,
 }
 
 impl Default for Scenario {
@@ -57,6 +60,7 @@ impl Default for Scenario {
                 last_error: None,
             },
             transcribe_ms: 300,
+            provider_reload_ms: 0,
         }
     }
 }
@@ -161,8 +165,9 @@ struct Daemon {
     next_history_id: u64,
     log: std::fs::File,
     snapshots: watch::Sender<Option<(StateSnapshot, ShortcutStatus)>>,
-    /// The `provider.url` of the config file as of the last reload.
-    provider_url: String,
+    /// The provider and polishing settings of the config file as of the last
+    /// reload.
+    config: ConfigSummary,
 }
 
 impl Daemon {
@@ -185,12 +190,7 @@ impl Daemon {
             history: self.scenario.history.clone(),
             last_error: None,
             requests: self.scenario.requests.clone(),
-            config: ConfigSummary {
-                input_method: "fcitx5".to_string(),
-                provider_model: "e2e-model".to_string(),
-                provider_url: self.provider_url.clone(),
-                polish_enabled: false,
-            },
+            config: self.config.clone(),
         };
         self.snapshots
             .send_replace(Some((state, self.scenario.shortcut.clone())));
@@ -217,7 +217,12 @@ async fn run(scenario: Scenario, log: PathBuf) -> Result<()> {
             .append(true)
             .open(log)?,
         snapshots,
-        provider_url: "http://127.0.0.1:9/v1".to_string(),
+        config: ConfigSummary {
+            input_method: "fcitx5".to_string(),
+            provider_model: "e2e-model".to_string(),
+            provider_url: "http://127.0.0.1:9/v1".to_string(),
+            polish_enabled: false,
+        },
     }));
     daemon.lock().await.publish();
     loop {
@@ -283,10 +288,25 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
         v1::Request::ShortcutStatus => {
             v1::Reply::ShortcutStatus(daemon.lock().await.scenario.shortcut.clone())
         }
-        v1::Request::ProviderReload => match Config::load(&paths.config_file) {
+        v1::Request::ProviderReload => {
+            let delay = daemon.lock().await.scenario.provider_reload_ms;
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            match Config::load(&paths.config_file) {
+                Ok(config) => {
+                    let mut daemon = daemon.lock().await;
+                    daemon.config = ConfigSummary::from_config(&config);
+                    daemon.publish();
+                    v1::Reply::Ok
+                }
+                Err(error) => v1::Reply::Error {
+                    message: format!("{error:#}"),
+                },
+            }
+        }
+        v1::Request::PolishReload => match Config::load(&paths.config_file) {
             Ok(config) => {
                 let mut daemon = daemon.lock().await;
-                daemon.provider_url = config.provider.url;
+                daemon.config = ConfigSummary::from_config(&config);
                 daemon.publish();
                 v1::Reply::Ok
             }

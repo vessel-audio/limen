@@ -123,7 +123,7 @@ pub(super) fn create_default(path: &Path) -> Result<()> {
 
 /// Lock the directory of the config file at `path`, creating it, against
 /// other writers of the config. Held until the returned file is dropped.
-pub(super) fn lock_dir(path: &Path) -> Result<File> {
+pub(crate) fn lock_dir(path: &Path) -> Result<File> {
     let dir = path
         .parent()
         .context("config path has no parent directory")?;

@@ -17,11 +17,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
-mod provider;
+mod keys;
+mod transaction;
+mod value;
 mod write;
 
-pub(crate) use provider::update_provider_url;
-pub(crate) use write::{check_writable, snippet, update_shortcut};
+pub use keys::KeyChange;
+pub(crate) use keys::saved_keys;
+pub(crate) use transaction::recover as recover_provider_save;
+pub(crate) use value::{Key, Value, update_provider};
+pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
+
+/// An API key saved from the GUI. Its `Debug` output never shows the key,
+/// so configs and commands that hold one stay safe to log.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    pub fn new(key: String) -> Self {
+        Self(key)
+    }
+
+    /// The key itself, for the request that sends it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ApiKey(…)")
+    }
+}
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
 const DEFAULT_CONFIG: &str = r#"# Limen configuration
@@ -126,6 +153,9 @@ pub struct ProviderConfig {
     #[serde(default = "default_language")]
     pub language: String,
     pub api_key_env: Option<String>,
+    /// The key saved from the GUI, which comes before `api_key_env`.
+    #[serde(skip)]
+    pub saved_key: Option<ApiKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +187,7 @@ pub struct InputMethodConfig {
     pub backend: Option<crate::input_method::Backend>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PolishConfig {
     pub enabled: bool,
@@ -165,6 +195,9 @@ pub struct PolishConfig {
     pub model: String,
     pub api_key_env: String,
     pub timeout_ms: u64,
+    /// The key saved from the GUI, which comes before `api_key_env`.
+    #[serde(skip)]
+    pub saved_key: Option<ApiKey>,
 }
 
 impl Default for PolishConfig {
@@ -175,6 +208,7 @@ impl Default for PolishConfig {
             model: "deepseek-flash".to_string(),
             api_key_env: "DEEPSEEK_API_KEY".to_string(),
             timeout_ms: 5000,
+            saved_key: None,
         }
     }
 }
@@ -205,6 +239,10 @@ impl Config {
     /// Load the config; write the annotated default first if none exists.
     pub fn load_or_create(paths: &Paths) -> Result<Self> {
         let path = &paths.config_file;
+        {
+            let _lock = write::lock_dir(path)?;
+            transaction::recover(path)?;
+        }
         match fs::symlink_metadata(path) {
             Err(error) if error.kind() == ErrorKind::NotFound => write::create_default(path)?,
             Err(error) => {
@@ -221,11 +259,28 @@ impl Config {
         Self::load(path)
     }
 
-    /// Read, parse, and validate the config file; never creates it.
+    /// Read, parse, and validate the config file, with the API keys saved
+    /// beside it; never creates either. The directory lock keeps the config
+    /// and keys on opposite sides of a save from being read together.
     pub fn load(path: &Path) -> Result<Self> {
+        let _lock = write::lock_dir(path)?;
+        transaction::recover(path)?;
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
-        Self::parse(&text).with_context(|| format!("invalid config: {}", path.display()))
+        let mut config =
+            Self::parse(&text).with_context(|| format!("invalid config: {}", path.display()))?;
+        let keys = saved_keys(path)?;
+        config.provider.saved_key = keys.asr.map(ApiKey::new);
+        config.polish.saved_key = keys.polish.map(ApiKey::new);
+        Ok(config)
+    }
+
+    /// Read and parse the config file without validating it or reading its
+    /// keys, so a config the GUI is about to repair can still be shown. A
+    /// missing file reads as the annotated default.
+    pub(crate) fn read_unchecked(path: &Path) -> Result<Self> {
+        let (text, _) = write::read_text(path)?;
+        toml::from_str(&text).with_context(|| format!("failed to parse config: {}", path.display()))
     }
 
     /// Parse and validate the text of a config file.
@@ -245,33 +300,13 @@ impl Config {
             ("http" | "https", Some(_)) => {}
             _ => bail!("provider.url must be an http(s):// URL with a host"),
         }
+        check_url_parameters(&provider_url, "provider.url")?;
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
         }
         if self.polish.enabled {
-            let polish_url = reqwest::Url::parse(&self.polish.url).context("invalid polish.url")?;
-            let Some(polish_host) = polish_url.host_str() else {
-                bail!("polish.url must include a host");
-            };
-            match polish_url.scheme() {
-                "https" => {}
-                "http" => {
-                    let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
-                        || polish_host
-                            .trim_start_matches('[')
-                            .trim_end_matches(']')
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|address| address.is_loopback());
-                    if !is_loopback {
-                        bail!("polish.url must use HTTPS, or HTTP on a loopback address");
-                    }
-                }
-                _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
-            }
-            if !polish_url.username().is_empty() || polish_url.password().is_some() {
-                bail!("polish.url must not contain credentials");
-            }
+            check_polish_url(&self.polish.url)?;
             if self.polish.model.trim().is_empty() {
                 bail!("polish.model must not be empty when polishing is enabled");
             }
@@ -297,9 +332,106 @@ impl Config {
         Ok(())
     }
 
+    /// The ASR key: the one saved from the GUI, else the one in
+    /// `provider.api_key_env`.
     pub fn api_key(&self) -> Option<String> {
-        let var = self.provider.api_key_env.as_ref()?;
-        std::env::var(var).ok().filter(|v| !v.is_empty())
+        match &self.provider.saved_key {
+            Some(key) => Some(key.expose().to_string()),
+            None => {
+                let var = self.provider.api_key_env.as_ref()?;
+                std::env::var(var).ok().filter(|v| !v.is_empty())
+            }
+        }
+    }
+}
+
+impl PolishConfig {
+    /// The polishing key: the one saved from the GUI, else the one in
+    /// `api_key_env`.
+    pub fn api_key(&self) -> Option<String> {
+        match &self.saved_key {
+            Some(key) => Some(key.expose().to_string()),
+            None => std::env::var(&self.api_key_env)
+                .ok()
+                .filter(|key| !key.is_empty()),
+        }
+    }
+}
+
+/// Check that `url` may carry the polishing API key: HTTPS, or HTTP on a
+/// loopback address, without credentials of its own.
+pub(crate) fn check_polish_url(url: &str) -> Result<()> {
+    let polish_url = reqwest::Url::parse(url).context("invalid polish.url")?;
+    let Some(polish_host) = polish_url.host_str() else {
+        bail!("polish.url must include a host");
+    };
+    match polish_url.scheme() {
+        "https" => {}
+        "http" => {
+            let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
+                || polish_host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback());
+            if !is_loopback {
+                bail!("polish.url must use HTTPS, or HTTP on a loopback address");
+            }
+        }
+        _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
+    }
+    check_url_parameters(&polish_url, "polish.url")?;
+    Ok(())
+}
+
+/// Allow only endpoint query parameters that are routing or API metadata,
+/// never credentials. An allowlist is deliberate: a denylist cannot cover
+/// every name a provider might give a secret.
+pub(crate) fn check_url_parameters(url: &reqwest::Url, field: &str) -> Result<()> {
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("{field} must not contain credentials; use an API key instead");
+    }
+    let unsupported = url.query_pairs().any(|(name, _)| {
+        let name = name.to_ascii_lowercase().replace(['-', '_'], "");
+        !matches!(
+            name.as_str(),
+            "apiversion"
+                | "version"
+                | "deployment"
+                | "deploymentid"
+                | "model"
+                | "project"
+                | "projectid"
+                | "organization"
+                | "organizationid"
+                | "region"
+                | "location"
+                | "tenant"
+                | "tenantid"
+                | "language"
+                | "format"
+        )
+    });
+    if unsupported {
+        bail!(
+            "{field} allows only non-secret query parameters such as api-version; use an API key instead"
+        );
+    }
+    Ok(())
+}
+
+/// An endpoint safe to show in snapshots, logs, and errors: no userinfo,
+/// query, or fragment. An invalid URL is never echoed back.
+pub(crate) fn display_url(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) => {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            parsed.into()
+        }
+        Err(_) => "<invalid URL>".to_string(),
     }
 }
 
@@ -340,6 +472,50 @@ mod tests {
         assert!(config.validate().is_err());
         config.polish.url = "https://user:pw@api.deepseek.com/chat/completions".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn endpoint_queries_allow_versions_but_not_credentials() {
+        let mut config = base_config();
+        for parameter in [
+            "api_key",
+            "token",
+            "X-API-Key",
+            "clientsecret",
+            "auth_token",
+            "access_key",
+            "api-token",
+            "unrecognised",
+        ] {
+            config.provider.url =
+                format!("https://asr.example/v1/audio/transcriptions?{parameter}=do-not-echo");
+            assert!(config.validate().is_err(), "{parameter}");
+            config.polish.enabled = true;
+            config.polish.url =
+                format!("https://ai.example/chat/completions?{parameter}=do-not-echo");
+            assert!(config.validate().is_err(), "{parameter}");
+        }
+        config.provider.url =
+            "https://asr.example/v1/audio/transcriptions?api-version=2026-01-01".to_string();
+        config.polish.url =
+            "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn displayed_endpoints_drop_credentials_queries_and_fragments() {
+        assert_eq!(
+            [
+                super::display_url(
+                    "https://user:pw@ai.example/v1/chat/completions?api_key=secret#token"
+                ),
+                super::display_url("https://user:pw@"),
+            ],
+            [
+                "https://ai.example/v1/chat/completions".to_string(),
+                "<invalid URL>".to_string()
+            ]
+        );
     }
 
     #[test]

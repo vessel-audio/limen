@@ -3,6 +3,7 @@
 mod dictation;
 mod history;
 mod lifecycle;
+mod models;
 mod navigation;
 mod settings;
 mod shortcuts;
@@ -35,8 +36,15 @@ pub const ALL: &[Case] = cases![
     dictation::failed_requests_expand_to_the_full_error,
     dictation::the_request_list_scrolls_with_the_wheel,
     dictation::recording_another_take_queues_it,
-    dictation::the_asr_server_and_route_are_saved_and_applied,
-    dictation::an_invalid_asr_server_is_reported,
+    models::the_dictation_button_opens_the_asr_page,
+    models::an_asr_provider_is_saved_and_applied,
+    models::an_invalid_asr_server_is_reported,
+    models::polishing_is_set_up_with_a_local_server,
+    models::a_saved_key_is_removed,
+    models::a_url_credential_is_rejected,
+    models::edits_made_while_saving_survive,
+    models::an_early_model_choice_is_completed_by_the_first_load,
+    models::a_custom_route_moves_to_a_new_server,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,

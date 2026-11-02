@@ -5,12 +5,12 @@ use gpui_kit::*;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use limen_core::{Backend, DictationState, Paths, ProviderUrlChange};
+use limen_core::{Backend, DictationState, ModelRole, Paths};
 
 use crate::a11y;
 use crate::bridge::{BridgeCommand, BridgeEvent};
 use crate::model::{Action, GuiState, Msg, Toast};
-use crate::pages::{self, ProviderForm};
+use crate::pages::{self, ModelForms};
 use crate::recorder::RecorderState;
 use crate::settings::{
     AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, SettingsPage,
@@ -39,7 +39,7 @@ pub struct AppView {
     pub hold_touched: bool,
     pub toggle_focused: bool,
     pub hold_focused: bool,
-    pub provider: ProviderForm,
+    pub models: ModelForms,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     pub appearance: AppearancePreference,
@@ -69,6 +69,8 @@ pub enum Page {
     Dictation,
     History,
     Shortcuts,
+    /// A model provider, under Models in the sidebar.
+    Models(ModelRole),
     Settings(SettingsPage),
 }
 
@@ -96,7 +98,7 @@ impl AppView {
                 .placeholder("Super+X")
                 .default_value("Super+X")
         });
-        let (provider, provider_subscriptions) = ProviderForm::new(window, cx);
+        let (models, model_subscriptions) = ModelForms::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -146,10 +148,10 @@ impl AppView {
             hold_touched: false,
             toggle_focused: false,
             hold_focused: false,
-            provider,
+            models,
             _subscriptions: subscriptions
                 .into_iter()
-                .chain(provider_subscriptions)
+                .chain(model_subscriptions)
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             appearance: AppearancePreference::System,
@@ -198,7 +200,7 @@ impl AppView {
         if matches!(event, BridgeEvent::Msg(Msg::DaemonReplaced)) {
             self.toggle_touched = false;
             self.hold_touched = false;
-            self.provider.error = None;
+            self.models.reset();
             self.backend_selected = false;
         }
         if let BridgeEvent::Msg(Msg::Snapshot(snapshot)) = &event
@@ -226,15 +228,17 @@ impl AppView {
                 self.shortcut_report = Some(report);
                 Vec::new()
             }
-            BridgeEvent::ProviderUrl(Ok(change)) => {
-                self.provider.finish(None);
-                vec![Action::Toast(match change {
-                    ProviderUrlChange::Applied => Toast::ProviderApplied,
-                    ProviderUrlChange::Saved => Toast::ProviderSaved,
-                })]
+            BridgeEvent::ProviderLoaded { role, id, result } => {
+                self.models.loaded(role, id, result);
+                Vec::new()
             }
-            BridgeEvent::ProviderUrl(Err(message)) => {
-                self.provider.finish(Some(message));
+            BridgeEvent::ProviderSaved { role, id, result } => self.models.saved(role, id, result),
+            BridgeEvent::Models {
+                role,
+                endpoint,
+                models,
+            } => {
+                self.models.listed(role, endpoint, models);
                 Vec::new()
             }
             BridgeEvent::Toast(_) => Vec::new(),
@@ -330,8 +334,10 @@ impl AppView {
     pub fn show_toast(&mut self, toast: Toast) {
         let key = match toast {
             Toast::CopiedToClipboard => "toast.copied",
-            Toast::ProviderApplied => "toast.provider_applied",
-            Toast::ProviderSaved => "toast.provider_saved",
+            Toast::ProviderApplied(ModelRole::Asr) => "toast.asr_applied",
+            Toast::ProviderSaved(ModelRole::Asr) => "toast.asr_saved",
+            Toast::ProviderApplied(ModelRole::Polish) => "toast.polish_applied",
+            Toast::ProviderSaved(ModelRole::Polish) => "toast.polish_saved",
         };
         self.toast = Some((rust_i18n::t!(key).to_string(), Instant::now()));
     }
@@ -395,18 +401,24 @@ impl Render for AppView {
         ] {
             scroll.step(window);
         }
+        pages::follow_models(self, window, cx);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(pages::dictation(self, cx, window)),
+                .child(pages::dictation(self, cx)),
             Page::History => pages::history(self, cx),
             Page::Shortcuts => div()
                 .v_flex()
                 .flex_1()
                 .min_h_0()
                 .child(pages::shortcuts(self, cx, window)),
+            Page::Models(role) => div()
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(pages::models(self, role, cx)),
             Page::Settings(page) => match page {
                 SettingsPage::General => div()
                     .v_flex()

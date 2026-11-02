@@ -8,10 +8,10 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
-    Action as ShortcutAction, Backend, DaemonNotRunning, Delivery, Keys, Launch, Paths,
-    ProviderEndpoint, ProviderUrlChange, Push, Report, SetupError, Shortcut, clear,
-    daemon_peer_pid, edit, set, set_provider_server, setup, spawn_daemon, subscribe,
-    terminate_daemon, v1,
+    Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeyChange,
+    KeyState, Keys, Launch, ModelRole, Paths, Provider, Push, Report, SetupError, Shortcut, clear,
+    daemon_peer_pid, edit, list_models, load_provider, save_provider, set, setup, spawn_daemon,
+    subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -35,10 +35,23 @@ pub enum BridgeCommand {
     ShutdownDaemon,
     TerminateDaemon,
     Shortcut(ShortcutRequest),
-    /// Point the ASR provider at a new server and apply it in a running daemon.
-    SetProviderServer {
-        server: String,
-        endpoint: ProviderEndpoint,
+    /// Read a provider's settings from the config file; `id` identifies the
+    /// request in the reply so an older read cannot replace a newer one.
+    LoadProvider {
+        role: ModelRole,
+        id: u64,
+    },
+    /// Save a provider and its key, and apply them in a running daemon.
+    SaveProvider {
+        id: u64,
+        provider: Provider,
+        key: KeyChange,
+    },
+    /// Ask the configured server which models it offers for `role`;
+    /// `endpoint` names the endpoint the GUI asks about in its reply.
+    ListModels {
+        role: ModelRole,
+        endpoint: String,
     },
 }
 
@@ -65,7 +78,24 @@ pub enum BridgeEvent {
     Msg(Msg),
     OfferTerminate,
     ShortcutReport(Result<Report, ShortcutFailure>),
-    ProviderUrl(Result<ProviderUrlChange, String>),
+    /// A provider's settings as read from the config file.
+    ProviderLoaded {
+        role: ModelRole,
+        id: u64,
+        result: Result<(Provider, KeyState), String>,
+    },
+    /// How saving a provider ended.
+    ProviderSaved {
+        role: ModelRole,
+        id: u64,
+        result: Result<ConfigChange, String>,
+    },
+    /// The models a server offers, or why it listed none.
+    Models {
+        role: ModelRole,
+        endpoint: String,
+        models: Result<Vec<String>, String>,
+    },
     Toast(Toast),
 }
 
@@ -476,18 +506,51 @@ async fn handle_command(
             let paths = paths.clone();
             shortcuts.spawn(async move { run_shortcut(&paths, request).await });
         }
-        BridgeCommand::SetProviderServer { server, endpoint } => {
+        BridgeCommand::LoadProvider { role, id } => {
+            let (paths, events) = (paths.clone(), events.clone());
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || load_provider(&paths, role))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| format!("{error:#}")));
+                let _ = events
+                    .send(BridgeEvent::ProviderLoaded { role, id, result })
+                    .await;
+            });
+        }
+        BridgeCommand::SaveProvider { id, provider, key } => {
             // Off the loop, so snapshots and levels keep flowing meanwhile.
             let (paths, events) = (paths.clone(), events.clone());
+            let role = match provider {
+                Provider::Asr { .. } => ModelRole::Asr,
+                Provider::Polish { .. } => ModelRole::Polish,
+            };
             tokio::spawn(async move {
                 let result = tokio::time::timeout(
                     Duration::from_secs(3),
-                    set_provider_server(&paths, &server, endpoint),
+                    save_provider(&paths, provider, key),
                 )
                 .await
                 .map_err(|_| "daemon request timed out".to_string())
                 .and_then(|result| result.map_err(|error| format!("{error:#}")));
-                let _ = events.send(BridgeEvent::ProviderUrl(result)).await;
+                let _ = events
+                    .send(BridgeEvent::ProviderSaved { role, id, result })
+                    .await;
+            });
+        }
+        BridgeCommand::ListModels { role, endpoint } => {
+            let (paths, events) = (paths.clone(), events.clone());
+            tokio::spawn(async move {
+                let models = list_models(&paths, role)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = events
+                    .send(BridgeEvent::Models {
+                        role,
+                        endpoint,
+                        models,
+                    })
+                    .await;
             });
         }
         BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),

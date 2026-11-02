@@ -27,13 +27,10 @@ impl Polisher {
         if !config.enabled {
             return Ok(Self::Disabled);
         }
-        let Some(api_key) = std::env::var(&config.api_key_env)
-            .ok()
-            .filter(|value| !value.is_empty())
-        else {
+        let Some(api_key) = config.api_key() else {
             tracing::warn!(
                 variable = %config.api_key_env,
-                "DeepSeek polishing is enabled but the API key is missing; using original transcripts"
+                "polishing is enabled but no API key is saved or set; using original transcripts"
             );
             return Ok(Self::MissingKey);
         };

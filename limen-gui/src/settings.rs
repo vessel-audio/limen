@@ -15,7 +15,7 @@ mod font_scale;
 mod segmented;
 
 pub use font_scale::FontScale;
-use segmented::{Segment, segmented};
+pub(crate) use segmented::{Segment, segmented};
 
 /// Settings subpages shown below the sidebar's Settings item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
