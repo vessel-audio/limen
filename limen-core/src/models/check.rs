@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 
-use super::{Provider, edited};
+use super::{Provider, edited_off_thread};
 use crate::audio::SAMPLE_RATE;
 use crate::backend::{Exchange, Finish, ModelBackend};
 use crate::config::{KeyChange, Paths};
@@ -22,7 +22,7 @@ const SILENCE: [i16; SAMPLE_RATE as usize / 2] = [0; SAMPLE_RATE as usize / 2];
 /// Ask the model `provider` names to do its job once, as the daemon would:
 /// transcribe half a second of silence, or correct a short sentence. The
 /// page asks before saving, so `provider` and `key` are its unsaved fields,
-/// and a stored key goes only where [`edited`] lets it.
+/// and a stored key goes only where `edited` lets it.
 pub async fn check_model(
     paths: &Paths,
     provider: &Provider,
@@ -35,8 +35,8 @@ pub async fn check_model(
     if model.is_empty() {
         bail!("choose a model first");
     }
-    let config = edited(paths, provider, key)?;
     let check = async {
+        let config = edited_off_thread(paths, provider, key).await?;
         match provider {
             Provider::Asr { .. } => {
                 let session = provider::from_config(&config, backend)?

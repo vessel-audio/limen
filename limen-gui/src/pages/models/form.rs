@@ -14,7 +14,7 @@ use limen_core::{
 
 use super::choices::{ModelChoices, ServiceChoice};
 use crate::app::{AppView, Page};
-use crate::bridge::BridgeCommand;
+use crate::bridge::{BridgeCommand, ModelRequest};
 use crate::model::{Action, Toast};
 use discovery::Listing;
 
@@ -312,6 +312,8 @@ impl ModelForms {
 impl ProviderForm {
     pub fn edited(&mut self, field: EditedField) {
         self.touched = true;
+        // A model check in flight tried other fields: drop its reply.
+        self.checking = None;
         // What the server was asked no longer describes the fields: drop
         // its reply when it comes.
         let restart = |form: &mut Self| {
@@ -358,7 +360,10 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
             form.next_request += 1;
             let id = form.next_request;
             if commands
-                .try_send(BridgeCommand::LoadProvider { role, id })
+                .try_send(BridgeCommand::Model(ModelRequest::LoadProvider {
+                    role,
+                    id,
+                }))
                 .is_ok()
             {
                 form.loading = Some(id);

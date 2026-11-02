@@ -16,7 +16,7 @@ mod settings;
 mod sidebar;
 mod smooth_scroll;
 
-pub use bridge::{BridgeCommand, BridgeEvent, ShortcutRequest};
+pub use bridge::{BridgeCommand, BridgeEvent, ModelRequest, ShortcutRequest};
 pub use model::{
     Action, Connection, DictationButton, DisabledReason, GuiState, Msg, Toast, Warning,
 };
