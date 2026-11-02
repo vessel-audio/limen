@@ -5,9 +5,9 @@
 //! written with mode 0600, under the config directory's lock, and a
 //! symlinked one is never replaced.
 
-use std::fs;
-use std::io::ErrorKind;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Seek, SeekFrom, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -15,7 +15,7 @@ use serde::Deserialize;
 use toml_edit::DocumentMut;
 
 use super::ApiKey;
-use super::write::{FileIdentity, check_writable};
+use super::write::check_writable;
 use crate::models::ModelRole;
 
 /// How saving a provider changes its key.
@@ -50,8 +50,28 @@ pub(crate) fn saved_keys(config_file: &Path) -> Result<SavedKeys> {
     }
 }
 
-/// A key-file edit and the inode it was based on, checked again just before
-/// the file is replaced.
+/// The inode a key file had when it was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    fn matches(self, metadata: &fs::Metadata) -> bool {
+        self == Self::from_metadata(metadata)
+    }
+}
+
+/// A key-file edit and the inode it was based on, checked again when the
+/// original file is opened for writing.
 pub(super) struct KeyEdit {
     pub(super) text: String,
     pub(super) original: Option<FileIdentity>,
@@ -60,9 +80,7 @@ pub(super) struct KeyEdit {
 /// The key file's contents after `change` to the key `role` sends, or
 /// `None` when the file stays as it is. A regular file that others may read
 /// is rewritten even when its keys stay, so it ends up private; a symlinked
-/// one is left to whatever manages it, and refused when a key changes. A
-/// hard-linked file is refused whenever a write is needed, because replacing
-/// one link would leave another copy behind.
+/// one is left to whatever manages it, and refused when a key changes.
 /// Callers hold the config directory's lock and write the result with mode
 /// 0600 to [`path`].
 pub(super) fn edit_key(
@@ -75,25 +93,18 @@ pub(super) fn edit_key(
         ModelRole::Polish => "polish",
     };
     let path = path(config_file);
-    let (text, exposed, shared, original) = match fs::symlink_metadata(&path) {
+    let (text, exposed, original) = match fs::symlink_metadata(&path) {
         Ok(metadata) => (
             fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?,
             metadata.is_file() && metadata.permissions().mode() & 0o077 != 0,
-            metadata.is_file() && metadata.nlink() > 1,
             Some(FileIdentity::from_metadata(&metadata)),
         ),
-        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, false, None),
+        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, None),
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    if shared && (exposed || !matches!(change, KeyChange::Keep)) {
-        bail!(
-            "{} has other hard links; remove them before changing its keys",
-            path.display()
-        );
-    }
     let mut document: DocumentMut = text
         .parse()
         .map_err(|_| anyhow!("invalid {}; its keys were not changed", path.display()))?;
@@ -122,14 +133,54 @@ pub(super) fn edit_key(
     }))
 }
 
+/// Write a prepared key file without following a symlink or replacing its
+/// inode. Updating in place means a hard link added at any point sees the new
+/// contents and the 0600 mode too, rather than retaining the old key. A file
+/// that did not exist is created atomically with `create_new`, so another
+/// process's keys are never overwritten. Callers hold the directory lock, so
+/// Limen readers never observe the in-place write partway through.
+pub(super) fn write_key(path: &Path, edit: KeyEdit) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).custom_flags(libc::O_NOFOLLOW);
+    let mut file = match edit.original {
+        Some(expected) => {
+            let file = options
+                .open(path)
+                .with_context(|| format!("failed to open {} for writing", path.display()))?;
+            if !expected.matches(&file.metadata()?) {
+                bail!("{} changed while it was being written", path.display());
+            }
+            file
+        }
+        None => options
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("failed to create {}", path.display()))?,
+    };
+    (|| -> Result<()> {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(edit.text.as_bytes())?;
+        // Remove any old suffix only after the new contents are written.
+        file.set_len(edit.text.len() as u64)?;
+        file.sync_all()?;
+        let dir = path
+            .parent()
+            .context("the key file has no parent directory")?;
+        fs::File::open(dir)?.sync_all()?;
+        Ok(())
+    })()
+    .with_context(|| format!("failed to write {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::PathBuf;
 
-    use super::super::write::replace_verified;
-    use super::{KeyChange, edit_key, path as key_path, saved_keys};
+    use super::{KeyChange, edit_key, path as key_path, saved_keys, write_key};
     use crate::config::ApiKey;
     use crate::models::ModelRole;
 
@@ -151,9 +202,7 @@ mod tests {
         change: &KeyChange,
     ) -> anyhow::Result<()> {
         match edit_key(config, role, change)? {
-            Some(edit) => {
-                replace_verified(&key_path(config), &edit.text, Some(0o600), edit.original)
-            }
+            Some(edit) => write_key(&key_path(config), edit),
             None => Ok(()),
         }
     }
@@ -177,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hard_linked_key_file_is_refused_instead_of_leaving_an_exposed_copy() {
+    fn a_hard_linked_exposed_key_file_is_made_private_in_every_copy() {
         let config = scratch("keys-hard-link");
         let path = config.with_file_name("keys.toml");
         let other = config.with_file_name("other-copy.toml");
@@ -185,22 +234,57 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         fs::hard_link(&path, &other).unwrap();
 
-        let error = update_key(&config, ModelRole::Asr, &KeyChange::Keep).unwrap_err();
+        update_key(&config, ModelRole::Asr, &KeyChange::Keep).unwrap();
 
         assert_eq!(
             (
-                error.to_string().contains("hard links"),
                 fs::read_to_string(&path).unwrap(),
                 fs::read_to_string(&other).unwrap(),
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                fs::metadata(&other).unwrap().permissions().mode() & 0o777,
             ),
             (
-                true,
                 "asr = \"sk-asr\"\n".to_string(),
                 "asr = \"sk-asr\"\n".to_string(),
-                0o644
+                0o600,
+                0o600
             )
         );
+    }
+
+    #[test]
+    fn a_hard_link_added_before_writing_gets_the_new_key_too() {
+        let config = scratch("keys-hard-link-race");
+        let path = config.with_file_name("keys.toml");
+        let other = config.with_file_name("other-copy.toml");
+        fs::write(&path, "asr = \"old\"\n").unwrap();
+        let edit = edit_key(&config, ModelRole::Asr, &set("new"))
+            .unwrap()
+            .unwrap();
+        fs::hard_link(&path, &other).unwrap();
+
+        write_key(&path, edit).unwrap();
+
+        assert_eq!(
+            (
+                fs::read_to_string(&path).unwrap(),
+                fs::read_to_string(&other).unwrap(),
+            ),
+            ("asr = \"new\"\n".to_string(), "asr = \"new\"\n".to_string())
+        );
+    }
+
+    #[test]
+    fn a_key_file_created_after_reading_is_never_overwritten() {
+        let config = scratch("keys-create-race");
+        let path = config.with_file_name("keys.toml");
+        let edit = edit_key(&config, ModelRole::Asr, &set("new"))
+            .unwrap()
+            .unwrap();
+        fs::write(&path, "polish = \"other\"\n").unwrap();
+
+        assert!(write_key(&path, edit).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "polish = \"other\"\n");
     }
 
     #[test]

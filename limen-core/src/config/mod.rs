@@ -254,8 +254,10 @@ impl Config {
     }
 
     /// Read, parse, and validate the config file, with the API keys saved
-    /// beside it; never creates either.
+    /// beside it; never creates either. The directory lock keeps the config
+    /// and keys on opposite sides of a save from being read together.
     pub fn load(path: &Path) -> Result<Self> {
+        let _lock = write::lock_dir(path)?;
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
         let mut config =
