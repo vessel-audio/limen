@@ -36,6 +36,16 @@ fn header(head: &str, name: &str) -> Option<String> {
 /// A server that answers one request with `reply` and returns the request
 /// it read, and its address, which is the base URL to connect to.
 async fn mock_server(reply: Value) -> (String, JoinHandle<Request>) {
+    answering("200 OK", "", reply).await
+}
+
+/// A server that answers one request with `status`, the extra `headers`,
+/// and `reply`.
+async fn answering(
+    status: &'static str,
+    headers: &'static str,
+    reply: Value,
+) -> (String, JoinHandle<Request>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let reply = reply.to_string();
@@ -61,7 +71,7 @@ async fn mock_server(reply: Value) -> (String, JoinHandle<Request>) {
             }
         };
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+            "HTTP/1.1 {status}\r\n{headers}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
             reply.len()
         );
         let _ = socket.write_all(response.as_bytes()).await;
@@ -196,7 +206,13 @@ async fn a_cut_off_reply_reports_why_it_stopped() {
     let reply = model.reply(EXCHANGE).await.unwrap();
 
     server.await.unwrap();
-    assert_eq!(reply.finish, Some(Finish::Length));
+    assert_eq!(
+        reply,
+        Reply {
+            text: "你好，世界。".to_string(),
+            finish: Some(Finish::Length),
+        }
+    );
 }
 
 #[tokio::test]
@@ -212,8 +228,23 @@ async fn deepseek_is_asked_not_to_think() {
 
     model.reply(EXCHANGE).await.unwrap();
 
-    let request = server.await.unwrap().json();
-    assert_eq!(request["thinking"], json!({"type": "disabled"}));
+    let request = server.await.unwrap();
+    assert_eq!(
+        (request.head.lines().next(), request.json()),
+        (
+            Some("POST /chat/completions HTTP/1.1"),
+            json!({
+                "model": "deepseek-flash",
+                "messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "Correct it."}]},
+                    {"role": "user", "content": "原始 文本"},
+                ],
+                "temperature": 0.0,
+                "max_tokens": 4096,
+                "thinking": {"type": "disabled"},
+            })
+        )
+    );
 }
 
 #[tokio::test]
@@ -268,5 +299,87 @@ fn a_compatible_server_needs_its_url() {
             .unwrap()
             .chat(connection, "m".to_string())
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_key_is_never_quoted_back() {
+    let (base, server) = answering(
+        "401 Unauthorized",
+        "",
+        json!({"error": {"message": "Invalid API key: sk-secret-123", "code": "invalid_api_key"}}),
+    )
+    .await;
+    let model = Rig::new()
+        .unwrap()
+        .chat(
+            connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
+            "corrector".to_string(),
+        )
+        .unwrap();
+
+    let error = model.reply(EXCHANGE).await.unwrap_err();
+
+    server.await.unwrap();
+    assert_eq!(
+        format!("{error:#}"),
+        "the service rejected the API key with HTTP 401"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_reply_names_its_status_but_not_its_body() {
+    let (base, server) = answering(
+        "500 Internal Server Error",
+        "",
+        json!({"error": {"message": "upstream said sk-secret-123"}}),
+    )
+    .await;
+    let transcriber = Rig::new()
+        .unwrap()
+        .transcriber(
+            connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
+            "asr".to_string(),
+        )
+        .unwrap();
+
+    let error = transcriber
+        .transcribe(Take {
+            wav: b"RIFF".to_vec(),
+            language: None,
+        })
+        .await
+        .unwrap_err();
+
+    server.await.unwrap();
+    assert_eq!(format!("{error:#}"), "the service returned HTTP 500");
+}
+
+#[tokio::test]
+async fn a_redirect_is_never_followed_with_the_key() {
+    let elsewhere = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let location: &'static str = Box::leak(
+        format!(
+            "Location: http://{}/v1/chat/completions\r\n",
+            elsewhere.local_addr().unwrap()
+        )
+        .into_boxed_str(),
+    );
+    let (base, server) = answering("307 Temporary Redirect", location, json!({})).await;
+    let model = Rig::new()
+        .unwrap()
+        .chat(
+            connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish")),
+            "corrector".to_string(),
+        )
+        .unwrap();
+
+    assert!(model.reply(EXCHANGE).await.is_err());
+    server.await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), elsewhere.accept())
+            .await
+            .is_err(),
+        "the redirect was followed"
     );
 }

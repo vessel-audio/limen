@@ -114,6 +114,8 @@ impl std::fmt::Debug for Connection {
 /// the core never builds one itself, so it does not depend on the framework
 /// an implementation wraps. Implementations only translate: timeouts,
 /// retries of the user's take, and validation of replies stay in the core.
+/// Their errors reach logs and the GUI, so they must never quote what a
+/// service sent back, which can echo the request or a rejected key.
 /// A connection to an API that cannot serve the request, such as
 /// transcription on a chat-only vendor, is an error.
 pub trait ModelBackend: Send + Sync {

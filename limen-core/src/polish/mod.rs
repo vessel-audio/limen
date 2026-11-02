@@ -16,6 +16,10 @@ const MAX_TOKENS: u64 = 4096;
 pub enum Polisher {
     Disabled,
     MissingKey,
+    /// The configured server's URL is not one the backend can reach, such
+    /// as a chat route with a query that a config from before services may
+    /// name.
+    UnreachableUrl,
     Enabled {
         model: Box<dyn ChatModel>,
         timeout: Duration,
@@ -38,7 +42,16 @@ impl Polisher {
             );
             return Ok(Self::MissingKey);
         }
-        let connection = connection::polish(config, api_key)?;
+        let connection = match connection::polish(config, api_key) {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "polishing is enabled but its server cannot be reached; using original transcripts"
+                );
+                return Ok(Self::UnreachableUrl);
+            }
+        };
         Ok(Self::Enabled {
             model: backend.chat(connection, config.model.clone())?,
             timeout: Duration::from_millis(config.timeout_ms),
@@ -58,7 +71,7 @@ impl Polisher {
             return original;
         }
         match self {
-            Self::Disabled | Self::MissingKey => original,
+            Self::Disabled | Self::MissingKey | Self::UnreachableUrl => original,
             Self::Enabled { model, timeout } => correct(&**model, *timeout, original).await,
         }
     }
@@ -323,6 +336,23 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_route_the_backend_cannot_reach_keeps_the_originals() {
+        let config = PolishConfig {
+            enabled: true,
+            url: "https://ai.example/chat/completions?api-version=2026-01-01".to_string(),
+            model: "corrector".to_string(),
+            saved_key: Some(ApiKey::new("sk-polish".to_string())),
+            ..PolishConfig::default()
+        };
+        let backend = Recording::default();
+
+        let polisher = Polisher::from_config(&config, &backend).unwrap();
+
+        assert!(matches!(polisher, Polisher::UnreachableUrl));
+        assert_eq!(backend.built.lock().unwrap().clone(), []);
     }
 
     #[tokio::test]
