@@ -71,6 +71,7 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
             form.saving = Some(id);
             // Only edits after this point are unsaved when the reply arrives.
             form.touched = false;
+            form.dirty = Default::default();
             form.error = None;
         }
         Err(error) => form.error = Some(error.to_string()),

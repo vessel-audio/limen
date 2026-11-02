@@ -291,7 +291,7 @@ impl Config {
             ("http" | "https", Some(_)) => {}
             _ => bail!("provider.url must be an http(s):// URL with a host"),
         }
-        check_no_url_credentials(&provider_url, "provider.url")?;
+        check_url_parameters(&provider_url, "provider.url")?;
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
@@ -371,39 +371,42 @@ pub(crate) fn check_polish_url(url: &str) -> Result<()> {
         }
         _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
     }
-    check_no_url_credentials(&polish_url, "polish.url")?;
+    check_url_parameters(&polish_url, "polish.url")?;
     Ok(())
 }
 
-/// Refuse credentials in an endpoint itself, including the usual query
-/// parameters that carry them. Other query parameters, such as
-/// `api-version`, remain supported.
-fn check_no_url_credentials(url: &reqwest::Url, field: &str) -> Result<()> {
-    let credential_query = url.query_pairs().any(|(name, _)| {
+/// Allow only endpoint query parameters that are routing or API metadata,
+/// never credentials. An allowlist is deliberate: a denylist cannot cover
+/// every name a provider might give a secret.
+pub(crate) fn check_url_parameters(url: &reqwest::Url, field: &str) -> Result<()> {
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("{field} must not contain credentials; use an API key instead");
+    }
+    let unsupported = url.query_pairs().any(|(name, _)| {
         let name = name.to_ascii_lowercase().replace(['-', '_'], "");
-        matches!(
+        !matches!(
             name.as_str(),
-            "key"
-                | "apikey"
-                | "xapikey"
-                | "subscriptionkey"
-                | "token"
-                | "accesstoken"
-                | "refreshtoken"
-                | "sessiontoken"
-                | "auth"
-                | "authorization"
-                | "password"
-                | "secret"
-                | "clientsecret"
-                | "credential"
-                | "credentials"
-                | "signature"
-                | "sig"
+            "apiversion"
+                | "version"
+                | "deployment"
+                | "deploymentid"
+                | "model"
+                | "project"
+                | "projectid"
+                | "organization"
+                | "organizationid"
+                | "region"
+                | "location"
+                | "tenant"
+                | "tenantid"
+                | "language"
+                | "format"
         )
     });
-    if !url.username().is_empty() || url.password().is_some() || credential_query {
-        bail!("{field} must not contain credentials; use an API key instead");
+    if unsupported {
+        bail!(
+            "{field} allows only non-secret query parameters such as api-version; use an API key instead"
+        );
     }
     Ok(())
 }
@@ -465,7 +468,16 @@ mod tests {
     #[test]
     fn endpoint_queries_allow_versions_but_not_credentials() {
         let mut config = base_config();
-        for parameter in ["api_key", "token", "X-API-Key", "clientsecret"] {
+        for parameter in [
+            "api_key",
+            "token",
+            "X-API-Key",
+            "clientsecret",
+            "auth_token",
+            "access_key",
+            "api-token",
+            "unrecognised",
+        ] {
             config.provider.url =
                 format!("https://asr.example/v1/audio/transcriptions?{parameter}=do-not-echo");
             assert!(config.validate().is_err(), "{parameter}");

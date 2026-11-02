@@ -43,6 +43,7 @@ pub const ALL: &[Case] = cases![
     models::a_saved_key_is_removed,
     models::a_url_credential_is_rejected,
     models::edits_made_while_saving_survive,
+    models::an_early_model_choice_is_completed_by_the_first_load,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,

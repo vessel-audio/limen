@@ -17,7 +17,7 @@ mod form;
 
 pub use form::{ModelForms, follow};
 
-use form::{Address, save};
+use form::{Address, EditedField, save};
 
 pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
     let (form, prefix, title) = match role {
@@ -87,7 +87,7 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                             {
                                 *shown = polishing;
                             }
-                            form.edited();
+                            form.edited(EditedField::Polishing);
                         },
                         cx,
                     ))
@@ -121,7 +121,7 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let form = this.models.form(role);
                     form.clear_key = true;
-                    form.edited();
+                    form.edited(EditedField::Key);
                     form.key.update(cx, |input, cx| {
                         input.set_placeholder(
                             rust_i18n::t!("models.key_removed").to_string(),

@@ -254,7 +254,7 @@ pub fn a_url_credential_is_rejected() -> Result<()> {
     session.click("polish-save")?;
     let error = session.node("polish-error")?;
     ensure!(
-        error.name.contains("must not contain credentials"),
+        error.name.contains("non-secret query parameters"),
         "the error says {:?}",
         error.name
     );
@@ -279,22 +279,65 @@ pub fn a_url_credential_is_rejected() -> Result<()> {
 /// saved next.
 pub fn edits_made_while_saving_survive() -> Result<()> {
     let session = Session::fake(Scenario {
-        provider_reload_ms: 2000,
+        provider_reload_ms: 1000,
         ..Scenario::default()
     })?;
     session.click("asr-page")?;
     choose_route(&session, 0)?;
-    retype(&session, "asr-server", "http://10.0.0.2:9000")?;
+    retype(&session, "asr-server", "http://a")?;
     session.click("asr-save")?;
-    retype(&session, "asr-server", "http://10.0.0.3:9000")?;
+    retype(&session, "asr-server", "http://b")?;
     session.named("toast", "ASR settings applied")?;
     session.click("asr-save")?;
     session.until("the edits made during the first save to be saved", || {
         let url = Config::load(&session.paths().config_file)
             .map(|config| config.provider.url)
             .unwrap_or_default();
-        Ok(url == "http://10.0.0.3:9000/v1/audio/transcriptions"
+        Ok(url == "http://b/v1/audio/transcriptions"
             && reloads(&session, &v1::Request::ProviderReload)? == 2)
+    })?;
+    Ok(())
+}
+
+/// A model chosen before the first settings load survives it, while the
+/// untouched server and route are still filled from the config.
+pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let session = Session::fake(Scenario::default())?;
+    let keys = session.paths().config_file.with_file_name("keys.toml");
+    std::fs::create_dir_all(keys.parent().unwrap())?;
+    let path = CString::new(keys.as_os_str().as_bytes())?;
+    // SAFETY: creates a new FIFO at this test's own path, with no readers or
+    // writers yet. The GUI's first key-file read blocks until the writer below.
+    ensure!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) } == 0);
+    let writer = keys.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        // Each open answers one reader with an empty key file. Removing the
+        // test directory ends any writer still waiting for another reader.
+        for _ in 0..32 {
+            if std::fs::write(&writer, "").is_err() {
+                break;
+            }
+        }
+    });
+    session.click("asr-page")?;
+    type_model(&session, "early-model")?;
+    // Save starts disabled until the first load has filled the other fields.
+    session.until("the completed form to accept a save", || {
+        session.click("asr-save")?;
+        Ok(reloads(&session, &v1::Request::ProviderReload)? == 1)
+    })?;
+    session.until("the early choice and the loaded server to be saved", || {
+        let Ok(config) = Config::load(&session.paths().config_file) else {
+            return Ok(false);
+        };
+        Ok(
+            config.provider.url == "http://127.0.0.1:8000/v1/audio/transcriptions"
+                && config.provider.model == "early-model",
+        )
     })?;
     Ok(())
 }

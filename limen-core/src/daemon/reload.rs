@@ -13,7 +13,11 @@ impl DictationActor {
             Ok(config) => {
                 self.projection.set_provider(&config.provider);
                 self.projection.publish(self.dictation.view(), unix_ms());
-                tracing::info!(url = %config.provider.url, model = %config.provider.model, "provider reloaded");
+                tracing::info!(
+                    url = %crate::config::display_url(&config.provider.url),
+                    model = %config.provider.model,
+                    "provider reloaded"
+                );
                 self.session.tell(SessionCommand::Provider(config.provider));
                 ipc::v1::Reply::Ok
             }

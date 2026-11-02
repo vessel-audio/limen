@@ -86,9 +86,22 @@ pub async fn save_provider(
 ) -> Result<ConfigChange> {
     match &provider {
         Provider::Asr { .. } => {}
-        // The key may be listed even while polishing is off, so a provider
-        // saved through the GUI always gets the polisher's URL checks.
-        Provider::Polish { url, .. } => config::check_polish_url(url.trim())?,
+        Provider::Polish {
+            polishing: Polishing::On,
+            url,
+            ..
+        } => config::check_polish_url(url.trim())?,
+        Provider::Polish {
+            polishing: Polishing::Off,
+            url,
+            ..
+        } => {
+            // A broken endpoint must not prevent turning polishing off, but
+            // a parsable one still may not persist credentials.
+            if let Ok(url) = reqwest::Url::parse(url.trim()) {
+                config::check_url_parameters(&url, "polish.url")?;
+            }
+        }
     }
     let text = |text: String| config::Value::Text(text.trim().to_string());
     let (role, values, request) = match provider {
@@ -213,6 +226,25 @@ mod tests {
                 load_provider(&paths, ModelRole::Asr).unwrap().1
             ),
             (CONFIG.to_string(), KeyState::Missing)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_endpoint_does_not_prevent_disabling_polishing() {
+        let paths = scratch("provider-disable");
+        let provider = Provider::Polish {
+            polishing: Polishing::Off,
+            url: "http://".to_string(),
+            model: "m".to_string(),
+        };
+
+        let change = save_provider(&paths, provider.clone(), KeyChange::Keep)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (change, load_provider(&paths, ModelRole::Polish).unwrap()),
+            (ConfigChange::Saved, (provider, KeyState::Missing))
         );
     }
 

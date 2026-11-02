@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -53,7 +53,9 @@ pub(crate) fn saved_keys(config_file: &Path) -> Result<SavedKeys> {
 /// The key file's contents after `change` to the key `role` sends, or
 /// `None` when the file stays as it is. A regular file that others may read
 /// is rewritten even when its keys stay, so it ends up private; a symlinked
-/// one is left to whatever manages it, and refused when a key changes.
+/// one is left to whatever manages it, and refused when a key changes. A
+/// hard-linked file is refused whenever a write is needed, because replacing
+/// one link would leave another copy behind.
 /// Callers hold the config directory's lock and write the result with mode
 /// 0600 to [`path`].
 pub(super) fn edit_key(
@@ -66,17 +68,24 @@ pub(super) fn edit_key(
         ModelRole::Polish => "polish",
     };
     let path = path(config_file);
-    let (text, exposed) = match fs::symlink_metadata(&path) {
+    let (text, exposed, shared) = match fs::symlink_metadata(&path) {
         Ok(metadata) => (
             fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?,
             metadata.is_file() && metadata.permissions().mode() & 0o077 != 0,
+            metadata.is_file() && metadata.nlink() > 1,
         ),
-        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false),
+        Err(error) if error.kind() == ErrorKind::NotFound => (String::new(), false, false),
         Err(error) => {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
+    if shared && (exposed || !matches!(change, KeyChange::Keep)) {
+        bail!(
+            "{} has other hard links; remove them before changing its keys",
+            path.display()
+        );
+    }
     let mut document: DocumentMut = text
         .parse()
         .map_err(|_| anyhow!("invalid {}; its keys were not changed", path.display()))?;
@@ -151,6 +160,33 @@ mod tests {
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             ),
             ("asr = \"sk-asr\"\n".to_string(), 0o600)
+        );
+    }
+
+    #[test]
+    fn a_hard_linked_key_file_is_refused_instead_of_leaving_an_exposed_copy() {
+        let config = scratch("keys-hard-link");
+        let path = config.with_file_name("keys.toml");
+        let other = config.with_file_name("other-copy.toml");
+        fs::write(&path, "asr = \"sk-asr\"\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::hard_link(&path, &other).unwrap();
+
+        let error = update_key(&config, ModelRole::Asr, &KeyChange::Keep).unwrap_err();
+
+        assert_eq!(
+            (
+                error.to_string().contains("hard links"),
+                fs::read_to_string(&path).unwrap(),
+                fs::read_to_string(&other).unwrap(),
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            ),
+            (
+                true,
+                "asr = \"sk-asr\"\n".to_string(),
+                "asr = \"sk-asr\"\n".to_string(),
+                0o644
+            )
         );
     }
 

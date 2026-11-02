@@ -18,18 +18,14 @@ use crate::model::{Action, Toast};
 
 pub type EndpointSelect = SelectState<SearchableVec<&'static str>>;
 
-/// Where the provider's requests go.
-pub enum Address {
-    /// The ASR server's origin and one of the known routes.
-    Server {
-        server: Entity<InputState>,
-        route: Entity<EndpointSelect>,
-    },
-    /// The polisher's chat-completions URL, and whether it is used at all.
-    Url {
-        polishing: Polishing,
-        url: Entity<InputState>,
-    },
+/// Fields edited before the first settings load; all of them on later loads.
+#[derive(Default, Clone, Copy)]
+struct DirtyFields {
+    address: bool,
+    route: bool,
+    key: bool,
+    model: bool,
+    polishing: bool,
 }
 
 /// How long an endpoint that could not list models waits before it is asked
@@ -63,6 +59,10 @@ pub struct ProviderForm {
     pub loaded: Option<(Provider, KeyState)>,
     /// Settings that arrived and fill the fields on the next frame.
     arrived: Option<(Provider, KeyState)>,
+    /// Whether saved settings have filled the fields once, and which fields
+    /// the user edited before that first fill.
+    filled: bool,
+    dirty: DirtyFields,
     /// The settings must be loaded again when the page shows.
     stale: bool,
     /// The page showed on the last frame.
@@ -124,15 +124,25 @@ impl ModelForms {
                 SelectState::new(ModelChoices::new(Vec::new()), None, window, cx).searchable(true)
             });
             let inputs = match &address {
-                Address::Server { server, .. } => vec![server.clone(), key.clone()],
-                Address::Url { url, .. } => vec![url.clone(), key.clone()],
+                Address::Server { server, .. } => {
+                    vec![
+                        (server.clone(), EditedField::Address),
+                        (key.clone(), EditedField::Key),
+                    ]
+                }
+                Address::Url { url, .. } => {
+                    vec![
+                        (url.clone(), EditedField::Address),
+                        (key.clone(), EditedField::Key),
+                    ]
+                }
             };
-            for input in inputs {
+            for (input, field) in inputs {
                 subscriptions.push(cx.subscribe_in(
                     &input,
                     window,
                     move |this, _, event: &InputEvent, _, cx| match event {
-                        InputEvent::Change => this.models.form(role).edited(),
+                        InputEvent::Change => this.models.form(role).edited(field),
                         InputEvent::PressEnter { .. } => save(this, role, cx),
                         _ => {}
                     },
@@ -144,7 +154,9 @@ impl ModelForms {
                     window,
                     move |this, _, event: &SelectEvent<SearchableVec<&'static str>>, _, _| {
                         match event {
-                            SelectEvent::Confirm(_) => this.models.form(role).edited(),
+                            SelectEvent::Confirm(_) => {
+                                this.models.form(role).edited(EditedField::Route)
+                            }
                         }
                     },
                 ));
@@ -156,7 +168,7 @@ impl ModelForms {
                     SelectEvent::Confirm(Some(model)) => {
                         let form = this.models.form(role);
                         form.chosen = Some(model.clone());
-                        form.edited();
+                        form.edited(EditedField::Model);
                     }
                     SelectEvent::Confirm(None) => {}
                 },
@@ -168,6 +180,8 @@ impl ModelForms {
                 model,
                 loaded: None,
                 arrived: None,
+                filled: false,
+                dirty: DirtyFields::default(),
                 stale: true,
                 visible: false,
                 listing: Listing::Unknown,
@@ -207,9 +221,9 @@ impl ModelForms {
         }
     }
 
-    /// Record settings read by the current request. They fill the fields on
-    /// the next frame unless the user edited meanwhile; then they only update
-    /// the saved baseline used when saving those edits.
+    /// Record settings read by the current request. Before the first fill,
+    /// they complete fields the user has not edited; after it, edits in
+    /// progress are left alone and only the saved baseline is updated.
     pub fn loaded(
         &mut self,
         role: ModelRole,
@@ -219,10 +233,10 @@ impl ModelForms {
         let form = self.form(role);
         if form.loading == Some(id) {
             form.loading = None;
-            match (result, form.touched) {
-                (Ok(settings), false) => form.arrived = Some(settings),
-                (Ok(settings), true) => form.loaded = Some(settings),
-                (Err(message), _) => form.error = Some(message),
+            match (result, form.touched, form.filled) {
+                (Ok(settings), true, true) => form.loaded = Some(settings),
+                (Ok(settings), _, _) => form.arrived = Some(settings),
+                (Err(message), _, _) => form.error = Some(message),
             }
         }
     }
@@ -290,8 +304,15 @@ impl ModelForms {
 }
 
 impl ProviderForm {
-    pub fn edited(&mut self) {
+    pub fn edited(&mut self, field: EditedField) {
         self.touched = true;
+        match field {
+            EditedField::Address => self.dirty.address = true,
+            EditedField::Route => self.dirty.route = true,
+            EditedField::Key => self.dirty.key = true,
+            EditedField::Model => self.dirty.model = true,
+            EditedField::Polishing => self.dirty.polishing = true,
+        }
         self.error = None;
     }
 }
@@ -321,13 +342,13 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
                 form.stale = false;
             }
         }
-        match (form.touched, form.arrived.take()) {
-            (false, Some((provider, key))) => {
+        match (form.touched, form.filled, form.arrived.take()) {
+            (true, true, Some(settings)) => form.loaded = Some(settings),
+            (_, _, Some((provider, key))) => {
                 fill(form, &provider, &key, window, cx);
                 form.loaded = Some((provider, key));
             }
-            (true, Some(settings)) => form.loaded = Some(settings),
-            (_, None) => {}
+            (_, _, None) => {}
         }
         let endpoint = form.loaded.as_ref().map(|(provider, _)| match provider {
             Provider::Asr { url, .. } | Provider::Polish { url, .. } => url.clone(),
@@ -384,6 +405,8 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
 }
 
 /// Fill the fields with loaded settings and ask for the endpoint's models.
+/// On the first fill, fields already edited keep the user's values; later
+/// fills only happen when no edit is in progress and replace every field.
 fn fill(
     form: &mut ProviderForm,
     provider: &Provider,
@@ -391,21 +414,27 @@ fn fill(
     window: &mut Window,
     cx: &mut Context<AppView>,
 ) {
+    let preserve = !form.filled;
+    let dirty = form.dirty;
     let model = match (provider, &mut form.address) {
         (Provider::Asr { url, model }, Address::Server { server, route }) => {
             // A URL without a host shows whole, so the user sees what to repair.
             let (origin, path) =
                 split_provider_url(url).unwrap_or_else(|| (url.clone(), String::new()));
-            server.update(cx, |input, cx| input.set_value(origin, window, cx));
-            let known = ProviderEndpoint::from_path(&path).map(ProviderEndpoint::path);
-            form.unlisted_route = known
-                .is_none()
-                .then(|| path.clone())
-                .filter(|path| !path.is_empty());
-            route.update(cx, |select, cx| match known {
-                Some(path) => select.set_selected_value(&path, window, cx),
-                None => select.set_selected_index(None, window, cx),
-            });
+            if !(preserve && dirty.address) {
+                server.update(cx, |input, cx| input.set_value(origin, window, cx));
+            }
+            if !(preserve && dirty.route) {
+                let known = ProviderEndpoint::from_path(&path).map(ProviderEndpoint::path);
+                form.unlisted_route = known
+                    .is_none()
+                    .then(|| path.clone())
+                    .filter(|path| !path.is_empty());
+                route.update(cx, |select, cx| match known {
+                    Some(path) => select.set_selected_value(&path, window, cx),
+                    None => select.set_selected_index(None, window, cx),
+                });
+            }
             model
         }
         (
@@ -419,8 +448,12 @@ fn fill(
                 url: input,
             },
         ) => {
-            *shown = *polishing;
-            input.update(cx, |input, cx| input.set_value(url.clone(), window, cx));
+            if !(preserve && dirty.polishing) {
+                *shown = *polishing;
+            }
+            if !(preserve && dirty.address) {
+                input.update(cx, |input, cx| input.set_value(url.clone(), window, cx));
+            }
             model
         }
         (Provider::Asr { .. }, Address::Url { .. })
@@ -434,16 +467,26 @@ fn fill(
         KeyState::Missing => rust_i18n::t!("models.key_missing").to_string(),
     };
     form.key.update(cx, |input, cx| {
-        input.set_value("", window, cx);
+        if !(preserve && dirty.key) {
+            input.set_value("", window, cx);
+        }
         input.set_placeholder(placeholder, window, cx);
     });
-    form.chosen = Some(SharedString::from(model.clone()));
+    if !(preserve && dirty.model) {
+        form.chosen = Some(SharedString::from(model.clone()));
+    }
     // Each load may follow a new endpoint or key: ask again.
     form.listing = Listing::Unknown;
-    form.clear_key = false;
-    form.touched = false;
+    form.filled = true;
+    if !preserve {
+        form.clear_key = false;
+        form.touched = false;
+        form.dirty = DirtyFields::default();
+    }
 }
 
+mod fields;
 mod save;
 
+pub use fields::{Address, EditedField};
 pub use save::save;

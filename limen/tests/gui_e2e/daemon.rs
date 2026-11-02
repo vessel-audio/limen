@@ -294,11 +294,7 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
             match Config::load(&paths.config_file) {
                 Ok(config) => {
                     let mut daemon = daemon.lock().await;
-                    daemon.config = ConfigSummary {
-                        provider_model: config.provider.model,
-                        provider_url: config.provider.url,
-                        ..daemon.config.clone()
-                    };
+                    daemon.config = ConfigSummary::from_config(&config);
                     daemon.publish();
                     v1::Reply::Ok
                 }
@@ -310,10 +306,7 @@ async fn connection(stream: UnixStream, daemon: Arc<Mutex<Daemon>>, paths: &Path
         v1::Request::PolishReload => match Config::load(&paths.config_file) {
             Ok(config) => {
                 let mut daemon = daemon.lock().await;
-                daemon.config = ConfigSummary {
-                    polish_enabled: config.polish.enabled,
-                    ..daemon.config.clone()
-                };
+                daemon.config = ConfigSummary::from_config(&config);
                 daemon.publish();
                 v1::Reply::Ok
             }

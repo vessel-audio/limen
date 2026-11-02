@@ -121,7 +121,8 @@ pub struct ConfigSummary {
 }
 
 impl ConfigSummary {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    /// Build the non-secret summary of a validated config.
+    pub fn from_config(config: &Config) -> Self {
         let backend = match crate::input_method::default_backend(config.input_method.backend) {
             crate::input_method::Backend::Dotool => "dotool",
             crate::input_method::Backend::Wtype => "wtype",
