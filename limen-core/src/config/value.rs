@@ -1,5 +1,5 @@
-//! Writing values back from the GUI: the ASR and polishing providers' URLs
-//! and models, and whether polishing is on.
+//! Writing values back from the GUI: the ASR and polishing providers'
+//! services, URLs, and models, and whether polishing is on.
 //!
 //! Like the `[shortcut]` writer, only the values change: every other byte of
 //! the file, comments included, stays as it was, and a symlinked or
@@ -19,9 +19,11 @@ use crate::models::ModelRole;
 /// A value of the config that the GUI edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Key {
+    ProviderService,
     ProviderUrl,
     ProviderModel,
     PolishEnabled,
+    PolishService,
     PolishUrl,
     PolishModel,
 }
@@ -37,16 +39,22 @@ impl Key {
     /// The section and the key within it.
     fn path(self) -> (&'static str, &'static str) {
         match self {
+            Self::ProviderService => ("provider", "service"),
             Self::ProviderUrl => ("provider", "url"),
             Self::ProviderModel => ("provider", "model"),
             Self::PolishEnabled => ("polish", "enabled"),
+            Self::PolishService => ("polish", "service"),
             Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
         }
     }
 
+    /// The value as the config means it: a service left out reads as the
+    /// one inferred, so saving that service again changes nothing.
     fn read(self, config: &Config) -> Value {
         match self {
+            Self::ProviderService => Value::Text(config.provider.service().as_str().to_string()),
+            Self::PolishService => Value::Text(config.polish.service().as_str().to_string()),
             Self::ProviderUrl => Value::Text(config.provider.url.clone()),
             Self::ProviderModel => Value::Text(config.provider.model.clone()),
             Self::PolishEnabled => Value::Switch(config.polish.enabled),
@@ -222,10 +230,10 @@ mod tests {
             DEFAULT_CONFIG
                 .replace("enabled = false", "enabled = true")
                 .replace(
-                    "https://api.deepseek.com/chat/completions",
-                    "http://127.0.0.1:3425/v1/chat/completions"
+                    "url = \"\"",
+                    "url = \"http://127.0.0.1:3425/v1/chat/completions\""
                 )
-                .replace("deepseek-flash", "qwen3")
+                .replace("model = \"\"", "model = \"qwen3\"")
         );
     }
 
@@ -308,13 +316,18 @@ mod tests {
     fn a_missing_config_starts_from_the_default() {
         let path = scratch("provider-missing").join("config.toml");
 
-        set(&path, Key::ProviderUrl, "http://10.0.0.2:9000/asr").unwrap();
+        set(
+            &path,
+            Key::ProviderUrl,
+            "http://10.0.0.2:9000/v1/audio/transcriptions",
+        )
+        .unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             DEFAULT_CONFIG.replace(
                 "http://127.0.0.1:8000/v1/audio/transcriptions",
-                "http://10.0.0.2:9000/asr"
+                "http://10.0.0.2:9000/v1/audio/transcriptions"
             )
         );
     }
@@ -350,13 +363,13 @@ mod tests {
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
         set(&path, Key::ProviderModel, "Qwen/Qwen3-ASR-1.7B").unwrap();
-        set(&path, Key::PolishModel, "deepseek-chat").unwrap();
+        set(&path, Key::PolishModel, "corrector").unwrap();
 
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             DEFAULT_CONFIG
                 .replace("Qwen/Qwen3-ASR-0.6B", "Qwen/Qwen3-ASR-1.7B")
-                .replace("deepseek-flash", "deepseek-chat")
+                .replace("model = \"\"", "model = \"corrector\"")
         );
     }
 

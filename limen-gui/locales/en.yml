@@ -136,7 +136,9 @@ nav.polish: Polish
 models.asr_title: ASR model
 models.polish_title: Polish model
 models.server: Server
-models.route: Route
+models.service: Service
+models.service_compatible: OpenAI-compatible server
+models.service_whisper: whisper.cpp server
 models.polishing: Polishing
 models.url: URL
 models.key: API key
@@ -147,7 +149,6 @@ models.remove_key: Remove
 models.model: Model
 models.search: Search or enter a model
 models.save: Save
-models.choose_route: Choose a route
 toast.asr_applied: ASR settings applied
 toast.asr_saved: ASR settings saved; the daemon uses them when it starts
 toast.polish_applied: Polish settings applied

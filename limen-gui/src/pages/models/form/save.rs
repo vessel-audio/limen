@@ -11,7 +11,8 @@ use crate::app::AppView;
 use crate::bridge::BridgeCommand;
 
 /// Save the page for `role`. The ASR server is checked here, so its error
-/// shows at once; the core validates the rest.
+/// shows at once; the core validates the rest. A vendor's own API keeps
+/// the saved URL, which it does not use.
 pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
     let form = view.models.form(role);
     let Some((loaded, _)) = form.loaded.clone() else {
@@ -21,28 +22,36 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
         return;
     }
     let model = form.chosen.clone().map(String::from).unwrap_or_default();
+    let service = form.chosen_service;
     let provider = match (&form.address, loaded) {
-        (Address::Server { server, route }, Provider::Asr { url: saved, .. }) => {
+        (
+            Address::Server { server },
+            Provider::Asr {
+                service: saved_service,
+                url: saved,
+                ..
+            },
+        ) => {
             let server = server.read(cx).value().trim().to_string();
-            let endpoint = route
-                .read(cx)
-                .selected_value()
-                .and_then(|path| ProviderEndpoint::from_path(path));
             let unchanged = split_provider_url(&saved).is_some_and(|(origin, _)| origin == server);
-            let url = match (endpoint, unchanged) {
-                (Some(endpoint), _) => provider_server_url(&server, endpoint),
-                // A hand-edited route the list does not offer stays, even
-                // when only the server changes.
-                (None, true) => Ok(saved),
-                (None, false) => match &form.unlisted_route {
-                    Some(route) => provider_server_url_with_route(&server, route),
-                    None => Err(anyhow::anyhow!(
-                        rust_i18n::t!("models.choose_route").to_string()
-                    )),
-                },
+            // A hand-edited route stays with its service, even when only
+            // the server changes; another service takes its own route.
+            let kept = form
+                .unlisted_route
+                .as_ref()
+                .filter(|_| service == saved_service);
+            let url = match (ProviderEndpoint::of(service), kept, unchanged) {
+                (None, _, _) => Ok(saved),
+                (Some(_), Some(_), true) => Ok(saved),
+                (Some(_), Some(route), false) => provider_server_url_with_route(&server, route),
+                (Some(endpoint), None, _) => provider_server_url(&server, endpoint),
             };
             match url {
-                Ok(url) => Provider::Asr { url, model },
+                Ok(url) => Provider::Asr {
+                    service,
+                    url,
+                    model,
+                },
                 Err(error) => {
                     form.error = Some(format!("{error:#}"));
                     return;
@@ -51,6 +60,7 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
         }
         (Address::Url { polishing, url }, Provider::Polish { .. }) => Provider::Polish {
             polishing: *polishing,
+            service,
             url: url.read(cx).value().to_string(),
             model,
         },

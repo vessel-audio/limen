@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, ensure};
 use atspi::{Role, State};
-use limen_core::{Config, v1};
+use limen_core::{Config, Service, v1};
 
 use super::retype;
 use crate::daemon::Scenario;
@@ -57,11 +57,13 @@ fn closed(session: &Session) -> Result<()> {
     })
 }
 
-/// Pick the route at `index` from the list; its items have no accessible
-/// names, and the list offers `/v1/audio/transcriptions`, then `/inference`.
-fn choose_route(session: &Session, index: usize) -> Result<()> {
-    session.click(Target::Named(Role::ComboBox, "Route"))?;
-    let item = session.settled_by("a route in the list", |nodes| {
+/// Pick the service at `index` from the list; its items have no accessible
+/// names. The ASR list offers an OpenAI-compatible server, the whisper.cpp
+/// server, then the vendors; the polishing list the OpenAI-compatible
+/// server, OpenAI, Anthropic, then the other vendors.
+fn choose_service(session: &Session, index: usize) -> Result<()> {
+    session.click(Target::Named(Role::ComboBox, "Service"))?;
+    let item = session.settled_by("a service in the list", |nodes| {
         nodes
             .iter()
             .filter(|node| node.role == Role::ListItem)
@@ -102,13 +104,13 @@ pub fn the_dictation_button_opens_the_asr_page() -> Result<()> {
     Ok(())
 }
 
-/// A server, a route, a key, and a typed model are saved together: the
-/// config holds the URL and model, the key goes to a private file of its
-/// own, and the daemon reloads the provider once.
+/// A service, a server, a key, and a typed model are saved together: the
+/// config holds the service, URL, and model, the key goes to a private file
+/// of its own, and the daemon reloads the provider once.
 pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    choose_route(&session, 1)?;
+    choose_service(&session, 1)?;
     retype(&session, "asr-server", "http://10.0.0.2:9000")?;
     session.click("asr-key")?;
     session.x11().type_text("sk-asr")?;
@@ -121,11 +123,13 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     let mode = std::fs::metadata(&keys)?.permissions().mode() & 0o777;
     ensure!(
         (
+            config.provider.service,
             config.provider.url.as_str(),
             config.provider.model.as_str(),
             config.api_key().as_deref(),
             mode,
         ) == (
+            Some(Service::WhisperCpp),
             "http://10.0.0.2:9000/inference",
             "Qwen/Qwen3-ASR-1.7B",
             Some("sk-asr"),
@@ -283,7 +287,7 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
         ..Scenario::default()
     })?;
     session.click("asr-page")?;
-    choose_route(&session, 0)?;
+    choose_service(&session, 0)?;
     retype(&session, "asr-server", "http://a")?;
     session.click("asr-save")?;
     retype(&session, "asr-server", "http://b")?;
@@ -300,7 +304,7 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
 }
 
 /// A model chosen before the first settings load survives it, while the
-/// untouched server and route are still filled from the config.
+/// untouched service and server are still filled from the config.
 pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
     use std::os::fd::AsRawFd;
 
@@ -335,8 +339,8 @@ pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
     Ok(())
 }
 
-/// A hand-edited route that the list does not offer follows the server when
-/// only the server address changes.
+/// A hand-edited route that its service does not use follows the server
+/// when only the server address changes.
 pub fn a_custom_route_moves_to_a_new_server() -> Result<()> {
     let session = Session::launch(Launch {
         config: Some("[provider]\nurl = \"http://old.example/custom-transcribe\"\nmodel = \"m\"\n"),
@@ -352,5 +356,18 @@ pub fn a_custom_route_moves_to_a_new_server() -> Result<()> {
         "saved {:?}",
         provider.url
     );
+    Ok(())
+}
+
+/// A vendor's own API has no server to name, so choosing one hides the URL
+/// row, and choosing a server again shows it.
+pub fn a_vendor_hides_the_server_url() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("polish-page")?;
+    session.node("polish-url")?;
+    choose_service(&session, 2)?;
+    session.absent("polish-url")?;
+    choose_service(&session, 0)?;
+    session.node("polish-url")?;
     Ok(())
 }

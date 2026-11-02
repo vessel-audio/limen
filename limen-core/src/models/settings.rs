@@ -1,10 +1,10 @@
-//! A provider's settings as the GUI edits them: its URL, model, and key,
-//! and for polishing whether it is on.
+//! A provider's settings as the GUI edits them: its service, URL, model,
+//! and key, and for polishing whether it is on.
 
 use anyhow::{Context, Result, bail};
 
 use super::ModelRole;
-use crate::config::{self, Config, KeyChange, Paths};
+use crate::config::{self, Config, KeyChange, Paths, Service};
 use crate::ipc::v1;
 use crate::reload::{ConfigChange, reload};
 
@@ -18,11 +18,19 @@ pub enum Polishing {
 /// A model provider as saved in the config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provider {
-    /// The transcription URL of the ASR server and its model.
-    Asr { url: String, model: String },
-    /// The chat-completions URL that polishes transcripts and its model.
+    /// The service that transcribes, its server's transcription URL, and
+    /// its model.
+    Asr {
+        service: Service,
+        url: String,
+        model: String,
+    },
+    /// The service that polishes transcripts, its server's
+    /// chat-completions URL, and its model. The URL of a vendor's own API
+    /// is kept but unused.
     Polish {
         polishing: Polishing,
+        service: Service,
         url: String,
         model: String,
     },
@@ -51,11 +59,12 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySta
     let (provider, saved, variable) = match role {
         ModelRole::Asr => (
             Provider::Asr {
-                url: config.provider.url,
-                model: config.provider.model,
+                service: config.provider.service(),
+                url: config.provider.url.clone(),
+                model: config.provider.model.clone(),
             },
             keys.asr,
-            config.provider.api_key_env,
+            config.provider.key_env().map(str::to_string),
         ),
         ModelRole::Polish => (
             Provider::Polish {
@@ -63,11 +72,12 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySta
                     true => Polishing::On,
                     false => Polishing::Off,
                 },
-                url: config.polish.url,
-                model: config.polish.model,
+                service: config.polish.service(),
+                url: config.polish.url.clone(),
+                model: config.polish.model.clone(),
             },
             keys.polish,
-            Some(config.polish.api_key_env),
+            config.polish.key_env().map(str::to_string),
         ),
     };
     let set = |variable: &String| std::env::var(variable).is_ok_and(|key| !key.is_empty());
@@ -91,9 +101,14 @@ pub async fn save_provider(
         Provider::Asr { .. } => {}
         Provider::Polish {
             polishing: Polishing::On,
+            service,
             url,
             ..
-        } => config::check_polish_url(url.trim())?,
+        } if service.uses_url() => config::check_polish_url(url.trim())?,
+        Provider::Polish {
+            polishing: Polishing::On,
+            ..
+        } => {}
         Provider::Polish {
             polishing: Polishing::Off,
             url,
@@ -106,38 +121,62 @@ pub async fn save_provider(
             }
         }
     }
+    let blank = |text: &str| text.trim().is_empty();
+    match &provider {
+        Provider::Asr { model, .. }
+        | Provider::Polish {
+            polishing: Polishing::On,
+            model,
+            ..
+        } if blank(model) => bail!("enter a model name"),
+        Provider::Asr { .. } | Provider::Polish { .. } => {}
+    }
     let text = |text: String| config::Value::Text(text.trim().to_string());
+    let service = |service: Service| config::Value::Text(service.as_str().to_string());
     let (role, values, request) = match provider {
-        Provider::Asr { url, model } => (
+        Provider::Asr {
+            service: chosen,
+            url,
+            model,
+        } => (
             ModelRole::Asr,
-            vec![
-                (config::Key::ProviderUrl, text(url)),
-                (config::Key::ProviderModel, text(model)),
-            ],
+            [
+                Some((config::Key::ProviderService, service(chosen))),
+                // A vendor's own API leaves the server's URL as it was.
+                chosen
+                    .uses_url()
+                    .then(|| (config::Key::ProviderUrl, text(url))),
+                Some((config::Key::ProviderModel, text(model))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
             v1::Request::ProviderReload,
         ),
         Provider::Polish {
             polishing,
+            service: chosen,
             url,
             model,
         } => (
             ModelRole::Polish,
-            vec![
-                (
+            [
+                Some((
                     config::Key::PolishEnabled,
                     config::Value::Switch(polishing == Polishing::On),
-                ),
-                (config::Key::PolishUrl, text(url)),
-                (config::Key::PolishModel, text(model)),
-            ],
+                )),
+                Some((config::Key::PolishService, service(chosen))),
+                chosen
+                    .uses_url()
+                    .then(|| (config::Key::PolishUrl, text(url))),
+                Some((config::Key::PolishModel, text(model))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
             v1::Request::PolishReload,
         ),
     };
-    if values.contains(&(config::Key::ProviderModel, text(String::new())))
-        || values.contains(&(config::Key::PolishModel, text(String::new())))
-    {
-        bail!("enter a model name");
-    }
     let file = paths.config_file.clone();
     // The writes wait on a file lock; keep them off the caller's runtime thread.
     tokio::task::spawn_blocking(move || config::update_provider(&file, &values, role, &key))
@@ -151,7 +190,7 @@ mod tests {
     use std::fs;
 
     use super::{KeyState, Polishing, Provider, load_provider, save_provider};
-    use crate::config::{ApiKey, Config, KeyChange, Paths};
+    use crate::config::{ApiKey, Config, KeyChange, Paths, Service};
     use crate::models::ModelRole;
     use crate::reload::ConfigChange;
 
@@ -177,6 +216,7 @@ mod tests {
         let paths = scratch("provider-save");
         let polish = Provider::Polish {
             polishing: Polishing::On,
+            service: Service::OpenAiCompatible,
             url: " http://127.0.0.1:3425/v1/chat/completions ".to_string(),
             model: "qwen3".to_string(),
         };
@@ -200,6 +240,7 @@ mod tests {
                 (
                     Provider::Polish {
                         polishing: Polishing::On,
+                        service: Service::OpenAiCompatible,
                         url: "http://127.0.0.1:3425/v1/chat/completions".to_string(),
                         model: "qwen3".to_string(),
                     },
@@ -214,6 +255,7 @@ mod tests {
     async fn a_blank_model_is_refused_before_anything_is_written() {
         let paths = scratch("provider-blank");
         let asr = Provider::Asr {
+            service: Service::WhisperCpp,
             url: "http://127.0.0.1:8000/inference".to_string(),
             model: "  ".to_string(),
         };
@@ -237,6 +279,7 @@ mod tests {
         let paths = scratch("provider-disable");
         let provider = Provider::Polish {
             polishing: Polishing::Off,
+            service: Service::OpenAiCompatible,
             url: "http://".to_string(),
             model: "m".to_string(),
         };
@@ -248,6 +291,40 @@ mod tests {
         assert_eq!(
             (change, load_provider(&paths, ModelRole::Polish).unwrap()),
             (ConfigChange::Saved, (provider, KeyState::Missing))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vendor_keeps_the_server_url_and_polishing_off_needs_no_model() {
+        let paths = scratch("provider-vendor");
+        let polish = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::Anthropic,
+            url: "https://ignored.example/v1/chat/completions".to_string(),
+            model: String::new(),
+        };
+
+        save_provider(&paths, polish, KeyChange::Keep)
+            .await
+            .unwrap();
+
+        // The key state depends on ANTHROPIC_API_KEY in the environment.
+        assert_eq!(
+            (
+                fs::read_to_string(&paths.config_file).unwrap(),
+                load_provider(&paths, ModelRole::Polish).unwrap().0
+            ),
+            (
+                format!(
+                    "{CONFIG}\n[polish]\nenabled = false\nservice = \"anthropic\"\nmodel = \"\"\n"
+                ),
+                Provider::Polish {
+                    polishing: Polishing::Off,
+                    service: Service::Anthropic,
+                    url: String::new(),
+                    model: String::new(),
+                }
+            )
         );
     }
 
@@ -263,6 +340,7 @@ mod tests {
         assert_eq!(
             load_provider(&paths, ModelRole::Asr).unwrap().0,
             Provider::Asr {
+                service: Service::WhisperCpp,
                 url: "http://".to_string(),
                 model: "m".to_string()
             }

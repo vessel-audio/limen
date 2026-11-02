@@ -1,10 +1,10 @@
-//! Where each role's requests go: the [`Connection`] its config names, or,
-//! for an ASR URL no backend serves, Limen's own upload to that URL.
+//! Where each role's requests go: the [`Connection`] its service names, or,
+//! for the whisper.cpp service, Limen's own upload to its URL.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::backend::{Api, Connection};
-use crate::config::{Config, PolishConfig};
+use crate::config::{Config, PolishConfig, Service};
 
 /// The transcription route under an OpenAI-compatible API root.
 pub(crate) const TRANSCRIPTIONS: &str = "/audio/transcriptions";
@@ -36,29 +36,76 @@ pub(crate) fn base_url(endpoint: &str, route: &str) -> Option<String> {
     }
 }
 
-/// The route of the configured ASR server.
-pub(crate) fn asr(config: &Config) -> AsrRoute {
-    let url = &config.provider.url;
-    match base_url(url, TRANSCRIPTIONS) {
-        Some(base_url) => AsrRoute::Api(Connection {
-            api: Api::Compatible,
-            base_url: Some(base_url),
-            api_key: config.api_key(),
-        }),
-        None => AsrRoute::Upload(url.clone()),
+/// The route of the configured ASR service.
+pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
+    let provider = &config.provider;
+    let service = provider.service();
+    match service.api() {
+        None => Ok(AsrRoute::Upload(provider.url.clone())),
+        Some(api) => connect(
+            service,
+            api,
+            &provider.url,
+            TRANSCRIPTIONS,
+            config.api_key(),
+            provider.key_env(),
+        )
+        .map(AsrRoute::Api),
     }
 }
 
-/// The connection of the configured polishing server, which sends
+/// The connection of the configured polishing service, which sends
 /// `api_key`.
 pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<Connection> {
-    match base_url(&config.url, CHAT_COMPLETIONS) {
-        Some(base_url) => Ok(Connection {
-            api: Api::Compatible,
-            base_url: Some(base_url),
-            api_key,
+    let service = config.service();
+    let api = service.api().with_context(|| {
+        format!(
+            "polish.service \"{}\" does not polish text",
+            service.as_str()
+        )
+    })?;
+    connect(
+        service,
+        api,
+        &config.url,
+        CHAT_COMPLETIONS,
+        api_key,
+        config.key_env(),
+    )
+}
+
+/// The connection to `api`: at the API root of `url`, whose path ends in
+/// `route`, for a server Limen is pointed at; a vendor's own endpoint,
+/// which needs a key, otherwise.
+fn connect(
+    service: Service,
+    api: Api,
+    url: &str,
+    route: &str,
+    api_key: Option<String>,
+    key_env: Option<&str>,
+) -> Result<Connection> {
+    match (service.uses_url(), api_key) {
+        (true, api_key) => match base_url(url, route) {
+            Some(base_url) => Ok(Connection {
+                api,
+                base_url: Some(base_url),
+                api_key,
+            }),
+            None => bail!("the server URL must end in {route}, without a query"),
+        },
+        (false, Some(api_key)) => Ok(Connection {
+            api,
+            base_url: None,
+            api_key: Some(api_key),
         }),
-        None => bail!("polish.url must end in {CHAT_COMPLETIONS}, without a query"),
+        (false, None) => bail!(
+            "{} needs an API key: save one on its Models page{}",
+            service.as_str(),
+            key_env
+                .map(|variable| format!(" or set {variable}"))
+                .unwrap_or_default()
+        ),
     }
 }
 
@@ -102,6 +149,90 @@ mod tests {
                 None,
                 None,
                 None,
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod routes {
+    use super::{AsrRoute, asr, polish};
+    use crate::backend::{Api, Connection};
+    use crate::config::{ApiKey, Config, PolishConfig, Service};
+
+    fn config(provider: &str) -> Config {
+        toml::from_str(&format!("[provider]\n{provider}\nmodel = \"asr\"\n")).unwrap()
+    }
+
+    #[test]
+    fn a_config_without_a_service_keeps_its_route() {
+        assert_eq!(
+            [
+                "url = \"http://127.0.0.1:8000/v1/audio/transcriptions\"",
+                "url = \"http://127.0.0.1:8080/inference\"",
+                "url = \"https://asr.example/v1/audio/transcriptions?api-version=1\"",
+            ]
+            .map(|provider| asr(&config(provider)).unwrap()),
+            [
+                AsrRoute::Api(Connection {
+                    api: Api::Compatible,
+                    base_url: Some("http://127.0.0.1:8000/v1".to_string()),
+                    api_key: None,
+                }),
+                AsrRoute::Upload("http://127.0.0.1:8080/inference".to_string()),
+                AsrRoute::Upload(
+                    "https://asr.example/v1/audio/transcriptions?api-version=1".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vendor_ignores_the_url_and_needs_a_key() {
+        let mut config = config("service = \"groq\"\nurl = \"http://stale.example/inference\"");
+        config.provider.api_key_env = Some("LIMEN_TEST_DEFINITELY_MISSING_ASR_KEY".to_string());
+        assert_eq!(
+            asr(&config).unwrap_err().to_string(),
+            "groq needs an API key: save one on its Models page or set LIMEN_TEST_DEFINITELY_MISSING_ASR_KEY"
+        );
+
+        config.provider.saved_key = Some(ApiKey::new("sk-groq".to_string()));
+        assert_eq!(
+            asr(&config).unwrap(),
+            AsrRoute::Api(Connection {
+                api: Api::Groq,
+                base_url: None,
+                api_key: Some("sk-groq".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn polishing_reaches_a_vendor_or_the_api_root_of_its_server() {
+        let vendor = PolishConfig {
+            service: Some(Service::Anthropic),
+            ..PolishConfig::default()
+        };
+        let server = PolishConfig {
+            url: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
+            ..PolishConfig::default()
+        };
+        assert_eq!(
+            [
+                polish(&vendor, Some("sk-ant".to_string())).unwrap(),
+                polish(&server, None).unwrap(),
+            ],
+            [
+                Connection {
+                    api: Api::Anthropic,
+                    base_url: None,
+                    api_key: Some("sk-ant".to_string()),
+                },
+                Connection {
+                    api: Api::Compatible,
+                    base_url: Some("http://127.0.0.1:8080/v1".to_string()),
+                    api_key: None,
+                },
             ]
         );
     }

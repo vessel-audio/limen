@@ -18,12 +18,14 @@ use serde::{Deserialize, Serialize};
 use crate::shortcut::{Backend, Shortcut};
 
 mod keys;
+mod service;
 mod transaction;
 mod value;
 mod write;
 
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
+pub use service::Service;
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
 pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
@@ -55,11 +57,20 @@ const DEFAULT_CONFIG: &str = r#"# Limen configuration
 # ASR backend: one buffered take per HTTP transcription request.
 
 [provider]
+# Who transcribes each take:
+#   "openai-compatible": an OpenAI-compatible server at `url`, such as
+#                        vLLM or sglang-omni
+#   "whisper-cpp":       the whisper.cpp server, or any server that takes
+#                        the upload at exactly `url`
+#   "openai", "groq", "mistral", "gemini": the vendor's own API; `url` is
+#                        not used
+service = "openai-compatible"
 url = "http://127.0.0.1:8000/v1/audio/transcriptions"
 model = "Qwen/Qwen3-ASR-0.6B"
 language = "auto"
-# Read the API key from this environment variable; not needed for a local server
-# api_key_env = "OPENAI_API_KEY"
+# Read the API key from this environment variable; not needed for a local
+# server. A vendor's own variable, such as OPENAI_API_KEY, is read when unset
+# api_key_env = "MY_ASR_KEY"
 
 [audio]
 # pw-record source name; defaults to the system default input
@@ -77,12 +88,21 @@ chunk_ms = 100
 # backend = "fcitx5"   # default: direct Unicode commit through Fcitx5
 
 [polish]
-# Conservative cloud correction for the final transcript of each take;
-# audio is never uploaded.
+# Conservative correction of the final transcript of each take by a chat
+# model of your choice; audio is never sent to it.
 enabled = false
-url = "https://api.deepseek.com/chat/completions"
-model = "deepseek-flash"
-api_key_env = "DEEPSEEK_API_KEY"
+# Who corrects it:
+#   "openai-compatible": a chat-completions server at `url`, such as
+#                        llama.cpp, Ollama, or vLLM
+#   "openai", "anthropic", "gemini", "deepseek", "mistral", "groq",
+#   "openrouter", "xai": the vendor's own API; `url` is not used
+service = "openai-compatible"
+# e.g. "http://127.0.0.1:8080/v1/chat/completions"
+url = ""
+model = ""
+# Read the API key from this environment variable; a vendor's own variable,
+# such as OPENAI_API_KEY, is read when unset
+# api_key_env = "MY_POLISH_KEY"
 timeout_ms = 5000
 
 [shortcut]
@@ -148,6 +168,10 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    /// Left out by configs from before services; see [`Self::service`].
+    pub service: Option<Service>,
+    /// The server's URL; unused by a vendor's own API.
+    #[serde(default)]
     pub url: String,
     pub model: String,
     #[serde(default = "default_language")]
@@ -191,9 +215,13 @@ pub struct InputMethodConfig {
 #[serde(default)]
 pub struct PolishConfig {
     pub enabled: bool,
+    /// Left out by configs from before services, which all used an
+    /// OpenAI-compatible server.
+    pub service: Option<Service>,
+    /// The chat-completions URL; unused by a vendor's own API.
     pub url: String,
     pub model: String,
-    pub api_key_env: String,
+    pub api_key_env: Option<String>,
     pub timeout_ms: u64,
     /// The key saved from the GUI, which comes before `api_key_env`.
     #[serde(skip)]
@@ -204,9 +232,10 @@ impl Default for PolishConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            url: "https://api.deepseek.com/chat/completions".to_string(),
-            model: "deepseek-flash".to_string(),
-            api_key_env: "DEEPSEEK_API_KEY".to_string(),
+            service: None,
+            url: String::new(),
+            model: String::new(),
+            api_key_env: None,
             timeout_ms: 5000,
             saved_key: None,
         }
@@ -291,27 +320,33 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.provider.url.is_empty() {
-            bail!("provider.url must not be empty");
+        let service = self.provider.service();
+        if !Service::TRANSCRIBING.contains(&service) {
+            bail!(
+                "provider.service \"{}\" does not transcribe audio",
+                service.as_str()
+            );
         }
-        let provider_url =
-            reqwest::Url::parse(&self.provider.url).context("invalid provider.url")?;
-        match (provider_url.scheme(), provider_url.host_str()) {
-            ("http" | "https", Some(_)) => {}
-            _ => bail!("provider.url must be an http(s):// URL with a host"),
+        if service.uses_url() {
+            self.provider.check_url(service)?;
         }
-        check_url_parameters(&provider_url, "provider.url")?;
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");
         }
         if self.polish.enabled {
-            check_polish_url(&self.polish.url)?;
+            let service = self.polish.service();
+            if !Service::POLISHING.contains(&service) {
+                bail!(
+                    "polish.service \"{}\" does not polish text",
+                    service.as_str()
+                );
+            }
+            if service.uses_url() {
+                check_polish_url(&self.polish.url)?;
+            }
             if self.polish.model.trim().is_empty() {
                 bail!("polish.model must not be empty when polishing is enabled");
-            }
-            if self.polish.api_key_env.trim().is_empty() {
-                bail!("polish.api_key_env must not be empty when polishing is enabled");
             }
             if !(100..=30_000).contains(&self.polish.timeout_ms) {
                 bail!("polish.timeout_ms must be in 100..=30000");
@@ -333,28 +368,85 @@ impl Config {
     }
 
     /// The ASR key: the one saved from the GUI, else the one in
-    /// `provider.api_key_env`.
+    /// [`ProviderConfig::key_env`].
     pub fn api_key(&self) -> Option<String> {
-        match &self.provider.saved_key {
-            Some(key) => Some(key.expose().to_string()),
-            None => {
-                let var = self.provider.api_key_env.as_ref()?;
-                std::env::var(var).ok().filter(|v| !v.is_empty())
-            }
+        key(&self.provider.saved_key, self.provider.key_env())
+    }
+}
+
+/// `saved`, else the non-empty value of the variable `env`.
+fn key(saved: &Option<ApiKey>, env: Option<&str>) -> Option<String> {
+    match saved {
+        Some(key) => Some(key.expose().to_string()),
+        None => std::env::var(env?).ok().filter(|key| !key.is_empty()),
+    }
+}
+
+impl ProviderConfig {
+    /// The configured service; a config from before services named the
+    /// server by its URL alone, which is an OpenAI-compatible server when
+    /// it ends in `/audio/transcriptions` and an upload to exactly that URL
+    /// otherwise.
+    pub fn service(&self) -> Service {
+        match (
+            self.service,
+            crate::connection::base_url(&self.url, crate::connection::TRANSCRIPTIONS),
+        ) {
+            (Some(service), _) => service,
+            (None, Some(_)) => Service::OpenAiCompatible,
+            (None, None) => Service::WhisperCpp,
         }
+    }
+
+    /// The variable the key is read from: `api_key_env`, else the
+    /// service's own.
+    pub fn key_env(&self) -> Option<&str> {
+        self.api_key_env
+            .as_deref()
+            .or_else(|| self.service().key_env())
+    }
+
+    fn check_url(&self, service: Service) -> Result<()> {
+        if self.url.is_empty() {
+            bail!("provider.url must not be empty");
+        }
+        let provider_url = reqwest::Url::parse(&self.url).context("invalid provider.url")?;
+        match (provider_url.scheme(), provider_url.host_str()) {
+            ("http" | "https", Some(_)) => {}
+            _ => bail!("provider.url must be an http(s):// URL with a host"),
+        }
+        check_url_parameters(&provider_url, "provider.url")?;
+        let route = crate::connection::TRANSCRIPTIONS;
+        if service == Service::OpenAiCompatible
+            && crate::connection::base_url(&self.url, route).is_none()
+        {
+            bail!(
+                "provider.url must end in {route}, without a query, for an OpenAI-compatible server; use service = \"whisper-cpp\" to upload to exactly this URL"
+            );
+        }
+        Ok(())
     }
 }
 
 impl PolishConfig {
+    /// The configured service; configs from before services all used an
+    /// OpenAI-compatible server.
+    pub fn service(&self) -> Service {
+        self.service.unwrap_or(Service::OpenAiCompatible)
+    }
+
+    /// The variable the key is read from: `api_key_env`, else the
+    /// service's own.
+    pub fn key_env(&self) -> Option<&str> {
+        self.api_key_env
+            .as_deref()
+            .or_else(|| self.service().key_env())
+    }
+
     /// The polishing key: the one saved from the GUI, else the one in
-    /// `api_key_env`.
+    /// [`Self::key_env`].
     pub fn api_key(&self) -> Option<String> {
-        match &self.saved_key {
-            Some(key) => Some(key.expose().to_string()),
-            None => std::env::var(&self.api_key_env)
-                .ok()
-                .filter(|key| !key.is_empty()),
-        }
+        key(&self.saved_key, self.key_env())
     }
 }
 
@@ -443,7 +535,7 @@ pub(crate) fn display_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ShortcutConfig};
+    use super::{Config, Service, ShortcutConfig};
     use crate::shortcut::Backend;
 
     fn base_config() -> Config {
@@ -483,6 +575,7 @@ mod tests {
     #[test]
     fn endpoint_queries_allow_versions_but_not_credentials() {
         let mut config = base_config();
+        config.polish.model = "corrector".to_string();
         for parameter in [
             "api_key",
             "token",
@@ -508,9 +601,50 @@ mod tests {
     }
 
     #[test]
+    fn a_vendor_needs_no_url_but_must_serve_its_role() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        config.polish.service = Some(Service::Anthropic);
+        config.polish.model = "corrector".to_string();
+        config.validate().unwrap();
+
+        config.provider.service = Some(Service::Anthropic);
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "provider.service \"anthropic\" does not transcribe audio"
+        );
+        config.provider.service = Some(Service::Groq);
+        config.provider.url = String::new();
+        config.validate().unwrap();
+
+        config.polish.service = Some(Service::WhisperCpp);
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "polish.service \"whisper-cpp\" does not polish text"
+        );
+    }
+
+    #[test]
+    fn a_compatible_asr_server_needs_its_transcriptions_route() {
+        let mut config = base_config();
+        config.provider.service = Some(Service::OpenAiCompatible);
+        config.provider.url = "http://127.0.0.1:8080/inference".to_string();
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .starts_with("provider.url must end in /audio/transcriptions")
+        );
+        config.provider.service = Some(Service::WhisperCpp);
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn enabled_polish_needs_a_chat_completions_url_without_a_query() {
         let mut config = base_config();
         config.polish.enabled = true;
+        config.polish.model = "corrector".to_string();
         for url in [
             "https://ai.example/v1/completions",
             "https://ai.example/chat/completions?api-version=2026-01-01",
@@ -544,6 +678,7 @@ mod tests {
     fn loopback_http_is_allowed_for_local_polishing() {
         let mut config = base_config();
         config.polish.enabled = true;
+        config.polish.model = "corrector".to_string();
         for url in [
             "http://127.0.0.1:3425/v1/chat/completions",
             "http://localhost:3425/v1/chat/completions",
@@ -558,6 +693,8 @@ mod tests {
     fn enabled_polish_requires_a_bounded_timeout() {
         let mut config = base_config();
         config.polish.enabled = true;
+        config.polish.service = Some(Service::OpenAi);
+        config.polish.model = "corrector".to_string();
         config.polish.timeout_ms = 0;
         assert!(config.validate().is_err());
         config.polish.timeout_ms = 30_001;

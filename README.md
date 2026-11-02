@@ -11,9 +11,10 @@ Fcitx-compatible input context (Ghostty, Claude Code, GTK applications).
 - Fcitx5 5.1.0 or newer with its D-Bus addon
 - CMake, pkg-config, a C++ compiler, and Fcitx5 development files for the
   user-local text-input addon
-- An ASR server exposing OpenAI-compatible `POST /v1/audio/transcriptions`,
-  such as [sglang-omni](https://github.com/sgl-project/sglang-omni) serving
-  Qwen3-ASR
+- An ASR service: a server exposing OpenAI-compatible
+  `POST /v1/audio/transcriptions`, such as
+  [sglang-omni](https://github.com/sgl-project/sglang-omni) serving Qwen3-ASR,
+  the whisper.cpp server, or an API key for OpenAI, Groq, Mistral, or Gemini
 - For hold-to-talk, a desktop with the GlobalShortcuts portal (GNOME 48 or
   newer); toggling works with any desktop shortcut
 
@@ -76,13 +77,15 @@ upgrade leaves an outdated daemon running, restart it from the GUI so the new
 protocol takes effect.
 
 The Models pages, opened from the sidebar or the Models button on the dictation
-page, set up the ASR provider (server and route, API key, model) and the
-polishing provider (on or off, URL, API key, model). The model list shows what
-the server offers through `GET …/models` and also takes a typed name. Saving
-writes `config.toml` and applies the change to a running daemon from its next
-take. API keys never go into `config.toml`: they are saved in `keys.toml` beside
-it with mode 0600, and a saved key comes before the variable named by
-`api_key_env`.
+page, set up the ASR provider (service, server, API key, model) and the
+polishing provider (on or off, service, URL, API key, model). A service is
+either a server you name, or a vendor's own API, which needs only a key. The
+model list shows what the service offers and also takes a typed name; the
+whisper.cpp server lists none. Saving writes `config.toml` and applies the
+change to a running daemon from its next take. API keys never go into
+`config.toml`: they are saved in `keys.toml` beside it with mode 0600, and a
+saved key comes before the variable named by `api_key_env`, which defaults to
+the vendor's own, such as `OPENAI_API_KEY`.
 
 ## Setup
 
@@ -167,27 +170,47 @@ released the key.
 
 ## Recognition
 
-Each take is buffered in memory and sent in one OpenAI-compatible HTTP
-transcription request when recording stops. There are no incremental transcript
+Each take is buffered in memory and sent in one transcription request when
+recording stops. The `service` in `[provider]` picks where it goes:
+`openai-compatible` and the vendors are reached through
+[rig](https://github.com/0xPlaygrounds/rig), and `whisper-cpp` uploads the take
+to exactly the configured `url`. A config without `service` keeps working: a
+URL ending in `/audio/transcriptions` is an OpenAI-compatible server, and any
+other URL gets the whisper.cpp upload. There are no incremental transcript
 or text input events during recording. A successful request produces one final
 transcript for the whole take.
 
-## Conservative DeepSeek polishing
+## Conservative polishing
 
-Polishing is disabled by default. Enable it on the GUI's Polish page, or in the
-config with the API key in the daemon's environment, never in the config file:
+Polishing is disabled by default, and no model is chosen for it. Enable it on
+the GUI's Polish page with the chat model of your choice, or in the config with
+the API key in the daemon's environment, never in the config file. A local
+OpenAI-compatible server needs no key:
 
 ```toml
 [polish]
 enabled = true
-url = "https://api.deepseek.com/chat/completions"
-model = "deepseek-flash"
-api_key_env = "DEEPSEEK_API_KEY"
+service = "openai-compatible"
+url = "http://127.0.0.1:8080/v1/chat/completions"
+model = "qwen3-8b"
 timeout_ms = 5000
 ```
 
-Remote endpoints must use HTTPS. HTTP is allowed only for a loopback gateway,
-for example `http://127.0.0.1:3425/v1/chat/completions`.
+A vendor's own API takes no `url`, and reads its key from its own variable
+unless `api_key_env` names another:
+
+```toml
+[polish]
+enabled = true
+service = "anthropic"   # or openai, gemini, deepseek, mistral, groq, openrouter, xai
+model = "your-model"
+```
+
+A server's URL must end in `/chat/completions`. Remote servers must use HTTPS;
+HTTP is allowed only on a loopback address, for example
+`http://127.0.0.1:3425/v1/chat/completions`. The request asks for temperature 0
+and no reasoning, which each API receives in its own form, or not at all where a
+model cannot take it.
 
 Only the non-empty final transcript of each take is considered for correction.
 Audio, conversation history, and other takes are not sent to the polishing
@@ -195,7 +218,7 @@ service. The prompt only permits conservative ASR correction; translation,
 expansion, summaries, answers, and instructions contained in the transcript are
 not allowed.
 
-A missing key produces one warning and no HTTP request. Missing keys, timeouts,
+A vendor without a key produces one warning and no HTTP request. Missing keys, timeouts,
 HTTP or JSON errors, empty content, control characters, and non-`stop` finish
 reasons all select the original transcript. A correction that the selected
 input method cannot commit (for example, Unicode punctuation through `dotool`) also

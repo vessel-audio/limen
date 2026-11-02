@@ -11,7 +11,7 @@ use super::input::{InputJob, InputReport};
 use super::projection::Projection;
 use super::snapshot::{ConfigSummary, StateSnapshot};
 use super::{DictationActor, Mailboxes, ReplyTarget, effective_hold};
-use crate::config::{ApiKey, PolishConfig, ProviderConfig, ShortcutConfig};
+use crate::config::{ApiKey, PolishConfig, ProviderConfig, Service, ShortcutConfig};
 use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
@@ -499,6 +499,7 @@ fn provider_reload_applies_only_a_valid_config() {
     assert_eq!(
         harness.session.try_recv(),
         Ok(SessionCommand::Provider(ProviderConfig {
+            service: None,
             url: "https://asr.example/v1?api-version=1".to_string(),
             model: "big".to_string(),
             language: "auto".to_string(),
@@ -528,7 +529,7 @@ fn polish_reload_hands_the_section_to_the_input_worker() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"\"\n",
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nservice = \"deepseek\"\nmodel = \"\"\n",
     )
     .unwrap();
     assert!(matches!(
@@ -540,7 +541,7 @@ fn polish_reload_hands_the_section_to_the_input_worker() {
 
     std::fs::write(
         &config_file,
-        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nmodel = \"deepseek-chat\"\n",
+        "[provider]\nurl = \"http://asr\"\nmodel = \"m\"\n\n[polish]\nenabled = true\nservice = \"deepseek\"\nmodel = \"deepseek-chat\"\n",
     )
     .unwrap();
     std::fs::write(dir.join("keys.toml"), "polish = \"sk-saved\"\n").unwrap();
@@ -550,6 +551,7 @@ fn polish_reload_hands_the_section_to_the_input_worker() {
         *harness.actor.polish.borrow(),
         PolishConfig {
             enabled: true,
+            service: Some(Service::DeepSeek),
             model: "deepseek-chat".to_string(),
             saved_key: Some(ApiKey::new("sk-saved".to_string())),
             ..PolishConfig::default()

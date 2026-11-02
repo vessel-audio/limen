@@ -4,15 +4,10 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 use limen_core::Polishing;
 
-use super::EndpointSelect;
-
-/// Where the provider's requests go.
+/// Where the provider's requests go when its service is a server.
 pub enum Address {
-    /// The ASR server's origin and one of the known routes.
-    Server {
-        server: Entity<InputState>,
-        route: Entity<EndpointSelect>,
-    },
+    /// The ASR server's origin; its service picks the route.
+    Server { server: Entity<InputState> },
     /// The polisher's chat-completions URL, and whether it is used at all.
     Url {
         polishing: Polishing,
@@ -23,8 +18,8 @@ pub enum Address {
 /// A field whose edit must survive the initial settings load.
 #[derive(Debug, Clone, Copy)]
 pub enum EditedField {
+    Service,
     Address,
-    Route,
     Key,
     Model,
     Polishing,
