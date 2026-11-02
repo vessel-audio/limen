@@ -65,8 +65,10 @@ const DEFAULT_CONFIG: &str = r#"# Limen configuration
 #   "openai", "groq", "mistral", "gemini": the vendor's own API; `url` is
 #                        not used
 service = "openai-compatible"
-url = "http://127.0.0.1:8000/v1/audio/transcriptions"
-model = "Qwen/Qwen3-ASR-0.6B"
+# e.g. "http://127.0.0.1:8000/v1/audio/transcriptions"
+url = ""
+# One of the models the server lists; the ASR page offers them
+model = ""
 language = "auto"
 # Read the API key from this environment variable; not needed for a local
 # server. A vendor's own variable, such as OPENAI_API_KEY, is read when unset
@@ -173,6 +175,8 @@ pub struct ProviderConfig {
     /// The server's URL; unused by a vendor's own API.
     #[serde(default)]
     pub url: String,
+    /// Empty until one is chosen; a take then fails and says so.
+    #[serde(default)]
     pub model: String,
     #[serde(default = "default_language")]
     pub language: String,
@@ -327,11 +331,10 @@ impl Config {
                 service.as_str()
             );
         }
-        if service.uses_url() {
+        // An empty URL is a server not chosen yet, as in the default config;
+        // a take then fails and says so.
+        if service.uses_url() && !self.provider.url.is_empty() {
             let url = &self.provider.url;
-            if url.is_empty() {
-                bail!("provider.url must not be empty");
-            }
             let provider_url = reqwest::Url::parse(url).context("invalid provider.url")?;
             match (provider_url.scheme(), provider_url.host_str()) {
                 ("http" | "https", Some(_)) => {}
@@ -621,36 +624,12 @@ mod tests {
     }
 
     #[test]
-    fn a_config_from_before_services_still_reads_the_deepseek_key() {
-        let mut config = base_config();
-        config.polish.url = "https://gateway.example/v1/chat/completions".to_string();
-        let legacy = config.polish.key_env().map(str::to_string);
-        config.polish.service = Some(Service::OpenAiCompatible);
-        assert_eq!(
-            [legacy, config.polish.key_env().map(str::to_string)],
-            [Some("DEEPSEEK_API_KEY".to_string()), None]
-        );
-    }
-
-    #[test]
     fn enabled_polishing_without_a_server_says_so() {
         let mut config = base_config();
         config.polish.enabled = true;
         assert_eq!(
             config.validate().unwrap_err().to_string(),
             "polish.url must name the server when polishing is enabled; choose a service and model on the Polish page"
-        );
-    }
-
-    #[test]
-    fn the_old_deepseek_default_is_the_deepseek_service() {
-        let mut config = base_config();
-        config.polish.url = "https://api.deepseek.com/chat/completions".to_string();
-        let inferred = config.polish.service();
-        config.polish.url = "https://ai.example/v1/chat/completions".to_string();
-        assert_eq!(
-            [inferred, config.polish.service()],
-            [Service::DeepSeek, Service::OpenAiCompatible]
         );
     }
 

@@ -48,11 +48,13 @@ pub enum BridgeCommand {
         provider: Provider,
         key: KeyChange,
     },
-    /// Ask the configured server which models it offers for `role`;
-    /// `endpoint` names the endpoint the GUI asks about in its reply.
+    /// Ask the server a page's unsaved fields name which models it
+    /// offers; `endpoint` names what the GUI asks about in its reply.
     ListModels {
         role: ModelRole,
         endpoint: String,
+        provider: Provider,
+        key: KeyChange,
     },
 }
 
@@ -548,11 +550,16 @@ async fn handle_command(
                     .await;
             });
         }
-        BridgeCommand::ListModels { role, endpoint } => {
+        BridgeCommand::ListModels {
+            role,
+            endpoint,
+            provider,
+            key,
+        } => {
             let (paths, events) = (paths.clone(), events.clone());
             let backend = env.models.clone();
             tokio::spawn(async move {
-                let models = list_models(&paths, role, &*backend)
+                let models = list_models(&paths, &provider, &key, &*backend)
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let _ = events
