@@ -328,7 +328,24 @@ impl Config {
             );
         }
         if service.uses_url() {
-            self.provider.check_url(service)?;
+            let url = &self.provider.url;
+            if url.is_empty() {
+                bail!("provider.url must not be empty");
+            }
+            let provider_url = reqwest::Url::parse(url).context("invalid provider.url")?;
+            match (provider_url.scheme(), provider_url.host_str()) {
+                ("http" | "https", Some(_)) => {}
+                _ => bail!("provider.url must be an http(s):// URL with a host"),
+            }
+            check_url_parameters(&provider_url, "provider.url")?;
+            let route = crate::connection::TRANSCRIPTIONS;
+            if service == Service::OpenAiCompatible
+                && crate::connection::base_url(url, route).is_none()
+            {
+                bail!(
+                    "provider.url must end in {route}, without a query, for an OpenAI-compatible server; use service = \"whisper-cpp\" to upload to exactly this URL"
+                );
+            }
         }
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
@@ -342,8 +359,12 @@ impl Config {
                     service.as_str()
                 );
             }
-            if service.uses_url() {
-                check_polish_url(&self.polish.url)?;
+            match (service.uses_url(), self.polish.url.trim().is_empty()) {
+                (true, true) => bail!(
+                    "polish.url must name the server when polishing is enabled; choose a service and model on the Polish page"
+                ),
+                (true, false) => check_polish_url(&self.polish.url)?,
+                (false, _) => {}
             }
             if self.polish.model.trim().is_empty() {
                 bail!("polish.model must not be empty when polishing is enabled");
@@ -405,27 +426,6 @@ impl ProviderConfig {
             .as_deref()
             .or_else(|| self.service().key_env())
     }
-
-    fn check_url(&self, service: Service) -> Result<()> {
-        if self.url.is_empty() {
-            bail!("provider.url must not be empty");
-        }
-        let provider_url = reqwest::Url::parse(&self.url).context("invalid provider.url")?;
-        match (provider_url.scheme(), provider_url.host_str()) {
-            ("http" | "https", Some(_)) => {}
-            _ => bail!("provider.url must be an http(s):// URL with a host"),
-        }
-        check_url_parameters(&provider_url, "provider.url")?;
-        let route = crate::connection::TRANSCRIPTIONS;
-        if service == Service::OpenAiCompatible
-            && crate::connection::base_url(&self.url, route).is_none()
-        {
-            bail!(
-                "provider.url must end in {route}, without a query, for an OpenAI-compatible server; use service = \"whisper-cpp\" to upload to exactly this URL"
-            );
-        }
-        Ok(())
-    }
 }
 
 impl PolishConfig {
@@ -444,11 +444,14 @@ impl PolishConfig {
     }
 
     /// The variable the key is read from: `api_key_env`, else the
-    /// service's own.
+    /// service's own. A config from before services read
+    /// `DEEPSEEK_API_KEY`, the old default, whatever its server.
     pub fn key_env(&self) -> Option<&str> {
+        let legacy = self.service.is_none().then_some("DEEPSEEK_API_KEY");
         self.api_key_env
             .as_deref()
             .or_else(|| self.service().key_env())
+            .or(legacy)
     }
 
     /// The polishing key: the one saved from the GUI, else the one in
@@ -615,6 +618,28 @@ mod tests {
         config.polish.url =
             "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn a_config_from_before_services_still_reads_the_deepseek_key() {
+        let mut config = base_config();
+        config.polish.url = "https://gateway.example/v1/chat/completions".to_string();
+        let legacy = config.polish.key_env().map(str::to_string);
+        config.polish.service = Some(Service::OpenAiCompatible);
+        assert_eq!(
+            [legacy, config.polish.key_env().map(str::to_string)],
+            [Some("DEEPSEEK_API_KEY".to_string()), None]
+        );
+    }
+
+    #[test]
+    fn enabled_polishing_without_a_server_says_so() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "polish.url must name the server when polishing is enabled; choose a service and model on the Polish page"
+        );
     }
 
     #[test]

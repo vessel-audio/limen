@@ -47,16 +47,53 @@ pub enum KeyState {
     Missing,
 }
 
+/// Where a provider's key may come from, whichever service the page
+/// chooses: the key saved for its role, `api_key_env`, or the service's own
+/// variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeySource {
+    saved: bool,
+    /// `api_key_env` as the config names it.
+    variable: Option<String>,
+    /// The saved service and the variable the config reads for it, which
+    /// for a config from before services may be neither of the above.
+    loaded: (Service, Option<String>),
+}
+
+impl KeySource {
+    /// Whether a key is saved for the role.
+    pub fn is_saved(&self) -> bool {
+        self.saved
+    }
+
+    /// Where the key comes from once `service` is chosen.
+    pub fn state(&self, service: Service) -> KeyState {
+        let variable = match &self.loaded {
+            (loaded, variable) if *loaded == service => variable.clone(),
+            _ => self
+                .variable
+                .clone()
+                .or_else(|| service.key_env().map(str::to_string)),
+        };
+        let set = |variable: &String| std::env::var(variable).is_ok_and(|key| !key.is_empty());
+        match (self.saved, variable.filter(set)) {
+            (true, _) => KeyState::Saved,
+            (false, Some(variable)) => KeyState::Environment(variable),
+            (false, None) => KeyState::Missing,
+        }
+    }
+}
+
 /// The settings of the provider for `role` as saved, read without
 /// validating the config so that a broken one can be shown and repaired. A
 /// missing config reads as the annotated default.
-pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeyState)> {
+pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySource)> {
     // Read the config and its keys as one snapshot relative to GUI saves.
     let _lock = config::lock_dir(&paths.config_file)?;
     config::recover_provider_save(&paths.config_file)?;
     let config = Config::read_unchecked(&paths.config_file)?;
     let keys = config::saved_keys(&paths.config_file)?;
-    let (provider, saved, variable) = match role {
+    let (provider, saved, variable, resolved) = match role {
         ModelRole::Asr => (
             Provider::Asr {
                 service: config.provider.service(),
@@ -64,7 +101,11 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySta
                 model: config.provider.model.clone(),
             },
             keys.asr,
-            config.provider.key_env().map(str::to_string),
+            config.provider.api_key_env.clone(),
+            (
+                config.provider.service(),
+                config.provider.key_env().map(str::to_string),
+            ),
         ),
         ModelRole::Polish => (
             Provider::Polish {
@@ -77,16 +118,21 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySta
                 model: config.polish.model.clone(),
             },
             keys.polish,
-            config.polish.key_env().map(str::to_string),
+            config.polish.api_key_env.clone(),
+            (
+                config.polish.service(),
+                config.polish.key_env().map(str::to_string),
+            ),
         ),
     };
-    let set = |variable: &String| std::env::var(variable).is_ok_and(|key| !key.is_empty());
-    let key = match (saved, variable.filter(set)) {
-        (Some(_), _) => KeyState::Saved,
-        (None, Some(variable)) => KeyState::Environment(variable),
-        (None, None) => KeyState::Missing,
-    };
-    Ok((provider, key))
+    Ok((
+        provider,
+        KeySource {
+            saved: saved.is_some(),
+            variable,
+            loaded: resolved,
+        },
+    ))
 }
 
 /// Save `provider` and the `key` change, then have a running daemon apply
@@ -112,6 +158,12 @@ pub async fn save_provider(
             polishing: Polishing::On,
             ..
         } => {}
+        // A vendor's own API neither uses nor writes the URL.
+        Provider::Polish {
+            polishing: Polishing::Off,
+            service,
+            ..
+        } if !service.uses_url() => {}
         Provider::Polish {
             polishing: Polishing::Off,
             url,
@@ -192,7 +244,7 @@ pub async fn save_provider(
 mod tests {
     use std::fs;
 
-    use super::{KeyState, Polishing, Provider, load_provider, save_provider};
+    use super::{KeySource, KeyState, Polishing, Provider, load_provider, save_provider};
     use crate::config::{ApiKey, Config, KeyChange, Paths, Service};
     use crate::models::ModelRole;
     use crate::reload::ConfigChange;
@@ -232,10 +284,11 @@ mod tests {
         .await
         .unwrap();
 
+        let (provider, key) = load_provider(&paths, ModelRole::Polish).unwrap();
         assert_eq!(
             (
                 change,
-                load_provider(&paths, ModelRole::Polish).unwrap(),
+                (provider, key.state(Service::OpenAiCompatible)),
                 Config::load(&paths.config_file).unwrap().polish.api_key(),
             ),
             (
@@ -271,7 +324,10 @@ mod tests {
         assert_eq!(
             (
                 fs::read_to_string(&paths.config_file).unwrap(),
-                load_provider(&paths, ModelRole::Asr).unwrap().1
+                load_provider(&paths, ModelRole::Asr)
+                    .unwrap()
+                    .1
+                    .state(Service::WhisperCpp)
             ),
             (CONFIG.to_string(), KeyState::Missing)
         );
@@ -291,9 +347,65 @@ mod tests {
             .await
             .unwrap();
 
+        let (loaded, key) = load_provider(&paths, ModelRole::Polish).unwrap();
         assert_eq!(
-            (change, load_provider(&paths, ModelRole::Polish).unwrap()),
-            (ConfigChange::Saved, (provider, KeyState::Missing))
+            (change, loaded, key.state(Service::OpenAiCompatible)),
+            (ConfigChange::Saved, provider, KeyState::Missing)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_vendor_is_turned_off_whatever_url_it_left_behind() {
+        let paths = scratch("provider-vendor-off");
+        fs::write(
+            &paths.config_file,
+            format!("{CONFIG}\n[polish]\nservice = \"anthropic\"\nurl = \"https://ignored.example/chat/completions?token=unused\"\nmodel = \"m\"\n"),
+        )
+        .unwrap();
+        let provider = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::Anthropic,
+            url: "https://ignored.example/chat/completions?token=unused".to_string(),
+            model: "m".to_string(),
+        };
+
+        assert_eq!(
+            save_provider(&paths, provider, KeyChange::Keep)
+                .await
+                .unwrap(),
+            ConfigChange::Saved
+        );
+    }
+
+    #[test]
+    fn the_key_state_follows_the_chosen_service() {
+        let key = KeySource {
+            saved: false,
+            variable: None,
+            loaded: (Service::OpenAi, Some("PATH".to_string())),
+        };
+        let named = KeySource {
+            variable: Some("HOME".to_string()),
+            ..key.clone()
+        };
+        let saved = KeySource {
+            saved: true,
+            ..key.clone()
+        };
+
+        assert_eq!(
+            [
+                key.state(Service::OpenAi),
+                key.state(Service::OpenAiCompatible),
+                named.state(Service::Anthropic),
+                saved.state(Service::OpenAiCompatible),
+            ],
+            [
+                KeyState::Environment("PATH".to_string()),
+                KeyState::Missing,
+                KeyState::Environment("HOME".to_string()),
+                KeyState::Saved,
+            ]
         );
     }
 

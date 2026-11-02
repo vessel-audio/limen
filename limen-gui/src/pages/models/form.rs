@@ -8,7 +8,7 @@ use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 use limen_core::{
-    ConfigChange, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint, Service,
+    ConfigChange, KeySource, KeyState, ModelRole, Polishing, Provider, ProviderEndpoint, Service,
     split_provider_url,
 };
 
@@ -60,9 +60,9 @@ pub struct ProviderForm {
     /// open, when changing the items would clear what the user types.
     closed_focus: FocusHandle,
     /// The settings as last loaded, and where their key comes from.
-    pub loaded: Option<(Provider, KeyState)>,
+    pub loaded: Option<(Provider, KeySource)>,
     /// Settings that arrived and fill the fields on the next frame.
-    arrived: Option<(Provider, KeyState)>,
+    arrived: Option<(Provider, KeySource)>,
     /// Whether saved settings have filled the fields once, and which fields
     /// the user edited before that first fill.
     filled: bool,
@@ -165,14 +165,24 @@ impl ModelForms {
             subscriptions.push(cx.subscribe_in(
                 &service,
                 window,
-                move |this, _, event: &SelectEvent<SearchableVec<ServiceChoice>>, _, _| match event
-                {
-                    SelectEvent::Confirm(Some(service)) => {
-                        let form = this.models.form(role);
-                        form.chosen_service = *service;
-                        form.edited(EditedField::Service);
+                move |this, _, event: &SelectEvent<SearchableVec<ServiceChoice>>, window, cx| {
+                    match event {
+                        SelectEvent::Confirm(Some(service)) => {
+                            let form = this.models.form(role);
+                            form.chosen_service = *service;
+                            form.edited(EditedField::Service);
+                            // Another service may read its key from another variable.
+                            if let Some((_, key)) = &form.loaded
+                                && !form.clear_key
+                            {
+                                let placeholder = key_placeholder(key, *service);
+                                form.key.update(cx, |input, cx| {
+                                    input.set_placeholder(placeholder, window, cx)
+                                });
+                            }
+                        }
+                        SelectEvent::Confirm(None) => {}
                     }
-                    SelectEvent::Confirm(None) => {}
                 },
             ));
             subscriptions.push(cx.subscribe_in(
@@ -244,7 +254,7 @@ impl ModelForms {
         &mut self,
         role: ModelRole,
         id: u64,
-        result: Result<(Provider, KeyState), String>,
+        result: Result<(Provider, KeySource), String>,
     ) {
         let form = self.form(role);
         if form.loading == Some(id) {
@@ -429,7 +439,7 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
 fn fill(
     form: &mut ProviderForm,
     provider: &Provider,
-    key: &KeyState,
+    key: &KeySource,
     window: &mut Window,
     cx: &mut Context<AppView>,
 ) {
@@ -452,11 +462,11 @@ fn fill(
             if !(preserve && dirty.address) {
                 server.update(cx, |input, cx| input.set_value(origin, window, cx));
             }
-            if !(preserve && dirty.service) {
-                let route = ProviderEndpoint::of(service).map(ProviderEndpoint::path);
-                form.unlisted_route =
-                    (route != Some(path.as_str()) && !path.is_empty()).then(|| path.clone());
-            }
+            // The saved route is the baseline whatever the user chose since;
+            // saving keeps it only while the saved service stays.
+            let route = ProviderEndpoint::of(service).map(ProviderEndpoint::path);
+            form.unlisted_route =
+                (route != Some(path.as_str()) && !path.is_empty()).then(|| path.clone());
             model
         }
         (
@@ -484,11 +494,7 @@ fn fill(
             unreachable!("each page loads its own provider")
         }
     };
-    let placeholder = match key {
-        KeyState::Saved => rust_i18n::t!("models.key_saved").to_string(),
-        KeyState::Environment(variable) => format!("${variable}"),
-        KeyState::Missing => rust_i18n::t!("models.key_missing").to_string(),
-    };
+    let placeholder = key_placeholder(key, form.chosen_service);
     form.key.update(cx, |input, cx| {
         if !(preserve && dirty.key) {
             input.set_value("", window, cx);
@@ -505,6 +511,15 @@ fn fill(
         form.clear_key = false;
         form.touched = false;
         form.dirty = DirtyFields::default();
+    }
+}
+
+/// What the key field shows while empty, once `service` is chosen.
+fn key_placeholder(key: &KeySource, service: Service) -> String {
+    match key.state(service) {
+        KeyState::Saved => rust_i18n::t!("models.key_saved").to_string(),
+        KeyState::Environment(variable) => format!("${variable}"),
+        KeyState::Missing => rust_i18n::t!("models.key_missing").to_string(),
     }
 }
 

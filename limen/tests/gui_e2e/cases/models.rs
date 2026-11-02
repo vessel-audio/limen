@@ -371,3 +371,38 @@ pub fn a_vendor_hides_the_server_url() -> Result<()> {
     session.node("polish-url")?;
     Ok(())
 }
+
+/// A service chosen before the first settings load keeps the hand-edited
+/// route its saved service uses.
+pub fn an_early_service_choice_keeps_a_custom_route() -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let session = Session::launch(Launch {
+        config: Some("[provider]\nurl = \"http://old.example/custom-transcribe\"\nmodel = \"m\"\n"),
+        ..Launch::default()
+    })?;
+    let directory = session.paths().config_file.parent().unwrap().to_path_buf();
+    let lock = std::fs::File::open(&directory)?;
+    // Hold the directory lock so the first load waits for the choice below.
+    // SAFETY: flock only operates on this test's own directory descriptor.
+    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0);
+    session.click("asr-page")?;
+    choose_service(&session, 1)?;
+    // SAFETY: unlocks the descriptor locked above.
+    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) } == 0);
+    drop(lock);
+    session.until("the completed form to accept a save", || {
+        session.click("asr-save")?;
+        Ok(reloads(&session, &v1::Request::ProviderReload)? == 1)
+    })?;
+    let provider = Config::load(&session.paths().config_file)?.provider;
+    // The inferred service is the one chosen, so the writer leaves it out.
+    ensure!(
+        (provider.service(), provider.url.as_str())
+            == (Service::WhisperCpp, "http://old.example/custom-transcribe"),
+        "saved {:?} at {:?}",
+        provider.service(),
+        provider.url
+    );
+    Ok(())
+}

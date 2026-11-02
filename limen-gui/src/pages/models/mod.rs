@@ -6,7 +6,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::{ActiveTheme, Disableable, StyledExt};
 use gpui_kit::*;
-use limen_core::{KeyState, ModelRole, Polishing};
+use limen_core::{ModelRole, Polishing};
 
 use crate::a11y;
 use crate::app::AppView;
@@ -111,7 +111,7 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
         .flatten()
         .collect::<Vec<_>>(),
     };
-    let saved_key = matches!(form.loaded, Some((_, KeyState::Saved))) && !form.clear_key;
+    let saved_key = form.loaded.as_ref().is_some_and(|(_, key)| key.is_saved()) && !form.clear_key;
     let key = div()
         .h_flex()
         .gap_2()

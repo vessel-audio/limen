@@ -36,7 +36,7 @@ pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};
 pub use models::{
-    KeyState, ModelRole, Polishing, Provider, list_models, load_provider, save_provider,
+    KeySource, KeyState, ModelRole, Polishing, Provider, list_models, load_provider, save_provider,
 };
 pub use provider::{
     Endpoint as ProviderEndpoint, probe, server_url as provider_server_url,

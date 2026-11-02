@@ -10,7 +10,7 @@ use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeyChange,
-    KeyState, Keys, Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError,
+    KeySource, Keys, Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError,
     Shortcut, clear, daemon_peer_pid, edit, list_models, load_provider, save_provider, set, setup,
     spawn_daemon, subscribe, terminate_daemon, v1,
 };
@@ -83,7 +83,7 @@ pub enum BridgeEvent {
     ProviderLoaded {
         role: ModelRole,
         id: u64,
-        result: Result<(Provider, KeyState), String>,
+        result: Result<(Provider, KeySource), String>,
     },
     /// How saving a provider ended.
     ProviderSaved {

@@ -15,7 +15,7 @@ use crate::connection::{self, AsrRoute};
 
 mod settings;
 
-pub use settings::{KeyState, Polishing, Provider, load_provider, save_provider};
+pub use settings::{KeySource, KeyState, Polishing, Provider, load_provider, save_provider};
 
 /// How long a server may take to list its models.
 const LIST_TIMEOUT: Duration = Duration::from_secs(5);
