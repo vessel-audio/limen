@@ -1,31 +1,30 @@
-//! Buffered provider: accumulate one take, POST it as a wav to `<url>` (an
-//! OpenAI-compatible `/v1/audio/transcriptions`), and emit one final result.
+//! Buffered provider: accumulate one take, hand it as a WAV to a
+//! [`Transcriber`] once recording ends, and emit one final result.
 
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::config::ProviderConfig;
+use crate::backend::{BoxFuture, Take, Transcriber};
 use crate::provider::{
-    AsrProvider, AsrSession, AudioSink, BoxFuture, EventSource, SessionConfig, TranscriptEvent,
+    AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent,
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Provider {
-    cfg: ProviderConfig,
-    client: reqwest::Client,
+    transcriber: Arc<dyn Transcriber>,
     request_timeout: Duration,
 }
 
 impl Provider {
-    pub fn new(cfg: ProviderConfig) -> Self {
+    pub fn new(transcriber: Arc<dyn Transcriber>) -> Self {
         Self {
-            cfg,
-            client: reqwest::Client::new(),
+            transcriber,
             request_timeout: REQUEST_TIMEOUT,
         }
     }
@@ -41,8 +40,7 @@ impl AsrProvider for Provider {
             let (finish, finish_rx) = oneshot::channel();
             let worker = tokio::spawn(transcription_worker(
                 finish_rx,
-                self.client.clone(),
-                self.cfg.url.clone(),
+                self.transcriber.clone(),
                 self.request_timeout,
                 events,
             ));
@@ -76,10 +74,11 @@ impl AsrSession for Session {
 struct Sink {
     cfg: SessionConfig,
     pcm: Vec<i16>,
-    finish: Option<oneshot::Sender<Take>>,
+    finish: Option<oneshot::Sender<Recording>>,
 }
 
-struct Take {
+/// What the sink hands the worker when recording ends.
+struct Recording {
     cfg: SessionConfig,
     pcm: Vec<i16>,
 }
@@ -98,12 +97,12 @@ impl AudioSink for Sink {
     fn finalize(&mut self) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
             let finish = self.finish.take().context("session already finalized")?;
-            let take = Take {
+            let recording = Recording {
                 cfg: self.cfg.clone(),
                 pcm: std::mem::take(&mut self.pcm),
             };
             finish
-                .send(take)
+                .send(recording)
                 .map_err(|_| anyhow!("transcription worker stopped"))
         })
     }
@@ -132,16 +131,15 @@ impl Drop for Source {
 }
 
 async fn transcription_worker(
-    finish: oneshot::Receiver<Take>,
-    http: reqwest::Client,
-    url: String,
+    finish: oneshot::Receiver<Recording>,
+    transcriber: Arc<dyn Transcriber>,
     request_timeout: Duration,
     events: mpsc::Sender<TranscriptEvent>,
 ) {
-    let Ok(take) = finish.await else {
+    let Ok(recording) = finish.await else {
         return;
     };
-    let outcome = match transcribe(take, http, url, request_timeout).await {
+    let outcome = match transcribe(recording, &*transcriber, request_timeout).await {
         Ok(text) => TranscriptEvent::Stable(text),
         Err(error) => TranscriptEvent::Failed(error),
     };
@@ -155,43 +153,20 @@ async fn transcription_worker(
 }
 
 async fn transcribe(
-    take: Take,
-    http: reqwest::Client,
-    url: String,
+    recording: Recording,
+    transcriber: &dyn Transcriber,
     request_timeout: Duration,
 ) -> Result<String> {
-    let wav = encode_wav(&take.pcm, take.cfg.sample_rate)?;
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", take.cfg.model)
-        .part(
-            "file",
-            reqwest::multipart::Part::bytes(wav)
-                .file_name("audio.wav")
-                .mime_str("audio/wav")?,
-        );
-    if take.cfg.language != "auto" {
-        form = form.text("language", take.cfg.language);
-    }
-    let mut req = http.post(url).multipart(form).timeout(request_timeout);
-    if let Some(key) = take.cfg.api_key {
-        req = req.bearer_auth(key);
-    }
-    let response = req.send().await.context("transcription request")?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        bail!("HTTP {status}: {body}");
-    }
-    response
-        .json::<TranscriptionResponse>()
+    let take = Take {
+        wav: encode_wav(&recording.pcm, recording.cfg.sample_rate)?,
+        language: match recording.cfg.language.as_str() {
+            "auto" => None,
+            language => Some(language.to_string()),
+        },
+    };
+    tokio::time::timeout(request_timeout, transcriber.transcribe(take))
         .await
-        .context("parse response")
-        .map(|body| body.text)
-}
-
-#[derive(serde::Deserialize)]
-struct TranscriptionResponse {
-    text: String,
+        .map_err(|_| anyhow!("transcription timed out after {request_timeout:?}"))?
 }
 
 /// Wrap raw s16le samples in a minimal WAV container.
@@ -216,141 +191,89 @@ fn encode_wav(pcm: &[i16], sample_rate: u32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
     use std::task::Poll;
     use std::time::Duration;
 
-    use serde_json::json;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::oneshot;
-    use tokio::task::JoinHandle;
+    use anyhow::{Result, bail};
+    use tokio::sync::{Notify, oneshot};
 
     use super::{Provider, Source};
-    use crate::config::ProviderConfig;
+    use crate::backend::{BoxFuture, Take, Transcriber};
     use crate::provider::{AsrProvider, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-    struct MockServer {
-        url: String,
-        request: oneshot::Receiver<Vec<u8>>,
-        release: oneshot::Sender<()>,
-        task: JoinHandle<()>,
+    /// Records each take and answers it once `release` is notified.
+    struct Scripted {
+        answer: fn() -> Result<String>,
+        takes: Mutex<Vec<Take>>,
+        asked: Notify,
+        release: Notify,
     }
 
-    async fn mock_server(status: &'static str, body: String) -> MockServer {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (request_tx, request) = oneshot::channel();
-        let (release, release_rx) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0_u8; 4096];
-            loop {
-                let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 {
-                    return;
-                }
-                request.extend_from_slice(&chunk[..count]);
-                let complete = request
-                    .windows(4)
-                    .position(|part| part == b"\r\n\r\n")
-                    .is_some_and(|header_end| {
-                        let headers = String::from_utf8_lossy(&request[..header_end]);
-                        let content_length = headers
-                            .lines()
-                            .find_map(|line| {
-                                let (name, value) = line.split_once(':')?;
-                                if name.eq_ignore_ascii_case("content-length") {
-                                    value.trim().parse::<usize>().ok()
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or(0);
-                        request.len() >= header_end + 4 + content_length
-                    });
-                if complete {
-                    break;
-                }
-            }
-            let _ = request_tx.send(request);
-            if release_rx.await.is_err() {
-                return;
-            }
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = socket.write_all(response.as_bytes()).await;
-        });
-        MockServer {
-            url: format!("http://{address}/v1/audio/transcriptions"),
-            request,
-            release,
-            task,
+    impl Scripted {
+        fn new(answer: fn() -> Result<String>) -> Arc<Self> {
+            Arc::new(Self {
+                answer,
+                takes: Mutex::new(Vec::new()),
+                asked: Notify::new(),
+                release: Notify::new(),
+            })
         }
     }
 
-    fn provider(url: String) -> Provider {
-        Provider::new(ProviderConfig {
-            url,
-            model: "test-model".to_string(),
-            language: "auto".to_string(),
-            api_key_env: None,
-            saved_key: None,
-        })
+    impl Transcriber for Scripted {
+        fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>> {
+            Box::pin(async move {
+                self.takes.lock().unwrap().push(take);
+                self.asked.notify_one();
+                self.release.notified().await;
+                (self.answer)()
+            })
+        }
     }
 
-    async fn start_session(provider: &Provider) -> (Box<dyn AudioSink>, Box<dyn EventSource>) {
+    async fn start_session(
+        provider: &Provider,
+        language: &str,
+    ) -> (Box<dyn AudioSink>, Box<dyn EventSource>) {
         let config = SessionConfig {
-            model: "test-model".to_string(),
-            language: "auto".to_string(),
+            language: language.to_string(),
             sample_rate: 16_000,
-            api_key: None,
         };
         provider.start_session(&config).await.unwrap().split()
     }
 
     #[tokio::test]
-    async fn finalize_returns_before_http_and_emits_one_complete_transcript() {
-        let server = mock_server("200 OK", json!({"text": "完整文本"}).to_string()).await;
-        let provider = provider(server.url);
-        let (mut sink, mut events) = start_session(&provider).await;
+    async fn finalize_returns_before_transcribing_and_emits_one_complete_transcript() {
+        let transcriber = Scripted::new(|| Ok("完整文本".to_string()));
+        let provider = Provider::new(transcriber.clone());
+        let (mut sink, mut events) = start_session(&provider, "zh").await;
         sink.send_audio(&[1, 2]).await.unwrap();
         sink.send_audio(&[3, 4]).await.unwrap();
 
-        let mut request = server.request;
         assert!(
-            tokio::time::timeout(Duration::from_millis(30), &mut request)
+            tokio::time::timeout(Duration::from_millis(30), transcriber.asked.notified())
                 .await
                 .is_err(),
-            "recording sent an HTTP request before finalize"
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(30), events.next_event())
-                .await
-                .is_err(),
-            "recording produced a transcript before finalize"
+            "recording asked for a transcript before finalize"
         );
         tokio::time::timeout(Duration::from_millis(100), sink.finalize())
             .await
-            .expect("finalize waited for the HTTP response")
+            .expect("finalize waited for the transcript")
             .unwrap();
-        let request = tokio::time::timeout(TEST_TIMEOUT, request)
+        tokio::time::timeout(TEST_TIMEOUT, transcriber.asked.notified())
             .await
-            .unwrap()
             .unwrap();
         assert!(
             tokio::time::timeout(Duration::from_millis(30), events.next_event())
                 .await
                 .is_err(),
-            "transcript arrived before the server responded"
+            "transcript arrived before the transcriber answered"
         );
 
-        server.release.send(()).unwrap();
+        transcriber.release.notify_one();
         match tokio::time::timeout(TEST_TIMEOUT, events.next_event())
             .await
             .unwrap()
@@ -364,52 +287,39 @@ mod tests {
                 .unwrap(),
             Some(TranscriptEvent::Completed)
         ));
-        server.task.await.unwrap();
 
-        let wav_start = request
-            .windows(4)
-            .position(|part| part == b"RIFF")
-            .expect("multipart body has no WAV");
-        let mut wav = hound::WavReader::new(Cursor::new(&request[wav_start..])).unwrap();
+        let take = transcriber.takes.lock().unwrap().remove(0);
+        let mut wav = hound::WavReader::new(Cursor::new(&take.wav)).unwrap();
         let samples = wav.samples::<i16>().collect::<Result<Vec<_>, _>>().unwrap();
-        assert_eq!(samples, [1, 2, 3, 4]);
+        assert_eq!(
+            (samples, take.language),
+            (vec![1, 2, 3, 4], Some("zh".to_string()))
+        );
         assert!(sink.finalize().await.is_err());
         assert!(sink.send_audio(&[5]).await.is_err());
     }
 
     #[tokio::test]
-    async fn http_and_json_errors_emit_failure_without_a_transcript() {
-        for (status, body) in [
-            ("500 Internal Server Error", "not-json"),
-            ("200 OK", "not-json"),
-        ] {
-            let server = mock_server(status, body.to_string()).await;
-            let provider = provider(server.url);
-            let (mut sink, mut events) = start_session(&provider).await;
-            sink.send_audio(&[1]).await.unwrap();
-            sink.finalize().await.unwrap();
-            server.release.send(()).unwrap();
+    async fn automatic_language_leaves_detection_to_the_model() {
+        let transcriber = Scripted::new(|| Ok(String::new()));
+        let provider = Provider::new(transcriber.clone());
+        let (mut sink, _events) = start_session(&provider, "auto").await;
+        sink.finalize().await.unwrap();
+        tokio::time::timeout(TEST_TIMEOUT, transcriber.asked.notified())
+            .await
+            .unwrap();
 
-            assert!(matches!(
-                tokio::time::timeout(TEST_TIMEOUT, events.next_event())
-                    .await
-                    .unwrap(),
-                Some(TranscriptEvent::Failed(_))
-            ));
-            assert!(events.next_event().await.is_none());
-            server.task.await.unwrap();
-        }
+        assert_eq!(transcriber.takes.lock().unwrap()[0].language, None);
     }
 
     #[tokio::test]
-    async fn request_timeout_emits_failure_without_a_transcript() {
-        let server = mock_server("200 OK", json!({"text": "too late"}).to_string()).await;
-        let mut provider = provider(server.url);
-        provider.request_timeout = Duration::from_millis(50);
-        let (mut sink, mut events) = start_session(&provider).await;
+    async fn a_failed_transcription_emits_failure_without_a_transcript() {
+        let transcriber = Scripted::new(|| bail!("HTTP 500"));
+        let provider = Provider::new(transcriber.clone());
+        let (mut sink, mut events) = start_session(&provider, "auto").await;
         sink.send_audio(&[1]).await.unwrap();
         sink.finalize().await.unwrap();
-        server.request.await.unwrap();
+        transcriber.release.notify_one();
 
         assert!(matches!(
             tokio::time::timeout(TEST_TIMEOUT, events.next_event())
@@ -417,8 +327,25 @@ mod tests {
                 .unwrap(),
             Some(TranscriptEvent::Failed(_))
         ));
-        drop(server.release);
-        server.task.await.unwrap();
+        assert!(events.next_event().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_timeout_emits_failure_without_a_transcript() {
+        let transcriber = Scripted::new(|| Ok("too late".to_string()));
+        let mut provider = Provider::new(transcriber.clone());
+        provider.request_timeout = Duration::from_millis(50);
+        let (mut sink, mut events) = start_session(&provider, "auto").await;
+        sink.send_audio(&[1]).await.unwrap();
+        sink.finalize().await.unwrap();
+
+        assert!(matches!(
+            tokio::time::timeout(TEST_TIMEOUT, events.next_event())
+                .await
+                .unwrap(),
+            Some(TranscriptEvent::Failed(_))
+        ));
+        assert!(events.next_event().await.is_none());
     }
 
     #[tokio::test]

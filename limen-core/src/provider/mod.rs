@@ -1,29 +1,26 @@
 //! ASR session abstraction for buffered, whole-take transcription.
 
-use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 
+use crate::backend::BoxFuture;
 use crate::config::Config;
 
-pub mod openai_batch;
+mod buffered;
+mod multipart;
 mod setup;
 
 pub use setup::{Endpoint, server_url, server_url_with_route, split_url};
 
-/// Object-safe, cancellable future used by the provider trait objects.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// Static parameters of one ASR session.
+/// Static parameters of one ASR session; the model and key are bound when
+/// the provider is built.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    pub model: String,
     pub language: String,
     pub sample_rate: u32,
-    pub api_key: Option<String>,
 }
 
 /// Transcription events coming back from a provider.
@@ -67,19 +64,22 @@ pub trait EventSource: Send {
     fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
-/// Build the buffered transcription provider.
+/// Build the buffered transcription provider for the configured server.
 pub fn from_config(cfg: &Config) -> Box<dyn AsrProvider> {
-    Box::new(openai_batch::Provider::new(cfg.provider.clone()))
+    let server = multipart::Server::new(
+        cfg.provider.url.clone(),
+        cfg.provider.model.clone(),
+        cfg.api_key(),
+    );
+    Box::new(buffered::Provider::new(Arc::new(server)))
 }
 
 /// `limen probe <wav>`: transcribe a file and print the final event flow.
 pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
     let pcm = load_wav_16k_mono(wav)?;
     let session_cfg = SessionConfig {
-        model: cfg.provider.model.clone(),
         language: cfg.provider.language.clone(),
         sample_rate: 16_000,
-        api_key: cfg.api_key(),
     };
     let session = from_config(cfg).start_session(&session_cfg).await?;
     let (mut sink, mut events) = session.split();
