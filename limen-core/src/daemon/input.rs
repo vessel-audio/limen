@@ -1,10 +1,12 @@
 //! The text-input worker and its history-correlated jobs and reports.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 
+use crate::backend::ModelBackend;
 use crate::config::{Config, PolishConfig};
 use crate::dictation::InputOutcome;
 use crate::input_method::{InputMethod, default_backend, sanitize_control_characters};
@@ -96,10 +98,12 @@ async fn process(
 }
 
 /// Start the serial input worker, returning its job and report mailboxes.
-/// Each job is polished as `polish` reads when the job begins.
+/// Each job is polished as `polish` reads when the job begins, by a model
+/// `models` builds.
 pub(crate) fn spawn(
     config: &Config,
     mut polish: watch::Receiver<PolishConfig>,
+    models: Arc<dyn ModelBackend>,
 ) -> Result<(
     mpsc::UnboundedSender<InputJob>,
     mpsc::UnboundedReceiver<InputReport>,
@@ -108,13 +112,13 @@ pub(crate) fn spawn(
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputJob>();
     let (report_tx, reports) = mpsc::unbounded_channel::<InputReport>();
     let backend = default_backend(config.input_method.backend);
-    let mut polisher = Polisher::from_config(&polish.borrow_and_update())?;
+    let mut polisher = Polisher::from_config(&polish.borrow_and_update(), &*models)?;
     tracing::info!(?backend, "input method backend");
     let task = tokio::spawn(async move {
         let mut input_method = InputMethod::new(backend);
         while let Some(job) = input_rx.recv().await {
             if polish.has_changed().is_ok_and(|changed| changed) {
-                match Polisher::from_config(&polish.borrow_and_update()) {
+                match Polisher::from_config(&polish.borrow_and_update(), &*models) {
                     Ok(reloaded) => polisher = reloaded,
                     Err(error) => tracing::warn!(
                         error = %format!("{error:#}"),
@@ -133,14 +137,16 @@ pub(crate) fn spawn(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{InputJob, InputReport, TextInput, process};
+    use crate::backend::testing::Refusing;
+    use crate::backend::{BoxFuture, ChatModel, Exchange, Finish, Reply};
     use crate::config::Config;
     use crate::dictation::InputOutcome;
     use crate::input_method::{Backend, InputMethod};
     use crate::ipc::v1::Delivery;
     use crate::polish::Polisher;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
     fn config() -> Config {
@@ -192,7 +198,7 @@ mod tests {
     }
 
     async fn committed(jobs: impl IntoIterator<Item = InputJob>) -> Vec<String> {
-        let polisher = Polisher::from_config(&config().polish).unwrap();
+        let polisher = Polisher::from_config(&config().polish, &Refusing).unwrap();
         let mut input = RecordingInput::default();
         let (_jobs, input_rx) = mpsc::unbounded_channel();
         for job in jobs {
@@ -215,33 +221,26 @@ mod tests {
         assert_eq!(with_keep, ["one", " two"]);
     }
 
+    /// Corrects every transcript to "修正".
+    struct Correcting;
+
+    impl ChatModel for Correcting {
+        fn reply<'a>(&'a self, _: Exchange<'a>) -> BoxFuture<'a, anyhow::Result<Reply>> {
+            Box::pin(async {
+                Ok(Reply {
+                    text: "修正".to_string(),
+                    finish: Some(Finish::Stop),
+                })
+            })
+        }
+    }
+
     #[tokio::test]
     async fn keep_retains_polishing_without_backend_compatibility_or_commit() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = vec![0; 16 * 1024];
-            let _ = stream.read(&mut request).await.unwrap();
-            let body = serde_json::json!({
-                "choices": [{
-                    "finish_reason": "stop",
-                    "message": {"content": "修正"}
-                }]
-            })
-            .to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-            stream.shutdown().await.unwrap();
-        });
-        let mut polish = config().polish;
-        polish.enabled = true;
-        polish.url = format!("http://{address}/chat/completions");
-        polish.timeout_ms = 1000;
-        let polisher = Polisher::new(polish, "test-key".to_string()).unwrap();
+        let polisher = Polisher::Enabled {
+            model: Box::new(Correcting),
+            timeout: Duration::from_secs(1),
+        };
         // Dotool rejects any Unicode commit before spawning a process. A
         // compatibility fallback would return the original and fail the test.
         let mut input_method = InputMethod::new(Backend::Dotool);
@@ -259,7 +258,6 @@ mod tests {
             &polisher,
         )
         .await;
-        server.await.unwrap();
 
         assert_eq!(
             report,

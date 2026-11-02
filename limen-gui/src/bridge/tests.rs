@@ -1,6 +1,26 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use limen_core::{BoxFuture, ChatModel, Connection, ModelBackend, Transcriber};
+
 use super::{Backoff, is_outdated};
+
+/// A model backend for bridge tests, which never reach a model.
+struct NoModels;
+
+impl ModelBackend for NoModels {
+    fn transcriber(&self, _: Connection, _: String) -> anyhow::Result<Box<dyn Transcriber>> {
+        anyhow::bail!("bridge tests transcribe nothing")
+    }
+
+    fn chat(&self, _: Connection, _: String) -> anyhow::Result<Box<dyn ChatModel>> {
+        anyhow::bail!("bridge tests polish nothing")
+    }
+
+    fn models(&self, _: Connection) -> BoxFuture<'_, anyhow::Result<Vec<String>>> {
+        Box::pin(async { anyhow::bail!("bridge tests list no models") })
+    }
+}
 
 #[test]
 fn reconnect_backoff_doubles_to_a_cap_and_resets_after_hello() {
@@ -38,7 +58,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     use limen_core::Paths;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    use super::{BridgeCommand, SpawnGate, handle_command};
+    use super::{BridgeCommand, Env, SpawnGate, handle_command};
 
     let root = std::env::temp_dir().join(format!("limen-bridge-shutdown-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
@@ -72,8 +92,12 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     let mut stopped = false;
     let mut shortcuts = tokio::task::JoinSet::new();
 
+    let env = Env {
+        paths: paths.clone(),
+        models: Arc::new(NoModels),
+    };
     handle_command(
-        &paths,
+        &env,
         &events,
         BridgeCommand::ShutdownDaemon,
         &mut stream,
@@ -159,7 +183,7 @@ fn quit_stops_the_bridge_while_another_sender_is_alive() {
             .unwrap();
         std::thread::sleep(Duration::from_millis(50));
     });
-    let (commands, mut events, bridge) = super::start(paths);
+    let (commands, mut events, bridge) = super::start(paths, Arc::new(NoModels));
     let retained = commands.clone();
     assert!(matches!(
         events.blocking_recv(),
@@ -250,7 +274,7 @@ fn hello_protocol_mismatch_offers_termination_without_keeping_the_stream() {
             .unwrap();
         std::thread::sleep(Duration::from_millis(50));
     });
-    let (commands, mut events, bridge) = super::start(paths);
+    let (commands, mut events, bridge) = super::start(paths, Arc::new(NoModels));
     let first = events.blocking_recv();
     commands.blocking_send(super::BridgeCommand::Quit).unwrap();
     let _ = bridge.join();

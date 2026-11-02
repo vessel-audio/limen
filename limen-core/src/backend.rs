@@ -69,6 +69,65 @@ pub struct Reply {
     pub finish: Option<Finish>,
 }
 
+/// The model APIs a [`ModelBackend`] reaches, in Limen's own vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Api {
+    /// Any server with the OpenAI-compatible routes under its base URL,
+    /// such as vLLM, sglang, llama.cpp, or Ollama.
+    Compatible,
+    OpenAi,
+    Anthropic,
+    Gemini,
+    DeepSeek,
+    Mistral,
+    Groq,
+    OpenRouter,
+    XAi,
+}
+
+/// Where a backend sends one role's requests, and with which key.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub api: Api,
+    /// The API root that routes such as `/chat/completions` hang off, for
+    /// example `http://127.0.0.1:8000/v1`. Required for
+    /// [`Api::Compatible`]; for a vendor, `None` is its public endpoint.
+    pub base_url: Option<String>,
+    /// `None` sends no credential, which a local server may not need.
+    pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Connection")
+            .field("api", &self.api)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "…"))
+            .finish()
+    }
+}
+
+/// Builds the model clients for a [`Connection`].
+///
+/// The program hands one backend to the daemon and the GUI when it starts;
+/// the core never builds one itself, so it does not depend on the framework
+/// an implementation wraps. Implementations only translate: timeouts,
+/// retries of the user's take, and validation of replies stay in the core.
+/// A connection to an API that cannot serve the request, such as
+/// transcription on a chat-only vendor, is an error.
+pub trait ModelBackend: Send + Sync {
+    /// The transcriber for `model` on `connection`.
+    fn transcriber(&self, connection: Connection, model: String) -> Result<Box<dyn Transcriber>>;
+
+    /// The chat model `model` on `connection`.
+    fn chat(&self, connection: Connection, model: String) -> Result<Box<dyn ChatModel>>;
+
+    /// The models `connection` offers, in its order. The caller bounds the
+    /// call with its own timeout.
+    fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>>;
+}
+
 /// A chat model that answers one exchange at a time.
 ///
 /// Polishing asks for one deterministic, short correction, so
@@ -79,4 +138,90 @@ pub struct Reply {
 pub trait ChatModel: Send + Sync {
     /// The model's reply to `exchange`, or why the request failed.
     fn reply<'a>(&'a self, exchange: Exchange<'a>) -> BoxFuture<'a, Result<Reply>>;
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::{Result, bail};
+
+    use super::{
+        BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Reply, Take, Transcriber,
+    };
+
+    /// A backend that refuses every request.
+    pub(crate) struct Refusing;
+
+    impl ModelBackend for Refusing {
+        fn transcriber(&self, _: Connection, _: String) -> Result<Box<dyn Transcriber>> {
+            bail!("no transcriber in this test")
+        }
+
+        fn chat(&self, _: Connection, _: String) -> Result<Box<dyn ChatModel>> {
+            bail!("no chat model in this test")
+        }
+
+        fn models(&self, _: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
+            Box::pin(async { bail!("no models in this test") })
+        }
+    }
+
+    /// One request a [`Recording`] backend was asked to build.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum Built {
+        Transcriber(Connection, String),
+        Chat(Connection, String),
+        Models(Connection),
+    }
+
+    /// A backend that records what it builds, lists `models`, and builds
+    /// models that fail every request.
+    #[derive(Default)]
+    pub(crate) struct Recording {
+        pub(crate) models: Vec<String>,
+        pub(crate) built: Arc<Mutex<Vec<Built>>>,
+    }
+
+    struct Failing;
+
+    impl Transcriber for Failing {
+        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<String>> {
+            Box::pin(async { bail!("this test transcribes nothing") })
+        }
+    }
+
+    impl ChatModel for Failing {
+        fn reply<'a>(&'a self, _: Exchange<'a>) -> BoxFuture<'a, Result<Reply>> {
+            Box::pin(async { bail!("this test answers nothing") })
+        }
+    }
+
+    impl ModelBackend for Recording {
+        fn transcriber(
+            &self,
+            connection: Connection,
+            model: String,
+        ) -> Result<Box<dyn Transcriber>> {
+            self.built
+                .lock()
+                .unwrap()
+                .push(Built::Transcriber(connection, model));
+            Ok(Box::new(Failing))
+        }
+
+        fn chat(&self, connection: Connection, model: String) -> Result<Box<dyn ChatModel>> {
+            self.built
+                .lock()
+                .unwrap()
+                .push(Built::Chat(connection, model));
+            Ok(Box::new(Failing))
+        }
+
+        fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
+            self.built.lock().unwrap().push(Built::Models(connection));
+            let models = self.models.clone();
+            Box::pin(async move { Ok(models) })
+        }
+    }
 }

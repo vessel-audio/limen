@@ -14,6 +14,7 @@
 //! (reaping capture, finalizing a take) blocks only this actor, never the
 //! dictation loop that answers IPC.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -21,6 +22,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::audio::{CaptureReap, Level, SAMPLE_RATE, capture_loop, reap_capture};
+use crate::backend::ModelBackend;
 use crate::config::{Config, ProviderConfig};
 use crate::dictation::Event;
 use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEvent};
@@ -52,10 +54,11 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionHandle {
-    /// Spawn the actor. `dictation` is the dictation loop's mailbox, where the
-    /// actor reports every outcome.
+    /// Spawn the actor, which opens takes through `backend`. `dictation` is
+    /// the dictation loop's mailbox, where the actor reports every outcome.
     pub(crate) fn spawn(
         cfg: Config,
+        backend: Arc<dyn ModelBackend>,
         dictation: mpsc::UnboundedSender<Event>,
     ) -> (Self, watch::Receiver<Level>) {
         let (mailbox, commands) = mpsc::unbounded_channel();
@@ -63,6 +66,7 @@ impl SessionHandle {
         let task = tokio::spawn(
             SessionActor {
                 cfg,
+                backend,
                 commands,
                 dictation,
                 active: None,
@@ -111,6 +115,7 @@ impl SessionHandle {
 /// The actor's private state, owned by its task for its whole life.
 struct SessionActor {
     cfg: Config,
+    backend: Arc<dyn ModelBackend>,
     commands: mpsc::UnboundedReceiver<SessionCommand>,
     /// The dictation loop's mailbox; every outcome is reported here.
     dictation: mpsc::UnboundedSender<Event>,
@@ -161,7 +166,7 @@ impl SessionActor {
     async fn start(&mut self) {
         // A take never outlives the next `Start`, even if a `Teardown` was missed.
         self.teardown().await;
-        let event = match Active::open(&self.cfg, self.level.clone()).await {
+        let event = match Active::open(&self.cfg, &*self.backend, self.level.clone()).await {
             Ok(active) => {
                 self.active = Some(active);
                 Event::SessionStarted
@@ -242,12 +247,16 @@ impl Drop for Active {
 
 impl Active {
     /// Open a provider session and start capturing the microphone.
-    async fn open(cfg: &Config, level: watch::Sender<Level>) -> Result<Self> {
+    async fn open(
+        cfg: &Config,
+        backend: &dyn ModelBackend,
+        level: watch::Sender<Level>,
+    ) -> Result<Self> {
         let session_cfg = SessionConfig {
             language: cfg.provider.language.clone(),
             sample_rate: SAMPLE_RATE,
         };
-        let session = provider::from_config(cfg)
+        let session = provider::from_config(cfg, backend)?
             .start_session(&session_cfg)
             .await?;
         let (sink, events) = session.split();
@@ -448,6 +457,7 @@ mod tests {
         tokio::spawn(
             SessionActor {
                 cfg,
+                backend: Arc::new(crate::backend::testing::Refusing),
                 commands,
                 dictation,
                 active: Some(active),

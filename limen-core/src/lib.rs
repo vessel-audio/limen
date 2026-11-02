@@ -6,6 +6,7 @@
 mod audio;
 mod backend;
 mod config;
+mod connection;
 mod daemon;
 mod dictation;
 mod input_method;
@@ -20,6 +21,9 @@ mod shortcut;
 mod task;
 
 pub use audio::Level;
+pub use backend::{
+    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
+};
 pub use config::{ApiKey, Config, KeyChange, Paths, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
