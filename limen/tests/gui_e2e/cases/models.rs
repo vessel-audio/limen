@@ -406,3 +406,29 @@ pub fn an_early_service_choice_keeps_a_custom_route() -> Result<()> {
     );
     Ok(())
 }
+
+/// A vendor's own endpoint, which a config from before services may hold,
+/// is not offered as the address of a server: choosing an OpenAI-compatible
+/// server starts from an empty URL.
+pub fn a_server_does_not_inherit_a_vendor_url() -> Result<()> {
+    let session = Session::launch(Launch {
+        config: Some(
+            "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n\n[polish]\nenabled = false\nurl = \"https://api.deepseek.com/chat/completions\"\nmodel = \"deepseek-flash\"\napi_key_env = \"DEEPSEEK_API_KEY\"\n",
+        ),
+        ..Launch::default()
+    })?;
+    session.click("polish-page")?;
+    session.absent("polish-url")?;
+    choose_service(&session, 0)?;
+    session.node("polish-url")?;
+    session.click("polish-save")?;
+    session.named("toast", "Polish settings applied")?;
+    let polish = Config::load(&session.paths().config_file)?.polish;
+    ensure!(
+        (polish.service, polish.url.as_str()) == (Some(Service::OpenAiCompatible), ""),
+        "saved {:?} at {:?}",
+        polish.service,
+        polish.url
+    );
+    Ok(())
+}

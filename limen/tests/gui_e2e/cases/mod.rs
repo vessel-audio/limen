@@ -47,6 +47,7 @@ pub const ALL: &[Case] = cases![
     models::a_custom_route_moves_to_a_new_server,
     models::a_vendor_hides_the_server_url,
     models::an_early_service_choice_keeps_a_custom_route,
+    models::a_server_does_not_inherit_a_vendor_url,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,
