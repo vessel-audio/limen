@@ -244,10 +244,8 @@ impl Active {
     /// Open a provider session and start capturing the microphone.
     async fn open(cfg: &Config, level: watch::Sender<Level>) -> Result<Self> {
         let session_cfg = SessionConfig {
-            model: cfg.provider.model.clone(),
             language: cfg.provider.language.clone(),
             sample_rate: SAMPLE_RATE,
-            api_key: cfg.api_key(),
         };
         let session = provider::from_config(cfg)
             .start_session(&session_cfg)
@@ -352,9 +350,10 @@ mod tests {
 
     use super::{Active, SessionActor, SessionCommand, Stage};
     use crate::audio::Level;
+    use crate::backend::BoxFuture;
     use crate::config::Config;
     use crate::dictation::Event;
-    use crate::provider::{AudioSink, BoxFuture, EventSource, TranscriptEvent};
+    use crate::provider::{AudioSink, EventSource, TranscriptEvent};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 

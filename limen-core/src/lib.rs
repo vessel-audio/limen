@@ -4,6 +4,7 @@
 //! documented re-exports in this module.
 
 mod audio;
+mod backend;
 mod config;
 mod daemon;
 mod dictation;
