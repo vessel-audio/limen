@@ -55,8 +55,17 @@ pub async fn list_models(
         (KeyChange::Keep, true) => saved.map(ApiKey::new),
         (KeyChange::Clear, _) | (KeyChange::Keep, false) => None,
     };
+    // The page writes a saved URL back in its own form, such as without a
+    // default port, so compare URLs as parsed.
+    let normalized = |url: &str| {
+        reqwest::Url::parse(url.trim())
+            .map(String::from)
+            .unwrap_or_else(|_| url.trim().to_string())
+            .trim_end_matches('/')
+            .to_string()
+    };
     let same = |saved: Service, saved_url: &str, chosen: Service, url: &str| {
-        chosen == saved && (!chosen.uses_url() || saved_url.trim() == url.trim())
+        chosen == saved && (!chosen.uses_url() || normalized(saved_url) == normalized(url))
     };
     let (service, endpoint, connection) = match provider {
         Provider::Asr { service, url, .. } => {
@@ -67,10 +76,13 @@ pub async fn list_models(
                 url,
             );
             config.provider.saved_key = stored(keys.asr, same);
-            if !same {
-                config.provider.service = Some(*service);
-                config.provider.url = url.trim().to_string();
-                config.provider.api_key_env = None;
+            match same {
+                true => {}
+                false => {
+                    config.provider.service = Some(*service);
+                    config.provider.url = url.trim().to_string();
+                    config.provider.api_key_env = None;
+                }
             }
             match connection::asr(&config)? {
                 AsrRoute::Api(connection) => (*service, url, connection),
@@ -83,10 +95,13 @@ pub async fn list_models(
         Provider::Polish { service, url, .. } => {
             let same = same(config.polish.service(), &config.polish.url, *service, url);
             config.polish.saved_key = stored(keys.polish, same);
-            if !same {
-                config.polish.service = Some(*service);
-                config.polish.url = url.trim().to_string();
-                config.polish.api_key_env = None;
+            match same {
+                true => {}
+                false => {
+                    config.polish.service = Some(*service);
+                    config.polish.url = url.trim().to_string();
+                    config.polish.api_key_env = None;
+                }
             }
             // The key goes out before anything is saved: guard it as saving
             // and the polisher would.
@@ -226,6 +241,41 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some("https://other.example/v1".to_string()),
                 api_key: None,
+            })]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_saved_server_written_another_way_keeps_its_key() {
+        let paths = scratch(
+            "models-normalized",
+            "[provider]\nurl = \"https://asr.example:443/v1/audio/transcriptions/\"\n",
+        );
+        fs::write(
+            paths.config_file.with_file_name("keys.toml"),
+            "asr = \"sk-saved\"\n",
+        )
+        .unwrap();
+        let backend = Recording::default();
+
+        list_models(
+            &paths,
+            &asr(
+                Service::OpenAiCompatible,
+                "https://asr.example/v1/audio/transcriptions",
+            ),
+            &KeyChange::Keep,
+            &backend,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            backend.built.lock().unwrap().clone(),
+            [Built::Models(Connection {
+                api: Api::Compatible,
+                base_url: Some("https://asr.example/v1".to_string()),
+                api_key: Some("sk-saved".to_string()),
             })]
         );
     }

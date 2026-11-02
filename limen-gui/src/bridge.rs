@@ -49,10 +49,10 @@ pub enum BridgeCommand {
         key: KeyChange,
     },
     /// Ask the server a page's unsaved fields name which models it
-    /// offers; `endpoint` names what the GUI asks about in its reply.
+    /// offers; the reply carries `request` back.
     ListModels {
         role: ModelRole,
-        endpoint: String,
+        request: u64,
         provider: Provider,
         key: KeyChange,
     },
@@ -96,7 +96,7 @@ pub enum BridgeEvent {
     /// The models a server offers, or why it listed none.
     Models {
         role: ModelRole,
-        endpoint: String,
+        request: u64,
         models: Result<Vec<String>, String>,
     },
     Toast(Toast),
@@ -552,7 +552,7 @@ async fn handle_command(
         }
         BridgeCommand::ListModels {
             role,
-            endpoint,
+            request,
             provider,
             key,
         } => {
@@ -565,7 +565,7 @@ async fn handle_command(
                 let _ = events
                     .send(BridgeEvent::Models {
                         role,
-                        endpoint,
+                        request,
                         models,
                     })
                     .await;

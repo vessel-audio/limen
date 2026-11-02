@@ -235,10 +235,10 @@ impl AppView {
             BridgeEvent::ProviderSaved { role, id, result } => self.models.saved(role, id, result),
             BridgeEvent::Models {
                 role,
-                endpoint,
+                request,
                 models,
             } => {
-                self.models.listed(role, endpoint, models);
+                self.models.listed(role, request, models);
                 Vec::new()
             }
             BridgeEvent::Toast(_) => Vec::new(),

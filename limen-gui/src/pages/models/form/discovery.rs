@@ -22,30 +22,30 @@ const RETRY: Duration = Duration::from_secs(15);
 const SETTLE: Duration = Duration::from_millis(600);
 
 /// What the GUI knows of the models the fields' server offers. Each state
-/// names the request it is about, and any edit to the service, address, or
-/// key returns to [`Listing::Unknown`], so a list that arrives for fields
-/// edited since is dropped.
+/// names the fields it is about; a request in flight also has the ID its
+/// reply carries, so a reply to any other request, even one asked of the
+/// same fields, is dropped. Any edit to the service, address, or key
+/// returns to [`Listing::Unknown`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Listing {
     /// Not asked since the fields last changed.
     Unknown,
-    Asked(String),
+    Asked(String, u64),
     Listed(String, Vec<SharedString>),
     /// The endpoint failed or listed no models; asked again after [`RETRY`].
     Failed(String, Instant),
 }
 
 impl ModelForms {
-    /// Record the models `endpoint` listed, if it is still the one asked.
-    /// Failures and empty lists are retried while the page stays open.
-    pub fn listed(
-        &mut self,
-        role: ModelRole,
-        endpoint: String,
-        models: Result<Vec<String>, String>,
-    ) {
+    /// Record the models listed in reply to `request`, if it is still the
+    /// one in flight. Failures and empty lists are retried while the page
+    /// stays open.
+    pub fn listed(&mut self, role: ModelRole, request: u64, models: Result<Vec<String>, String>) {
         let form = self.form(role);
-        if form.listing == Listing::Asked(endpoint.clone()) {
+        if let Listing::Asked(endpoint, asked) = &form.listing
+            && *asked == request
+        {
+            let endpoint = endpoint.clone();
             // A server that offers exactly one model has decided it, unless
             // the user or the saved settings chose one.
             if let Ok([only]) = models.as_deref()
@@ -114,29 +114,34 @@ pub(super) fn discover(
             (_, None) => false,
             (Listing::Unknown, Some(_)) => true,
             (
-                Listing::Asked(asked) | Listing::Listed(asked, _) | Listing::Failed(asked, _),
+                Listing::Asked(asked, _) | Listing::Listed(asked, _) | Listing::Failed(asked, _),
                 Some(endpoint),
             ) if asked != endpoint => true,
             (Listing::Failed(_, at), Some(_)) => at.elapsed() >= RETRY,
-            (Listing::Asked(_) | Listing::Listed(..), Some(_)) => false,
+            (Listing::Asked(..) | Listing::Listed(..), Some(_)) => false,
         };
     if visible
         && ask
         && let Some((endpoint, provider, key)) = query
-        && commands
+    {
+        // Load, save, and list requests share one increasing ID.
+        form.next_request += 1;
+        let request = form.next_request;
+        if commands
             .try_send(BridgeCommand::ListModels {
                 role,
-                endpoint: endpoint.clone(),
+                request,
                 provider,
                 key,
             })
             .is_ok()
-    {
-        form.listing = Listing::Asked(endpoint);
+        {
+            form.listing = Listing::Asked(endpoint, request);
+        }
     }
     let listed = match &form.listing {
         Listing::Listed(_, models) => models.as_slice(),
-        Listing::Unknown | Listing::Asked(_) | Listing::Failed(..) => &[],
+        Listing::Unknown | Listing::Asked(..) | Listing::Failed(..) => &[],
     };
     let offered: Vec<SharedString> = form
         .chosen
