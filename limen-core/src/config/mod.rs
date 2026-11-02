@@ -429,10 +429,18 @@ impl ProviderConfig {
 }
 
 impl PolishConfig {
-    /// The configured service; configs from before services all used an
-    /// OpenAI-compatible server.
+    /// The configured service. Configs from before services named an
+    /// OpenAI-compatible server by its URL; DeepSeek's own, the old
+    /// default, is the DeepSeek service, whose requests turn its thinking
+    /// off.
     pub fn service(&self) -> Service {
-        self.service.unwrap_or(Service::OpenAiCompatible)
+        let deepseek = reqwest::Url::parse(&self.url)
+            .is_ok_and(|url| url.host_str() == Some("api.deepseek.com"));
+        match (self.service, deepseek) {
+            (Some(service), _) => service,
+            (None, true) => Service::DeepSeek,
+            (None, false) => Service::OpenAiCompatible,
+        }
     }
 
     /// The variable the key is read from: `api_key_env`, else the
@@ -473,13 +481,21 @@ pub(crate) fn check_polish_url(url: &str) -> Result<()> {
         _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
     }
     check_url_parameters(&polish_url, "polish.url")?;
-    if crate::connection::base_url(url, crate::connection::CHAT_COMPLETIONS).is_none() {
-        bail!(
+    Ok(())
+}
+
+/// Check that `url` is a chat-completions route the backend can reach: one
+/// ending in `/chat/completions`, without a query. Only saves check this,
+/// so a config from before services, which may name another route, still
+/// loads; its polisher then keeps the original transcripts.
+pub(crate) fn check_polish_route(url: &str) -> Result<()> {
+    match crate::connection::base_url(url, crate::connection::CHAT_COMPLETIONS) {
+        Some(_) => Ok(()),
+        None => bail!(
             "polish.url must end in {}, without a query",
             crate::connection::CHAT_COMPLETIONS
-        );
+        ),
     }
-    Ok(())
 }
 
 /// Allow only endpoint query parameters that are routing or API metadata,
@@ -596,8 +612,21 @@ mod tests {
         }
         config.provider.url =
             "https://asr.example/v1/audio/transcriptions?api-version=2026-01-01".to_string();
-        config.polish.url = "https://ai.example/chat/completions".to_string();
+        config.polish.url =
+            "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn the_old_deepseek_default_is_the_deepseek_service() {
+        let mut config = base_config();
+        config.polish.url = "https://api.deepseek.com/chat/completions".to_string();
+        let inferred = config.polish.service();
+        config.polish.url = "https://ai.example/v1/chat/completions".to_string();
+        assert_eq!(
+            [inferred, config.polish.service()],
+            [Service::DeepSeek, Service::OpenAiCompatible]
+        );
     }
 
     #[test]
@@ -641,21 +670,25 @@ mod tests {
     }
 
     #[test]
-    fn enabled_polish_needs_a_chat_completions_url_without_a_query() {
+    fn a_polish_route_the_backend_cannot_reach_still_loads() {
         let mut config = base_config();
         config.polish.enabled = true;
         config.polish.model = "corrector".to_string();
-        for url in [
-            "https://ai.example/v1/completions",
-            "https://ai.example/chat/completions?api-version=2026-01-01",
-        ] {
-            config.polish.url = url.to_string();
-            assert_eq!(
-                config.validate().unwrap_err().to_string(),
-                "polish.url must end in /chat/completions, without a query",
-                "{url}"
-            );
-        }
+        config.polish.url = "https://ai.example/v1/completions".to_string();
+        config.validate().unwrap();
+        assert_eq!(
+            [
+                "https://ai.example/v1/completions",
+                "https://ai.example/chat/completions?api-version=2026-01-01",
+                "https://ai.example/v1/chat/completions",
+            ]
+            .map(|url| super::check_polish_route(url).map_err(|error| error.to_string())),
+            [
+                Err("polish.url must end in /chat/completions, without a query".to_string()),
+                Err("polish.url must end in /chat/completions, without a query".to_string()),
+                Ok(()),
+            ]
+        );
     }
 
     #[test]

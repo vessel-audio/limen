@@ -104,7 +104,10 @@ pub async fn save_provider(
             service,
             url,
             ..
-        } if service.uses_url() => config::check_polish_url(url.trim())?,
+        } if service.uses_url() => {
+            config::check_polish_url(url.trim())?;
+            config::check_polish_route(url.trim())?;
+        }
         Provider::Polish {
             polishing: Polishing::On,
             ..

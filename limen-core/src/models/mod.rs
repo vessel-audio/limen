@@ -43,7 +43,10 @@ pub async fn list_models(
             AsrRoute::Api(connection) => {
                 (config.provider.service(), &config.provider.url, connection)
             }
-            AsrRoute::Upload(_) => anyhow::bail!("the whisper.cpp server lists no models"),
+            // Limen's own upload has no models route to ask.
+            AsrRoute::Upload(url) => {
+                anyhow::bail!("{} lists no models", config::display_url(&url))
+            }
         },
         ModelRole::Polish => {
             let service = config.polish.service();
@@ -136,7 +139,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.to_string(), "the whisper.cpp server lists no models");
+        assert_eq!(
+            error.to_string(),
+            "http://127.0.0.1:8080/inference lists no models"
+        );
     }
 
     #[tokio::test]

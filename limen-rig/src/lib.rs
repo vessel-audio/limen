@@ -11,6 +11,7 @@ use limen_core::{
 };
 use rig_core::DynModel;
 use rig_core::completion::{CompletionRequest, FinishReason, OnUnsupported, Reasoning};
+use rig_core::error::ProviderError;
 use rig_core::operation::{Completion, Transcription};
 use rig_core::providers::anthropic::{Anthropic, AnthropicConfig};
 use rig_core::providers::gemini::{Gemini, GeminiConfig};
@@ -128,9 +129,46 @@ impl ModelBackend for Rig {
                 Client::OpenAi(client) => client.list_models().await,
                 Client::Anthropic(client) => client.list_models().await,
                 Client::Gemini(client) => client.list_models().await,
-            }?;
+            }
+            .map_err(sanitized)?;
             Ok(listed.data.into_iter().map(|model| model.id).collect())
         })
+    }
+}
+
+/// `error` without anything the service sent back: a reply body can quote
+/// the request, and some services echo a rejected key in it.
+fn sanitized(error: ProviderError) -> anyhow::Error {
+    match error {
+        ProviderError::InvalidAuthentication(response)
+        | ProviderError::ProviderResponse(response)
+        | ProviderError::CacheExpired { response, .. } => {
+            match response.status.map(|status| status.as_u16()) {
+                Some(status @ (401 | 403)) => {
+                    anyhow::anyhow!("the service rejected the API key with HTTP {status}")
+                }
+                Some(status) => anyhow::anyhow!("the service returned HTTP {status}"),
+                None => anyhow::anyhow!("the service returned an error"),
+            }
+        }
+        ProviderError::Http(error) => anyhow::anyhow!("the request did not complete: {error}"),
+        ProviderError::Json(_) | ProviderError::Response(_) => {
+            anyhow::anyhow!("the service sent a reply that could not be read")
+        }
+        ProviderError::Url(_) | ProviderError::Request(_) => {
+            anyhow::anyhow!("the request could not be built")
+        }
+        ProviderError::Truncated => anyhow::anyhow!("the reply ended early"),
+        ProviderError::Stalled(after) => anyhow::anyhow!("the reply stalled for {after:?}"),
+        // rig's own diagnostics and refusals of an option name no reply.
+        error @ (ProviderError::Provider(_) | ProviderError::UnsupportedOption(_)) => {
+            anyhow::anyhow!("{error}")
+        }
+        ProviderError::MismatchedDimensions { .. } | ProviderError::Relayed(_) => {
+            anyhow::anyhow!("the service failed")
+        }
+        // rig may add failures; say no more about them than that.
+        _ => anyhow::anyhow!("the service failed"),
     }
 }
 
@@ -144,7 +182,7 @@ impl Transcriber for RigTranscriber {
             None => request,
         };
         let reply = self.0.call(request.build());
-        Box::pin(async move { Ok(reply.await?.text) })
+        Box::pin(async move { Ok(reply.await.map_err(sanitized)?.text) })
     }
 }
 
@@ -162,7 +200,7 @@ impl ChatModel for RigChat {
             .on_unsupported(OnUnsupported::Ignore);
         let reply = self.0.call(request);
         Box::pin(async move {
-            let response = reply.await?;
+            let response = reply.await.map_err(sanitized)?;
             Ok(Reply {
                 text: response.text(),
                 finish: response.finish_reason().map(|reason| match reason {

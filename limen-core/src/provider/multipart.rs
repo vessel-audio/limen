@@ -45,10 +45,9 @@ impl Transcriber for Server {
                 None => request,
             };
             let response = request.send().await.context("transcription request")?;
+            // The body is never quoted: it can echo the request or the key.
             if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                bail!("HTTP {status}: {body}");
+                bail!("the server returned HTTP {}", response.status());
             }
             response
                 .json::<TranscriptionResponse>()
