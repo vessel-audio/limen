@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::backend::ModelBackend;
 use crate::config::{self, ApiKey, Config, KeyChange, Paths, Service};
@@ -115,6 +115,15 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
     Ok(config)
 }
 
+/// [`edited`], read on a blocking thread: the config lock may wait on a
+/// save, which must not hold up the caller's runtime.
+async fn edited_off_thread(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config> {
+    let (paths, provider, key) = (paths.clone(), provider.clone(), key.clone());
+    tokio::task::spawn_blocking(move || edited(&paths, &provider, &key))
+        .await
+        .context("the config reader stopped")?
+}
+
 /// The models the server `provider` names offers, in its order, as
 /// `backend` lists them. The page asks while it is being edited, so
 /// `provider` and `key` are its unsaved fields, sent as [`edited`] says.
@@ -124,30 +133,33 @@ pub async fn list_models(
     key: &KeyChange,
     backend: &dyn ModelBackend,
 ) -> Result<Vec<String>> {
-    let config = edited(paths, provider, key)?;
-    let (service, endpoint, connection) = match provider {
-        Provider::Asr { service, url, .. } => match connection::asr(&config)? {
-            AsrRoute::Api(connection) => (*service, url, connection),
-            // Limen's own upload has no models route to ask.
-            AsrRoute::Upload(url) => {
-                anyhow::bail!("{} lists no models", config::display_url(&url))
-            }
-        },
-        Provider::Polish { service, url, .. } => (
-            *service,
-            url,
-            connection::polish(&config.polish, config.polish.api_key())?,
-        ),
-    };
     // Errors may quote the server; the endpoint alone is safe to show.
-    let shown = match service.uses_url() {
-        true => config::display_url(endpoint),
-        false => service.as_str().to_string(),
+    let shown = match provider {
+        Provider::Asr { service, url, .. } | Provider::Polish { service, url, .. } => {
+            match service.uses_url() {
+                true => config::display_url(url.trim()),
+                false => service.as_str().to_string(),
+            }
+        }
     };
-    let listed = tokio::time::timeout(LIST_TIMEOUT, backend.models(connection))
+    let list = async {
+        let config = edited_off_thread(paths, provider, key).await?;
+        let connection = match provider {
+            Provider::Asr { .. } => match connection::asr(&config)? {
+                AsrRoute::Api(connection) => connection,
+                // Limen's own upload has no models route to ask.
+                AsrRoute::Upload(_) => anyhow::bail!("{shown} lists no models"),
+            },
+            Provider::Polish { .. } => connection::polish(&config.polish, config.polish.api_key())?,
+        };
+        backend
+            .models(connection)
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to ask {shown} for its models"))
+    };
+    let listed = tokio::time::timeout(LIST_TIMEOUT, list)
         .await
-        .map_err(|_| anyhow::anyhow!("{shown} took too long to list its models"))?
-        .map_err(|_| anyhow::anyhow!("failed to ask {shown} for its models"))?;
+        .map_err(|_| anyhow::anyhow!("{shown} took too long to list its models"))??;
     Ok(listed.into_iter().fold(Vec::new(), |mut models, model| {
         if !models.contains(&model) {
             models.push(model);

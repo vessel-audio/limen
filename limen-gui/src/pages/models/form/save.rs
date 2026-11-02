@@ -10,7 +10,7 @@ use limen_core::{
 
 use super::{Address, ProviderForm};
 use crate::app::AppView;
-use crate::bridge::BridgeCommand;
+use crate::bridge::{BridgeCommand, ModelRequest};
 
 /// The provider and key change the page's fields describe. The ASR server
 /// is checked here, so its error shows at once; the core validates the
@@ -86,8 +86,11 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
     let id = form.next_request;
     match view
         .commands
-        .try_send(BridgeCommand::SaveProvider { id, provider, key })
-    {
+        .try_send(BridgeCommand::Model(ModelRequest::SaveProvider {
+            id,
+            provider,
+            key,
+        })) {
         Ok(()) => {
             form.saving = Some(id);
             // Only edits after this point are unsaved when the reply arrives.

@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use super::{Address, EditedField, ModelForms, ProviderForm, save};
 use crate::app::AppView;
-use crate::bridge::BridgeCommand;
+use crate::bridge::{BridgeCommand, ModelRequest};
 use crate::model::{Action, Toast};
 use crate::pages::models::choices::ModelChoices;
 
@@ -160,12 +160,14 @@ pub fn check(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
     };
     form.next_request += 1;
     let id = form.next_request;
-    match view.commands.try_send(BridgeCommand::CheckModel {
-        role,
-        id,
-        provider,
-        key,
-    }) {
+    match view
+        .commands
+        .try_send(BridgeCommand::Model(ModelRequest::CheckModel {
+            role,
+            id,
+            provider,
+            key,
+        })) {
         Ok(()) => {
             form.checking = Some(id);
             form.error = None;
@@ -228,12 +230,12 @@ pub(super) fn discover(
         form.next_request += 1;
         let request = form.next_request;
         if commands
-            .try_send(BridgeCommand::ListModels {
+            .try_send(BridgeCommand::Model(ModelRequest::ListModels {
                 role,
                 request,
                 provider,
                 key,
-            })
+            }))
             .is_ok()
         {
             form.listing = Listing::Asked(endpoint, request);
