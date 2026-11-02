@@ -6,8 +6,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 
-use crate::backend::BoxFuture;
+use crate::backend::{BoxFuture, ModelBackend, Transcriber};
 use crate::config::Config;
+use crate::connection::{self, AsrRoute};
 
 mod buffered;
 mod multipart;
@@ -64,24 +65,27 @@ pub trait EventSource: Send {
     fn next_event(&mut self) -> BoxFuture<'_, Option<TranscriptEvent>>;
 }
 
-/// Build the buffered transcription provider for the configured server.
-pub fn from_config(cfg: &Config) -> Box<dyn AsrProvider> {
-    let server = multipart::Server::new(
-        cfg.provider.url.clone(),
-        cfg.provider.model.clone(),
-        cfg.api_key(),
-    );
-    Box::new(buffered::Provider::new(Arc::new(server)))
+/// Build the buffered transcription provider for the configured server:
+/// through `backend`, unless the URL is one only Limen's own upload serves.
+pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn AsrProvider>> {
+    let model = cfg.provider.model.clone();
+    let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg) {
+        AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())),
+        AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
+    };
+    Ok(Box::new(buffered::Provider::new(transcriber)))
 }
 
 /// `limen probe <wav>`: transcribe a file and print the final event flow.
-pub async fn probe(cfg: &Config, wav: &Path) -> Result<()> {
+pub async fn probe(cfg: &Config, backend: &dyn ModelBackend, wav: &Path) -> Result<()> {
     let pcm = load_wav_16k_mono(wav)?;
     let session_cfg = SessionConfig {
         language: cfg.provider.language.clone(),
         sample_rate: 16_000,
     };
-    let session = from_config(cfg).start_session(&session_cfg).await?;
+    let session = from_config(cfg, backend)?
+        .start_session(&session_cfg)
+        .await?;
     let (mut sink, mut events) = session.split();
 
     let started = Instant::now();
@@ -123,4 +127,41 @@ fn load_wav_16k_mono(path: &Path) -> Result<Vec<i16>> {
     );
     let samples = reader.samples::<i16>().collect::<Result<_, _>>()?;
     Ok(samples)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_config;
+    use crate::backend::testing::{Built, Recording};
+    use crate::backend::{Api, Connection};
+    use crate::config::Config;
+
+    fn config(url: &str) -> Config {
+        toml::from_str(&format!("[provider]\nurl = \"{url}\"\nmodel = \"asr\"\n")).unwrap()
+    }
+
+    #[test]
+    fn only_a_transcriptions_route_goes_through_the_backend() {
+        let backend = Recording::default();
+
+        for url in [
+            "http://127.0.0.1:8000/v1/audio/transcriptions",
+            "http://127.0.0.1:8080/inference",
+            "https://asr.example/v1/audio/transcriptions?api-version=1",
+        ] {
+            from_config(&config(url), &backend).unwrap();
+        }
+
+        assert_eq!(
+            backend.built.lock().unwrap().clone(),
+            [Built::Transcriber(
+                Connection {
+                    api: Api::Compatible,
+                    base_url: Some("http://127.0.0.1:8000/v1".to_string()),
+                    api_key: None,
+                },
+                "asr".to_string()
+            )]
+        );
+    }
 }

@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
@@ -63,7 +64,9 @@ fn main() -> anyhow::Result<ExitCode> {
 
     match cli.command {
         #[cfg(feature = "gui")]
-        Command::Gui => limen_gui::run(paths).map(|()| ExitCode::SUCCESS),
+        Command::Gui => {
+            limen_gui::run(paths, Arc::new(limen_rig::Rig::new()?)).map(|()| ExitCode::SUCCESS)
+        }
         command => run_async(command, paths),
     }
 }
@@ -78,7 +81,7 @@ fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
                 Command::Gui => unreachable!("GUI commands do not use the async runtime"),
                 Command::Daemon => {
                     let cfg = Config::load_or_create(&paths)?;
-                    limen_core::run_daemon(paths, cfg).await?;
+                    limen_core::run_daemon(paths, cfg, Arc::new(limen_rig::Rig::new()?)).await?;
                     ExitCode::SUCCESS
                 }
                 Command::Toggle => {
@@ -98,7 +101,7 @@ fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
                 }
                 Command::Probe { wav } => {
                     let cfg = Config::load_or_create(&paths)?;
-                    limen_core::probe(&cfg, &wav).await?;
+                    limen_core::probe(&cfg, &limen_rig::Rig::new()?, &wav).await?;
                     ExitCode::SUCCESS
                 }
             };

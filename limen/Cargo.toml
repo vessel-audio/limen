@@ -11,6 +11,7 @@ libc.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 limen-core.workspace = true
+limen-rig.workspace = true
 limen-gui = { workspace = true, optional = true }
 
 [features]

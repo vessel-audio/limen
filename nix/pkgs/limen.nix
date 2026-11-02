@@ -68,6 +68,8 @@ rustPlatform.buildRustPackage {
         "-p"
         "limen-core"
         "-p"
+        "limen-rig"
+        "-p"
         "limen"
       ];
   buildFeatures = lib.optionals withGui [ "limen/gui" ];

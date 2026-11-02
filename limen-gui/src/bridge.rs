@@ -3,15 +3,16 @@
 mod lifecycle;
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeyChange,
-    KeyState, Keys, Launch, ModelRole, Paths, Provider, Push, Report, SetupError, Shortcut, clear,
-    daemon_peer_pid, edit, list_models, load_provider, save_provider, set, setup, spawn_daemon,
-    subscribe, terminate_daemon, v1,
+    KeyState, Keys, Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError,
+    Shortcut, clear, daemon_peer_pid, edit, list_models, load_provider, save_provider, set, setup,
+    spawn_daemon, subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -109,8 +110,16 @@ pub struct ShortcutFailure {
 type ShortcutTasks = JoinSet<Result<Report, ShortcutFailure>>;
 
 /// Start a current-thread Tokio runtime on a dedicated native thread.
+/// What the bridge reaches: the user's files and daemon, and the backend
+/// that lists the models a provider offers.
+pub(crate) struct Env {
+    pub(crate) paths: Paths,
+    pub(crate) models: Arc<dyn ModelBackend>,
+}
+
 pub fn start(
     paths: Paths,
+    models: Arc<dyn ModelBackend>,
 ) -> (
     mpsc::Sender<BridgeCommand>,
     mpsc::Receiver<BridgeEvent>,
@@ -125,7 +134,7 @@ pub fn start(
                 .enable_all()
                 .build()
                 .expect("bridge runtime");
-            runtime.block_on(run(paths, events, command_rx));
+            runtime.block_on(run(Env { paths, models }, events, command_rx));
         })
         .expect("failed to spawn bridge thread");
     (commands, event_rx, thread)
@@ -188,7 +197,7 @@ impl SpawnGate {
 
 #[tracing::instrument(skip_all)]
 async fn run(
-    paths: Paths,
+    env: Env,
     events: mpsc::Sender<BridgeEvent>,
     mut commands: mpsc::Receiver<BridgeCommand>,
 ) {
@@ -205,7 +214,7 @@ async fn run(
                 match command {
                     BridgeCommand::Quit => return,
                     command => handle_command(
-                        &paths,
+                        &env,
                         &events,
                         command,
                         &mut stream,
@@ -249,7 +258,7 @@ async fn run(
                 }
             }
             _ = tokio::time::sleep_until(next_connect), if stream.is_none() && spawn.task.is_none() && !stopped => {
-                match subscribe(&paths).await {
+                match subscribe(&env.paths).await {
                     Ok(mut candidate) => match tokio::time::timeout(Duration::from_secs(3), candidate.try_next()).await.unwrap_or_else(|_| Err(anyhow::anyhow!("subscription hello timed out"))) {
                         Ok(Some(Push::Hello { protocol, .. })) if protocol != 1 => {
                             stopped = true;
@@ -259,7 +268,7 @@ async fn run(
                             let _ = events.send(BridgeEvent::OfferTerminate).await;
                         }
                         Ok(Some(Push::Hello { protocol, daemon_version })) => {
-                            match daemon_peer_pid(&paths).await {
+                            match daemon_peer_pid(&env.paths).await {
                                 Ok(daemon_pid) => {
                                     let _ = events.send(BridgeEvent::Msg(Msg::Hello { protocol, daemon_version, daemon_pid })).await;
                                     backoff = Backoff::default();
@@ -289,7 +298,7 @@ async fn run(
                     Err(error) => {
                         if error.downcast_ref::<DaemonNotRunning>().is_some() && spawn.task.is_none() {
                             let _ = events.send(BridgeEvent::Msg(Msg::NotRunning)).await;
-                            spawn.start(&paths, StartMode::Spawn);
+                            spawn.start(&env.paths, StartMode::Spawn);
                         } else {
                             let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: format!("{error:#}") })).await;
                             next_connect = tokio::time::Instant::now() + backoff.next();
@@ -347,7 +356,7 @@ async fn next_push(
 }
 
 async fn handle_command(
-    paths: &Paths,
+    env: &Env,
     events: &mpsc::Sender<BridgeEvent>,
     command: BridgeCommand,
     stream: &mut Option<Pin<Box<dyn Stream<Item = Result<Push>>>>>,
@@ -355,6 +364,7 @@ async fn handle_command(
     stopped: &mut bool,
     shortcuts: &mut ShortcutTasks,
 ) {
+    let paths = &env.paths;
     match command {
         BridgeCommand::Start => match request_with_timeout(paths, &v1::Request::Start).await {
             Ok(v1::Reply::Accepted { .. }) => {}
@@ -540,8 +550,9 @@ async fn handle_command(
         }
         BridgeCommand::ListModels { role, endpoint } => {
             let (paths, events) = (paths.clone(), events.clone());
+            let backend = env.models.clone();
             tokio::spawn(async move {
-                let models = list_models(&paths, role)
+                let models = list_models(&paths, role, &*backend)
                     .await
                     .map_err(|error| format!("{error:#}"));
                 let _ = events

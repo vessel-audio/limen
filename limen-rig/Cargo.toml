@@ -1,0 +1,15 @@
+[package]
+name = "limen-rig"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+limen-core.workspace = true
+reqwest.workspace = true
+rig-core.workspace = true
+rig-reqwest.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio.workspace = true

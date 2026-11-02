@@ -1,11 +1,14 @@
 //! Daemon startup and the common shutdown/cleanup path.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 
 use super::Projection;
 use super::input;
 use super::{DictationActor, Mailboxes};
+use crate::backend::ModelBackend;
 use crate::config::{Config, Paths};
 use crate::dictation::Event;
 use crate::ipc;
@@ -19,12 +22,13 @@ pub(crate) struct ActorExit {
     pub(super) shortcuts: ShortcutHandle,
 }
 
-/// Run the resident daemon with the discovered paths and loaded configuration.
-pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
+/// Run the resident daemon with the discovered paths and loaded
+/// configuration; `backend` builds every model client it uses.
+pub async fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
     let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (polish, polish_rx) = watch::channel(cfg.polish.clone());
-    let (input_tx, input_reports, input_worker) = input::spawn(&cfg, polish_rx)?;
+    let (input_tx, input_reports, input_worker) = input::spawn(&cfg, polish_rx, backend.clone())?;
 
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
@@ -32,7 +36,7 @@ pub async fn run(paths: Paths, cfg: Config) -> Result<()> {
     let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let (projection, snapshots) = Projection::new(&cfg);
-    let (session, levels) = SessionHandle::spawn(cfg, session_report_tx);
+    let (session, levels) = SessionHandle::spawn(cfg, backend, session_report_tx);
     let shortcut_watch = shortcuts.subscribe();
     let actor = DictationActor::new(
         session,

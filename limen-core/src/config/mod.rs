@@ -381,6 +381,12 @@ pub(crate) fn check_polish_url(url: &str) -> Result<()> {
         _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
     }
     check_url_parameters(&polish_url, "polish.url")?;
+    if crate::connection::base_url(url, crate::connection::CHAT_COMPLETIONS).is_none() {
+        bail!(
+            "polish.url must end in {}, without a query",
+            crate::connection::CHAT_COMPLETIONS
+        );
+    }
     Ok(())
 }
 
@@ -497,9 +503,25 @@ mod tests {
         }
         config.provider.url =
             "https://asr.example/v1/audio/transcriptions?api-version=2026-01-01".to_string();
-        config.polish.url =
-            "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
+        config.polish.url = "https://ai.example/chat/completions".to_string();
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn enabled_polish_needs_a_chat_completions_url_without_a_query() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        for url in [
+            "https://ai.example/v1/completions",
+            "https://ai.example/chat/completions?api-version=2026-01-01",
+        ] {
+            config.polish.url = url.to_string();
+            assert_eq!(
+                config.validate().unwrap_err().to_string(),
+                "polish.url must end in /chat/completions, without a query",
+                "{url}"
+            );
+        }
     }
 
     #[test]

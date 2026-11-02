@@ -28,21 +28,23 @@ rust_i18n::i18n!("locales");
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
-use limen_core::Paths;
+use limen_core::{ModelBackend, Paths};
 
-/// Run the control panel on the calling thread.
-pub fn run(paths: Paths) -> Result<()> {
+/// Run the control panel on the calling thread; `models` lists the models
+/// a provider offers.
+pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
     let _instance = match instance::acquire(&paths)? {
         Some(file) => file,
         None => return Ok(()),
     };
     locale::initialize();
-    let (commands, mut events, bridge_thread) = bridge::start(paths.clone());
+    let (commands, mut events, bridge_thread) = bridge::start(paths.clone(), models);
     let bridge_commands = commands.clone();
     let opened = Rc::new(RefCell::new(None));
     let result = Rc::clone(&opened);
