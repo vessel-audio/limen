@@ -1,7 +1,7 @@
 //! State of the model provider pages: the fields of each provider, filled
 //! from the config file when a page opens, and saved together.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::searchable_list::SearchableVec;
@@ -16,6 +16,7 @@ use super::choices::{ModelChoices, ServiceChoice};
 use crate::app::{AppView, Page};
 use crate::bridge::BridgeCommand;
 use crate::model::{Action, Toast};
+use discovery::Listing;
 
 pub type ServiceSelect = SelectState<SearchableVec<ServiceChoice>>;
 
@@ -27,27 +28,6 @@ struct DirtyFields {
     key: bool,
     model: bool,
     polishing: bool,
-}
-
-/// How long an endpoint that could not list models waits before it is asked
-/// again while its page is open.
-const RETRY: Duration = Duration::from_secs(15);
-
-/// How long the server's address, key, or service must stay unedited before
-/// the server is asked for its models, so a half-typed address is not.
-const SETTLE: Duration = Duration::from_millis(600);
-
-/// What the GUI knows of the models the saved endpoint offers. Each state
-/// names the endpoint it is about, so a list that arrives for an endpoint
-/// saved over since is dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Listing {
-    /// Not asked since the settings were last loaded.
-    Unknown,
-    Asked(String),
-    Listed(String, Vec<SharedString>),
-    /// The endpoint failed or listed no models; asked again after [`RETRY`].
-    Failed(String, Instant),
 }
 
 /// One provider page. Its fields are filled from the config file each time
@@ -78,6 +58,9 @@ pub struct ProviderForm {
     listing: Listing,
     /// The model chosen in the select and the models it offers, as last set.
     chosen: Option<SharedString>,
+    /// The chosen model is the only one a server listed, not the user's
+    /// choice or the saved one, so another such server may replace it.
+    detected: bool,
     offered: Vec<SharedString>,
     /// The saved ASR route when it is not the one its service uses.
     pub unlisted_route: Option<String>,
@@ -206,6 +189,7 @@ impl ModelForms {
                     SelectEvent::Confirm(Some(model)) => {
                         let form = this.models.form(role);
                         form.chosen = Some(model.clone());
+                        form.detected = false;
                         form.edited(EditedField::Model);
                     }
                     SelectEvent::Confirm(None) => {}
@@ -225,6 +209,7 @@ impl ModelForms {
                 stale: true,
                 visible: false,
                 listing: Listing::Unknown,
+                detected: false,
                 chosen: None,
                 offered: Vec::new(),
                 unlisted_route: None,
@@ -283,41 +268,6 @@ impl ModelForms {
         }
     }
 
-    /// Record the models `endpoint` listed, if it is still the one asked.
-    /// Failures and empty lists are retried while the page stays open.
-    pub fn listed(
-        &mut self,
-        role: ModelRole,
-        endpoint: String,
-        models: Result<Vec<String>, String>,
-    ) {
-        let form = self.form(role);
-        if form.listing == Listing::Asked(endpoint.clone()) {
-            // A server that offers exactly one model has decided it, unless
-            // the one chosen is that model already.
-            if let Ok([only]) = models.as_deref()
-                && form.chosen.as_deref() != Some(only.as_str())
-            {
-                form.chosen = Some(SharedString::from(only.clone()));
-                form.edited(EditedField::Model);
-            }
-            form.listing = match models {
-                Ok(models) if !models.is_empty() => Listing::Listed(
-                    endpoint,
-                    models.into_iter().map(SharedString::from).collect(),
-                ),
-                Ok(_) => Listing::Failed(endpoint, Instant::now()),
-                Err(_) => {
-                    // Errors are deliberately not logged: endpoints can have
-                    // sensitive hand-edited queries even though display_url
-                    // already keeps those out of the core's messages.
-                    tracing::debug!(?role, "the model server listed no models");
-                    Listing::Failed(endpoint, Instant::now())
-                }
-            };
-        }
-    }
-
     /// Record how the current save ended. With no edits since it started,
     /// load the saved settings again; otherwise keep those edits for another
     /// save instead of replacing them with the older saved values.
@@ -356,19 +306,25 @@ impl ModelForms {
 impl ProviderForm {
     pub fn edited(&mut self, field: EditedField) {
         self.touched = true;
+        // What the server was asked no longer describes the fields: drop
+        // its reply when it comes.
+        let restart = |form: &mut Self| {
+            form.edited_at = Some(Instant::now());
+            form.listing = Listing::Unknown;
+        };
         match field {
             EditedField::Service => {
                 self.dirty.service = true;
-                self.edited_at = Some(Instant::now());
+                restart(self);
             }
             EditedField::Address => {
                 self.dirty.address = true;
-                self.edited_at = Some(Instant::now());
+                restart(self);
             }
             EditedField::Key => {
                 self.dirty.key = true;
-                self.edited_at = Some(Instant::now());
                 self.key_edits += 1;
+                restart(self);
             }
             EditedField::Model => self.dirty.model = true,
             EditedField::Polishing => self.dirty.polishing = true,
@@ -410,81 +366,7 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
             }
             (_, _, None) => {}
         }
-        // The fields as they are name what the list is about: a server
-        // without an address, or one that does not parse, has no models.
-        let query = form
-            .filled
-            .then(|| save::fields(form, cx).ok())
-            .flatten()
-            .filter(|(provider, _)| match provider {
-                Provider::Asr { service, url, .. } | Provider::Polish { service, url, .. } => {
-                    !service.uses_url() || !url.trim().is_empty()
-                }
-            })
-            .map(|(provider, key)| {
-                let endpoint = match &provider {
-                    Provider::Asr { service, url, .. } | Provider::Polish { service, url, .. } => {
-                        format!("{} {} {}", service.as_str(), url.trim(), form.key_edits)
-                    }
-                };
-                (endpoint, provider, key)
-            });
-        if query.is_none() {
-            form.listing = Listing::Unknown;
-        }
-        let settled = form.edited_at.is_none_or(|at| at.elapsed() >= SETTLE);
-        let endpoint = query.as_ref().map(|(endpoint, ..)| endpoint.clone());
-        let ask = settled
-            && match (&form.listing, endpoint.as_deref()) {
-                (_, None) => false,
-                (Listing::Unknown, Some(_)) => true,
-                (
-                    Listing::Asked(asked) | Listing::Listed(asked, _) | Listing::Failed(asked, _),
-                    Some(endpoint),
-                ) if asked != endpoint => true,
-                (Listing::Failed(_, at), Some(_)) => at.elapsed() >= RETRY,
-                (Listing::Asked(_) | Listing::Listed(..), Some(_)) => false,
-            };
-        if visible
-            && ask
-            && let Some((endpoint, provider, key)) = query
-            && commands
-                .try_send(BridgeCommand::ListModels {
-                    role,
-                    endpoint: endpoint.clone(),
-                    provider,
-                    key,
-                })
-                .is_ok()
-        {
-            form.listing = Listing::Asked(endpoint);
-        }
-        let listed = match &form.listing {
-            Listing::Listed(_, models) => models.as_slice(),
-            Listing::Unknown | Listing::Asked(_) | Listing::Failed(..) => &[],
-        };
-        let offered: Vec<SharedString> = form
-            .chosen
-            .iter()
-            .chain(
-                listed
-                    .iter()
-                    .filter(|model| Some(*model) != form.chosen.as_ref()),
-            )
-            .cloned()
-            .collect();
-        let open = form.model.read(cx).focus_handle(cx) != form.closed_focus;
-        if !open && offered != form.offered {
-            let chosen = form.chosen.clone();
-            form.model.update(cx, |select, cx| {
-                select.set_items(ModelChoices::new(offered.clone()), window, cx);
-                match &chosen {
-                    Some(model) => select.set_selected_value(model, window, cx),
-                    None => select.set_selected_index(None, window, cx),
-                }
-            });
-            form.offered = offered;
-        }
+        discovery::discover(form, role, visible, &commands, window, cx);
     }
 }
 
@@ -560,6 +442,7 @@ fn fill(
     if !(preserve && dirty.model) {
         form.chosen = (service == form.chosen_service && !model.trim().is_empty())
             .then(|| SharedString::from(model.clone()));
+        form.detected = false;
     }
     // Each load may follow a new endpoint or key: ask again.
     form.listing = Listing::Unknown;
@@ -580,6 +463,7 @@ fn key_placeholder(key: &KeySource, service: Service) -> String {
     }
 }
 
+mod discovery;
 mod fields;
 mod save;
 
