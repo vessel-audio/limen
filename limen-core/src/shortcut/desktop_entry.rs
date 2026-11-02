@@ -4,8 +4,9 @@
 //! must not be hidden with `NoDisplay`.
 //!
 //! The Nix package installs the entry itself. Elsewhere, `limen
-//! shortcut setup portal` writes one to `$XDG_DATA_HOME/applications`, unless
-//! the data directories already have an entry with this name.
+//! shortcut setup portal` writes one to `$XDG_DATA_HOME/applications`, with
+//! its icon in the user's hicolor theme, unless the data directories already
+//! have an entry with this name.
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -18,6 +19,9 @@ pub const APP_ID: &str = "io.github.Emin017.Limen";
 
 /// The entry as it is kept in the repository.
 const ENTRY: &str = include_str!("../../../data/io.github.Emin017.Limen.desktop");
+
+/// The icon the entry names, installed beside an entry written here.
+const ICON: &str = include_str!("../../../data/io.github.Emin017.Limen.svg");
 
 /// Which command a non-Nix desktop entry launches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,35 +82,48 @@ fn install(home: &Path, system: &[PathBuf], program: &Path, launch: Launch) -> R
     match found {
         Some(result) => result,
         None => {
-            let dir = home.join("applications");
-            fs::create_dir_all(&dir)
-                .with_context(|| format!("failed to create {}", dir.display()))?;
-            let path = dir.join(&name);
-            // Written in full under a temporary name, then linked into place: the
-            // entry never shows half written, and one that another process
-            // created meanwhile is never replaced.
-            let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-            // Only a dead process can have left a file under our process ID.
-            let _ = fs::remove_file(&temp);
-            let linked = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-                .and_then(|mut file| {
-                    file.write_all(entry_for(program, launch).as_bytes())?;
-                    file.sync_all()
-                })
-                .and_then(|()| match fs::hard_link(&temp, &path) {
-                    Ok(()) => Ok(Install::Installed(path.clone())),
-                    Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => {
-                        Ok(Install::Present(path.clone()))
-                    }
-                    Err(error) => Err(error),
-                });
-            let _ = fs::remove_file(&temp);
-            linked.with_context(|| format!("failed to write {}", path.display()))
+            // The icon goes in first, so the entry never names a missing one.
+            create(
+                &home.join("icons/hicolor/scalable/apps"),
+                &format!("{APP_ID}.svg"),
+                ICON,
+            )?;
+            create(
+                &home.join("applications"),
+                &name,
+                &entry_for(program, launch),
+            )
         }
     }
+}
+
+/// Write `contents` to `dir/name` unless a file is already there.
+fn create(dir: &Path, name: &str, contents: &str) -> Result<Install> {
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let path = dir.join(name);
+    // Written in full under a temporary name, then linked into place: the
+    // file never shows half written, and one that another process created
+    // meanwhile is never replaced.
+    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // Only a dead process can have left a file under our process ID.
+    let _ = fs::remove_file(&temp);
+    let linked = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| {
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| match fs::hard_link(&temp, &path) {
+            Ok(()) => Ok(Install::Installed(path.clone())),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => {
+                Ok(Install::Present(path.clone()))
+            }
+            Err(error) => Err(error),
+        });
+    let _ = fs::remove_file(&temp);
+    linked.with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// The entry, with `Exec` running `program` with the selected subcommand.
@@ -174,7 +191,7 @@ mod tests {
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
 
-    use super::{APP_ID, ENTRY, Install, Launch, entry_for, exec_arg, install};
+    use super::{APP_ID, ENTRY, ICON, Install, Launch, entry_for, exec_arg, install};
 
     #[test]
     fn the_entry_runs_the_daemon_and_stays_visible() {
@@ -236,6 +253,11 @@ mod tests {
                 Install::Installed(home.join("applications").join(&name)),
                 Install::Present(home.join("applications").join(&name)),
             )
+        );
+        assert_eq!(
+            fs::read_to_string(home.join(format!("icons/hicolor/scalable/apps/{APP_ID}.svg")))
+                .unwrap(),
+            ICON
         );
 
         fs::remove_dir_all(&home).unwrap();

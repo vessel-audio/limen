@@ -89,6 +89,7 @@ rustPlatform.buildRustPackage {
   # its ID, and GNOME Settings lists the app's shortcuts under it.
   postInstall = ''
     install -Dm644 data/io.github.Emin017.Limen.desktop -t $out/share/applications
+    install -Dm644 data/io.github.Emin017.Limen.svg -t $out/share/icons/hicolor/scalable/apps
     substituteInPlace $out/share/applications/io.github.Emin017.Limen.desktop \
       --replace-fail "Exec=limen daemon" "Exec=$out/bin/limen ${launch}"
   '';
@@ -99,6 +100,7 @@ rustPlatform.buildRustPackage {
     entry=$out/share/applications/io.github.Emin017.Limen.desktop
     desktop-file-validate "$entry"
     grep -qx "Exec=$out/bin/limen ${launch}" "$entry"
+    test -f $out/share/icons/hicolor/scalable/apps/io.github.Emin017.Limen.svg
     runHook postInstallCheck
   '';
 
