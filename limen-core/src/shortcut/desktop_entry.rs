@@ -99,31 +99,39 @@ fn install(home: &Path, system: &[PathBuf], program: &Path, launch: Launch) -> R
 
 /// Write `contents` to `dir/name` unless a file is already there.
 fn create(dir: &Path, name: &str, contents: &str) -> Result<Install> {
-    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let path = dir.join(name);
-    // Written in full under a temporary name, then linked into place: the
-    // file never shows half written, and one that another process created
-    // meanwhile is never replaced.
-    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    // Only a dead process can have left a file under our process ID.
-    let _ = fs::remove_file(&temp);
-    let linked = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .and_then(|mut file| {
-            file.write_all(contents.as_bytes())?;
-            file.sync_all()
-        })
-        .and_then(|()| match fs::hard_link(&temp, &path) {
-            Ok(()) => Ok(Install::Installed(path.clone())),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => {
-                Ok(Install::Present(path.clone()))
-            }
-            Err(error) => Err(error),
-        });
-    let _ = fs::remove_file(&temp);
-    linked.with_context(|| format!("failed to write {}", path.display()))
+    match path.is_file() {
+        // Reused without writing, so a read-only directory that already holds
+        // the file does not stop the install.
+        true => Ok(Install::Present(path)),
+        false => {
+            fs::create_dir_all(dir)
+                .with_context(|| format!("failed to create {}", dir.display()))?;
+            // Written in full under a temporary name, then linked into place:
+            // the file never shows half written, and one that another process
+            // created meanwhile is never replaced.
+            let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+            // Only a dead process can have left a file under our process ID.
+            let _ = fs::remove_file(&temp);
+            let linked = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)
+                .and_then(|mut file| {
+                    file.write_all(contents.as_bytes())?;
+                    file.sync_all()
+                })
+                .and_then(|()| match fs::hard_link(&temp, &path) {
+                    Ok(()) => Ok(Install::Installed(path.clone())),
+                    Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_file() => {
+                        Ok(Install::Present(path.clone()))
+                    }
+                    Err(error) => Err(error),
+                });
+            let _ = fs::remove_file(&temp);
+            linked.with_context(|| format!("failed to write {}", path.display()))
+        }
+    }
 }
 
 /// The entry, with `Exec` running `program` with the selected subcommand.
@@ -188,7 +196,7 @@ fn exec_arg(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
 
     use super::{APP_ID, ENTRY, ICON, Install, Launch, entry_for, exec_arg, install};
@@ -274,6 +282,24 @@ mod tests {
             Install::Present(system.join("applications").join(&name))
         );
         assert!(!home.join("applications").join(&name).exists());
+    }
+
+    #[test]
+    fn an_icon_already_in_a_read_only_theme_is_reused() {
+        let root = std::env::temp_dir().join(format!("limen-desktop-icon-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let icons = home.join("icons/hicolor/scalable/apps");
+        fs::create_dir_all(&icons).unwrap();
+        fs::write(icons.join(format!("{APP_ID}.svg")), ICON).unwrap();
+        fs::set_permissions(&icons, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let installed = install(&home, &[], Path::new("/bin/limen"), Launch::Daemon);
+        fs::set_permissions(&icons, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            installed.unwrap(),
+            Install::Installed(home.join("applications").join(format!("{APP_ID}.desktop")))
+        );
     }
 
     #[test]
