@@ -47,12 +47,14 @@ pub(crate) fn is_saved(config: &Config, provider: &Provider) -> bool {
             .trim_end_matches('/')
             .to_string()
     };
-    // A vendor's endpoint: the base URL its settings name, else its own.
+    // A vendor's endpoint: the base URL its settings name, else its own;
+    // its own written out is the same endpoint as none.
     let vendor_url = |options: &BTreeMap<Service, ProviderOptions>, service: Service| {
         options
             .get(&service)
             .and_then(|options| options.url.as_deref())
             .map(normalized)
+            .filter(|url| Some(url.as_str()) != service.default_url())
     };
     let (saved, chosen) = match provider {
         Provider::Asr {
@@ -134,6 +136,11 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             model,
             options,
         } => {
+            // A key goes out before anything is saved, so the settings are
+            // checked as saving would, a vendor URL among them.
+            for (service, options) in options {
+                options.check(&format!("provider.options.{}", service.as_str()))?;
+            }
             config.provider.options = options.clone();
             config.provider.saved_key = stored(keys.asr, same);
             config.provider.model = model.trim().to_string();
@@ -155,6 +162,9 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             options,
             ..
         } => {
+            for (service, options) in options {
+                options.check(&format!("polish.options.{}", service.as_str()))?;
+            }
             config.polish.options = options.clone();
             config.polish.saved_key = stored(keys.polish, same);
             config.polish.model = model.trim().to_string();
@@ -235,10 +245,12 @@ pub async fn list_models(
 mod tests {
     use std::fs;
 
-    use super::list_models;
+    use super::{is_saved, list_models};
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, Connection, Shape};
-    use crate::config::{ApiKey, ChatApi, Format, KeyChange, Paths, Service};
+    use crate::config::{
+        ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Service,
+    };
     use crate::models::{Polishing, Provider};
 
     /// Paths in a fresh directory holding `config`, where no daemon listens.
@@ -477,5 +489,62 @@ mod tests {
             error.to_string(),
             "polish.url must use HTTPS, or HTTP on a loopback address"
         );
+    }
+
+    #[tokio::test]
+    async fn a_vendor_url_is_checked_before_a_key_goes_to_it() {
+        let paths = scratch("models-vendor-url", "[provider]\nurl = \"\"\n");
+        let polish = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::OpenAi,
+            format: Format::OpenAiCompatible,
+            url: String::new(),
+            model: String::new(),
+            options: [(
+                Service::OpenAi,
+                ProviderOptions {
+                    url: Some("http://192.0.2.1/v1".to_string()),
+                    ..ProviderOptions::default()
+                },
+            )]
+            .into(),
+        };
+        let backend = Recording::default();
+
+        let error = list_models(
+            &paths,
+            &polish,
+            &KeyChange::Set(ApiKey::new("sk".to_string())),
+            &backend,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            (error.to_string(), backend.built.lock().unwrap().clone()),
+            (
+                "polish.options.openai.url must use HTTPS, or HTTP on a loopback address"
+                    .to_string(),
+                Vec::new()
+            )
+        );
+    }
+
+    #[test]
+    fn a_vendor_s_own_url_written_out_is_its_own_endpoint() {
+        let config: Config = toml::from_str(
+            "[provider]\nurl = \"\"\n\n[polish]\nservice = \"openai\"\n\n[polish.options.openai]\nurl = \"https://api.openai.com/v1/\"\n",
+        )
+        .unwrap();
+        let unset = Provider::Polish {
+            polishing: Polishing::Off,
+            service: Service::OpenAi,
+            format: Format::OpenAiCompatible,
+            url: String::new(),
+            model: String::new(),
+            options: Default::default(),
+        };
+
+        assert!(is_saved(&config, &unset));
     }
 }
