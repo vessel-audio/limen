@@ -1,5 +1,6 @@
-//! The services a provider page offers, as a grid of cards. The saved one is
-//! marked; any card opens the dialog that sets its service up.
+//! The services a provider page offers, as a grid of cards: subscriptions,
+//! signed in to, apart from the APIs a key or a server reaches. The saved
+//! one is marked; any card opens the dialog that sets its service up.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt};
@@ -20,11 +21,27 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
     // Cards open nothing until the settings they fill the dialog from load.
     let loaded = form.loaded.is_some();
     let theme = cx.theme().clone();
-    div()
-        .h_flex()
-        .flex_wrap()
-        .gap_3()
-        .children(services.into_iter().enumerate().map(|(index, service)| {
+    let (subscriptions, apis): (Vec<_>, Vec<_>) = services
+        .into_iter()
+        .enumerate()
+        .partition(|(_, service)| service.subscription().is_some());
+    // A page with only one kind needs no headings.
+    let headed = !subscriptions.is_empty() && !apis.is_empty();
+    let group = |title: SharedString, cards: Vec<AnimationElement<Stateful<Div>>>| {
+        div()
+            .v_flex()
+            .gap_3()
+            .children(headed.then(|| {
+                div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(theme.muted_foreground)
+                    .child(title)
+            }))
+            .child(div().h_flex().flex_wrap().gap_3().children(cards))
+    };
+    let card =
+        |(index, service): (usize, Service)| {
             let id = SharedString::from(format!("{prefix}-provider-{}", service.as_str()));
             let label = service_label(service);
             let marked = active == Some(service);
@@ -99,5 +116,15 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                         card.opacity(rest * t).top(px(6. * (1. - t)))
                     },
                 )
-        }))
+        };
+    let [subscriptions, apis] =
+        [subscriptions, apis].map(|services| services.into_iter().map(&card).collect::<Vec<_>>());
+    div()
+        .v_flex()
+        .gap_5()
+        .children(
+            (!subscriptions.is_empty())
+                .then(|| group(rust_i18n::t!("models.subscriptions").into(), subscriptions)),
+        )
+        .child(group(rust_i18n::t!("models.apis").into(), apis))
 }

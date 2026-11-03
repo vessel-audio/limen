@@ -64,7 +64,10 @@ fn main() -> anyhow::Result<ExitCode> {
 
     match cli.command {
         #[cfg(feature = "gui")]
-        Command::Gui => limen_gui::run(paths, Arc::new(limen_rig::Rig)).map(|()| ExitCode::SUCCESS),
+        Command::Gui => {
+            let backend = Arc::new(limen_rig::Rig::new(paths.sign_ins()));
+            limen_gui::run(paths, backend).map(|()| ExitCode::SUCCESS)
+        }
         command => run_async(command, paths),
     }
 }
@@ -79,7 +82,8 @@ fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
                 Command::Gui => unreachable!("GUI commands do not use the async runtime"),
                 Command::Daemon => {
                     let cfg = Config::load_or_create(&paths)?;
-                    limen_core::run_daemon(paths, cfg, Arc::new(limen_rig::Rig)).await?;
+                    let backend = Arc::new(limen_rig::Rig::new(paths.sign_ins()));
+                    limen_core::run_daemon(paths, cfg, backend).await?;
                     ExitCode::SUCCESS
                 }
                 Command::Toggle => {
@@ -99,7 +103,7 @@ fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
                 }
                 Command::Probe { wav } => {
                     let cfg = Config::load_or_create(&paths)?;
-                    limen_core::probe(&cfg, &limen_rig::Rig, &wav).await?;
+                    limen_core::probe(&cfg, &limen_rig::Rig::new(paths.sign_ins()), &wav).await?;
                     ExitCode::SUCCESS
                 }
             };

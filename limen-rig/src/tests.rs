@@ -3,9 +3,16 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-use limen_core::{Api, ChatApi, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Take};
+use limen_core::{
+    Api, ChatApi, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Subscription, Take,
+};
 
 use super::Rig;
+
+/// The backend under test; no test signs in, so its sign-ins stay empty.
+fn rig() -> Rig {
+    Rig::new(std::env::temp_dir().join("limen-rig-tests-sign-ins"))
+}
 
 /// One request as the mock server read it.
 struct Request {
@@ -112,7 +119,7 @@ fn chat_reply(finish_reason: &str) -> Value {
 #[tokio::test]
 async fn a_keyless_compatible_server_gets_the_take_without_a_credential() {
     let (base, server) = mock_server(json!({"text": "完整文本"})).await;
-    let transcriber = Rig
+    let transcriber = rig()
         .transcriber(
             connection(Api::Compatible, format!("{base}/v1"), None),
             "asr".to_string(),
@@ -154,7 +161,7 @@ async fn a_keyless_compatible_server_gets_the_take_without_a_credential() {
 #[tokio::test]
 async fn a_compatible_chat_is_asked_deterministically_and_its_reply_reported() {
     let (base, server) = mock_server(chat_reply("stop")).await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish")),
             "corrector".to_string(),
@@ -194,7 +201,7 @@ async fn a_compatible_chat_is_asked_deterministically_and_its_reply_reported() {
 #[tokio::test]
 async fn a_cut_off_reply_reports_why_it_stopped() {
     let (base, server) = mock_server(chat_reply("length")).await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), None),
             "corrector".to_string(),
@@ -216,7 +223,7 @@ async fn a_cut_off_reply_reports_why_it_stopped() {
 #[tokio::test]
 async fn an_unknown_finish_reason_keeps_none_of_its_text() {
     let (base, server) = mock_server(chat_reply("sk-secret-in-the-reason")).await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), None),
             "corrector".to_string(),
@@ -238,7 +245,7 @@ async fn an_unknown_finish_reason_keeps_none_of_its_text() {
 #[tokio::test]
 async fn deepseek_is_asked_not_to_think() {
     let (base, server) = mock_server(chat_reply("stop")).await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::DeepSeek, base, Some("sk-deepseek")),
             "deepseek-flash".to_string(),
@@ -274,7 +281,7 @@ async fn a_compatible_server_lists_its_models_from_its_api_root() {
     }))
     .await;
 
-    let models = Rig
+    let models = rig()
         .models(connection(Api::Compatible, format!("{base}/v1"), None))
         .await
         .unwrap();
@@ -291,7 +298,7 @@ async fn a_compatible_server_lists_its_models_from_its_api_root() {
 
 #[test]
 fn chat_only_vendors_refuse_to_transcribe() {
-    let rig = Rig;
+    let rig = rig();
     for api in [Api::DeepSeek, Api::Anthropic] {
         let connection = Connection {
             api,
@@ -314,7 +321,7 @@ fn a_compatible_server_needs_its_url() {
         api_key: None,
         shape: Shape::default(),
     };
-    assert!(Rig.chat(connection, "m".to_string()).is_err());
+    assert!(rig().chat(connection, "m".to_string()).is_err());
 }
 
 #[tokio::test]
@@ -325,7 +332,7 @@ async fn a_rejected_key_is_never_quoted_back() {
         json!({"error": {"message": "Invalid API key: sk-secret-123", "code": "invalid_api_key"}}),
     )
     .await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
             "corrector".to_string(),
@@ -349,7 +356,7 @@ async fn a_failed_reply_names_its_status_but_not_its_body() {
         json!({"error": {"message": "upstream said sk-secret-123"}}),
     )
     .await;
-    let transcriber = Rig
+    let transcriber = rig()
         .transcriber(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
             "asr".to_string(),
@@ -379,7 +386,7 @@ async fn a_redirect_is_never_followed_with_the_key() {
         .into_boxed_str(),
     );
     let (base, server) = answering("307 Temporary Redirect", location, json!({})).await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish")),
             "corrector".to_string(),
@@ -399,7 +406,7 @@ async fn a_redirect_is_never_followed_with_the_key() {
 #[tokio::test]
 async fn an_unreachable_service_never_quotes_the_key_in_its_url() {
     // Nothing listens on the discard port; Gemini sends its key in the URL.
-    let model = Rig
+    let model = rig()
         .chat(
             connection(
                 Api::Gemini,
@@ -427,7 +434,7 @@ async fn a_keyless_anthropic_server_gets_no_credential_header() {
         "usage": {"input_tokens": 1, "output_tokens": 1}
     }))
     .await;
-    let model = Rig
+    let model = rig()
         .chat(
             connection(Api::Anthropic, base, None),
             "corrector".to_string(),
@@ -458,7 +465,7 @@ async fn a_keyless_anthropic_server_gets_no_credential_header() {
 
 #[test]
 fn a_keyless_gemini_server_is_refused() {
-    let error = Rig
+    let error = rig()
         .chat(
             connection(Api::Gemini, "http://127.0.0.1:9".to_string(), None),
             "gemini-model".to_string(),
@@ -481,7 +488,7 @@ async fn the_shape_moves_the_key_and_body_and_adds_headers() {
         },
         ..connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish"))
     };
-    let model = Rig.chat(shaped, "corrector".to_string()).unwrap();
+    let model = rig().chat(shaped, "corrector".to_string()).unwrap();
 
     model.reply(EXCHANGE).await.unwrap();
 
@@ -520,7 +527,7 @@ async fn the_chat_api_chosen_is_the_one_asked() {
             ..connection(api, format!("{base}/v1"), Some("sk-polish"))
         };
         // Only the route matters: a Chat Completions reply is no Responses one.
-        let _ = Rig
+        let _ = rig()
             .chat(shaped, "corrector".to_string())
             .unwrap()
             .reply(EXCHANGE)
@@ -568,7 +575,8 @@ fn a_chat_api_or_key_header_the_api_cannot_take_is_refused() {
         ),
     ]
     .map(|connection| {
-        Rig.chat(connection, "m".to_string())
+        rig()
+            .chat(connection, "m".to_string())
             .err()
             .map(|error| error.to_string())
     });
@@ -592,7 +600,7 @@ async fn only_failures_that_may_pass_are_marked_transient() {
         "400 Bad Request",
     ] {
         let (base, server) = answering(status, "", json!({"error": {"message": "no"}})).await;
-        let model = Rig
+        let model = rig()
             .chat(
                 connection(Api::Compatible, format!("{base}/v1"), Some("sk")),
                 "corrector".to_string(),
@@ -602,7 +610,7 @@ async fn only_failures_that_may_pass_are_marked_transient() {
         server.await.unwrap();
         transient.push(error.is::<limen_core::Transient>());
     }
-    let unreachable = Rig
+    let unreachable = rig()
         .chat(
             connection(Api::Compatible, "http://127.0.0.1:9/v1".to_string(), None),
             "corrector".to_string(),
@@ -616,5 +624,34 @@ async fn only_failures_that_may_pass_are_marked_transient() {
     assert_eq!(
         (transient, unreachable),
         (vec![true, true, false, false], true)
+    );
+}
+
+#[tokio::test]
+async fn a_subscription_never_signed_in_to_is_refused_without_asking() {
+    let empty = std::env::temp_dir().join(format!("limen-rig-no-sign-ins-{}", std::process::id()));
+    let backend = Rig::new(empty);
+    let signed_out = Connection {
+        api: Api::ChatGpt,
+        base_url: None,
+        api_key: None,
+        shape: Shape::default(),
+    };
+
+    let error = backend
+        .chat(signed_out, "gpt-5.5".to_string())
+        .unwrap()
+        .reply(EXCHANGE)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(
+        (error, backend.signed_in(Subscription::ChatGpt)),
+        (
+            "not signed in to ChatGPT, or the sign-in expired: sign in on the Polish page"
+                .to_string(),
+            false
+        )
     );
 }

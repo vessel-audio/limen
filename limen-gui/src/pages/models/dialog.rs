@@ -1,6 +1,6 @@
 //! The dialog a provider card opens: a custom server's format, the URL, the
-//! chat API where there is a choice, the key, and the model, which can be
-//! detected and tested before saving.
+//! chat API where there is a choice, the key or a subscription's sign-in,
+//! and the model, which can be detected and tested before saving.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants;
@@ -18,6 +18,8 @@ use crate::a11y;
 use crate::app::AppView;
 use crate::motion;
 
+mod account;
+
 /// Open the dialog for `service` on `role`'s page, once its settings have
 /// loaded.
 pub fn open(
@@ -32,6 +34,7 @@ pub fn open(
         return;
     }
     fill(form, role, service, window, cx);
+    form.ask_account(&view.commands.clone());
     let entity = cx.entity();
     window.open_dialog(cx, move |dialog, _, cx| {
         body(dialog, entity.clone(), role, service, cx)
@@ -71,13 +74,16 @@ fn body(
             .into_any_element(),
         )
     });
-    let url = (
-        rust_i18n::t!("models.url").to_string(),
-        Input::new(&form.url)
-            .accessibility_id(format!("{prefix}-url"))
-            .aria_label(rust_i18n::t!("models.url").to_string())
-            .into_any_element(),
-    );
+    // A subscription's sign-in names its server.
+    let url = (service.uses_url() || service.default_url().is_some()).then(|| {
+        (
+            rust_i18n::t!("models.url").to_string(),
+            Input::new(&form.url)
+                .accessibility_id(format!("{prefix}-url"))
+                .aria_label(rust_i18n::t!("models.url").to_string())
+                .into_any_element(),
+        )
+    });
     // Only polishing chats, and only OpenAI's APIs offer two ways to.
     let chat_api = match role {
         ModelRole::Asr => None,
@@ -160,33 +166,47 @@ fn body(
                 .disabled(!form.can_check())
                 .on_click(on(check)),
         );
-    let rows = format.into_iter().chain([url]).chain(chat_api).chain([
-        (
+    // A subscription is signed in to, where anything else takes a key.
+    let credential = match service.subscription() {
+        Some(_) => (
+            rust_i18n::t!("models.account").to_string(),
+            account::row(form, prefix, &entity, role, cx),
+        ),
+        None => (
             rust_i18n::t!("models.key").to_string(),
             key.into_any_element(),
         ),
+    };
+    let rows = format.into_iter().chain(url).chain(chat_api).chain([
+        credential,
         (
             rust_i18n::t!("models.model").to_string(),
             model.into_any_element(),
         ),
     ]);
     let fields = &form.advanced;
-    let advanced = [
-        ("models.key_header", "key-header", &fields.key_header),
-        ("models.headers", "headers", &fields.headers),
-        ("models.body", "body", &fields.body),
-        ("models.timeout", "timeout", &fields.timeout),
-        ("models.retries", "retries", &fields.retries),
-    ]
-    .map(|(label, id, input)| {
-        (
-            rust_i18n::t!(label).to_string(),
-            Input::new(input)
-                .accessibility_id(format!("{prefix}-{id}"))
-                .aria_label(rust_i18n::t!(label).to_string())
-                .into_any_element(),
-        )
-    });
+    let key_header = service.subscription().is_none().then_some((
+        "models.key_header",
+        "key-header",
+        &fields.key_header,
+    ));
+    let advanced = key_header
+        .into_iter()
+        .chain([
+            ("models.headers", "headers", &fields.headers),
+            ("models.body", "body", &fields.body),
+            ("models.timeout", "timeout", &fields.timeout),
+            ("models.retries", "retries", &fields.retries),
+        ])
+        .map(|(label, id, input)| {
+            (
+                rust_i18n::t!(label).to_string(),
+                Input::new(input)
+                    .accessibility_id(format!("{prefix}-{id}"))
+                    .aria_label(rust_i18n::t!(label).to_string())
+                    .into_any_element(),
+            )
+        });
     let row = |(label, control): (String, AnyElement)| {
         div()
             .h_flex()

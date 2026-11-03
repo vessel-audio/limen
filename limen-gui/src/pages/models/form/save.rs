@@ -28,8 +28,11 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
         (false, Provider::Asr { format, url, .. } | Provider::Polish { format, url, .. }) => (
             *format,
             url.clone(),
+            // Only a vendor with a URL of its own can be sent elsewhere.
             Some(typed_url).filter(|typed| {
-                !typed.is_empty() && Some(typed.trim_end_matches('/')) != service.default_url()
+                service
+                    .default_url()
+                    .is_some_and(|own| !typed.is_empty() && typed.trim_end_matches('/') != own)
             }),
         ),
     };

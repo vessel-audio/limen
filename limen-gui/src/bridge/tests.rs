@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use limen_core::{BoxFuture, ChatModel, Connection, ModelBackend, Transcriber};
+use limen_core::{
+    BoxFuture, ChatModel, Connection, ModelBackend, SignInPrompt, Subscription, Transcriber,
+};
 
 use super::{Backoff, is_outdated};
 
@@ -19,6 +21,18 @@ impl ModelBackend for NoModels {
 
     fn models(&self, _: Connection) -> BoxFuture<'_, anyhow::Result<Vec<String>>> {
         Box::pin(async { anyhow::bail!("bridge tests list no models") })
+    }
+
+    fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async { anyhow::bail!("bridge tests sign in to nothing") })
+    }
+
+    fn sign_out(&self, _: Subscription) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn signed_in(&self, _: Subscription) -> bool {
+        false
     }
 }
 
@@ -95,6 +109,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     let env = Env {
         paths: paths.clone(),
         models: Arc::new(NoModels),
+        signing: Default::default(),
     };
     handle_command(
         &env,

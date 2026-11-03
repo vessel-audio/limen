@@ -110,6 +110,8 @@ enabled = false
 #   "openai", "anthropic", "gemini", "deepseek", "mistral", "groq",
 #   "openrouter", "xai": the vendor's own API; `url` and `format` are not
 #   used
+#   "chatgpt", "copilot": your ChatGPT or GitHub Copilot plan, signed in to on
+#   the Polish page; no key, `url`, or `format`
 service = "custom"
 # What a custom server speaks: "openai-compatible", such as llama.cpp,
 # Ollama, or vLLM at "http://127.0.0.1:8080/v1", or any of the vendors'
@@ -160,6 +162,12 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// The directory a backend keeps subscription sign-ins in, beside the
+    /// config file and as private as its keys.
+    pub fn sign_ins(&self) -> PathBuf {
+        self.config_file.with_file_name("sign-ins")
+    }
+
     /// Resolve socket, log, cache, and config paths from the user's XDG directories.
     pub fn discover() -> Result<Self> {
         let proj = ProjectDirs::from("dev", "limen", "limen")
@@ -655,12 +663,16 @@ mod tests {
                 "[polish.options.custom]\nurl = \"https://gateway.example/v1\"",
                 "[provider.options.openai]\nchat_api = \"responses\"",
                 "[polish.options.anthropic]\nchat_api = \"chat-completions\"",
+                "[polish.options.chatgpt]\nurl = \"https://gateway.example/v1\"",
+                "[polish.options.copilot]\nkey_header = \"api-key\"",
             ]
             .map(refused),
             [
                 "polish.options.custom.url is not used: a custom server's URL is polish.url",
                 "provider.options.openai.chat_api is not used: only polishing chats",
                 "polish.options.anthropic.chat_api is not used: this API has only its own",
+                "polish.options.chatgpt.url is not used: the sign-in names the server",
+                "polish.options.copilot.key_header is not used: a subscription takes no key",
             ]
         );
     }

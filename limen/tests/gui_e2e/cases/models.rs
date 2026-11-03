@@ -88,7 +88,7 @@ fn closed(session: &Session) -> Result<()> {
 fn open_card(session: &Session, card: &str, prefix: &str) -> Result<()> {
     let open = || {
         session.wait("the page", |nodes| {
-            Some(nodes.iter().any(|node| node.id == format!("{prefix}-key")))
+            Some(nodes.iter().any(|node| node.id == format!("{prefix}-save")))
         })
     };
     // A card does nothing until the settings load; clicking it again while
@@ -429,6 +429,33 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
             .unwrap_or_default();
         Ok(url == "http://b/v1" && reloads(&session, &v1::Request::ProviderReload)? == 2)
     })?;
+    Ok(())
+}
+
+/// A subscription is signed in to rather than given a key: its dialog asks
+/// for no key or URL, says it is not signed in yet, and saves without one.
+pub fn a_subscription_is_signed_in_to_not_given_a_key() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("polish-page")?;
+    show_polish_providers(&session)?;
+    open_card(&session, "polish-provider-chatgpt", "polish")?;
+    session.named("polish-account", "Not signed in")?;
+    session.node("polish-sign-in")?;
+    session.absent("polish-key")?;
+    session.absent("polish-url")?;
+    type_model(&session, "typed-model")?;
+    session.click("polish-save")?;
+    session.named("toast", "Polish settings applied")?;
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        (
+            config.polish.service,
+            config.polish.model.as_str(),
+            config.polish.enabled
+        ) == (Some(Service::ChatGpt), "typed-model", true),
+        "saved {:?}",
+        config.polish
+    );
     Ok(())
 }
 

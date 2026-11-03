@@ -66,6 +66,8 @@ impl SearchableListDelegate for ModelChoices {
 pub fn service_label(service: Service) -> SharedString {
     match service {
         Service::Custom => rust_i18n::t!("models.custom").into(),
+        Service::ChatGpt => "ChatGPT".into(),
+        Service::Copilot => "Copilot".into(),
         Service::OpenAi => "OpenAI".into(),
         Service::Anthropic => "Anthropic".into(),
         Service::Gemini => "Gemini".into(),
