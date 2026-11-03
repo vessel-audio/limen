@@ -42,6 +42,9 @@ pub struct ProviderForm {
     /// Polishing as the page's switch shows it: the saved state, or the one
     /// the switch asked to save.
     pub polishing: Polishing,
+    /// The switch is on, but polishing is saved off until a provider is set
+    /// up in a dialog.
+    unsaved_on: bool,
     /// The dialog is showing.
     pub open: bool,
     /// Counts the dialog's openings, so a save from an earlier one is told
@@ -178,6 +181,7 @@ impl ModelForms {
                 loaded: None,
                 arrived: None,
                 polishing: Polishing::Off,
+                unsaved_on: false,
                 open: false,
                 opening: 0,
                 saved_from: None,
@@ -274,8 +278,10 @@ impl ModelForms {
                 })]
             }
             Err(message) => {
-                // The switch shows what is saved again.
-                if let Some((Provider::Polish { polishing, .. }, _)) = &form.loaded {
+                // A refused switch shows what is saved again.
+                if let (None, Some((Provider::Polish { polishing, .. }, _))) =
+                    (form.saved_from, &form.loaded)
+                {
                     form.polishing = *polishing;
                 }
                 form.touched = form.touched || own;
@@ -346,7 +352,12 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
         }
         if let Some(settings) = form.arrived.take() {
             if let (Provider::Polish { polishing, .. }, None) = (&settings.0, form.saving) {
-                form.polishing = *polishing;
+                // A switch turned on before any provider stays on.
+                form.unsaved_on = form.unsaved_on && *polishing == Polishing::Off;
+                form.polishing = match (*polishing, form.unsaved_on) {
+                    (Polishing::On, _) | (Polishing::Off, true) => Polishing::On,
+                    (Polishing::Off, false) => Polishing::Off,
+                };
             }
             form.loaded = Some(settings);
         }
