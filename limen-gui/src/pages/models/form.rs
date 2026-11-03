@@ -315,6 +315,9 @@ impl ModelForms {
                 }
                 form.touched = form.touched || own;
                 form.error = Some(message);
+                // A daemon that refused the change leaves it written, so
+                // the page shows what the file holds, not what it held.
+                form.stale = true;
                 Vec::new()
             }
         }
