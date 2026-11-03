@@ -11,10 +11,12 @@ Fcitx-compatible input context (Ghostty, Claude Code, GTK applications).
 - Fcitx5 5.1.0 or newer with its D-Bus addon
 - CMake, pkg-config, a C++ compiler, and Fcitx5 development files for the
   user-local text-input addon
-- An ASR service: a server exposing OpenAI-compatible
-  `POST /v1/audio/transcriptions`, such as
-  [sglang-omni](https://github.com/sgl-project/sglang-omni) serving Qwen3-ASR,
-  the whisper.cpp server, or an API key for OpenAI, Groq, Mistral, or Gemini
+- An ASR service, one of:
+  - a server exposing OpenAI-compatible `POST /v1/audio/transcriptions`, such
+    as [sglang-omni](https://github.com/sgl-project/sglang-omni) serving
+    Qwen3-ASR
+  - the whisper.cpp server, which takes the take at exactly its configured URL
+  - an API key for OpenAI, Groq, Mistral, or Gemini
 - For hold-to-talk, a desktop with the GlobalShortcuts portal (GNOME 48 or
   newer); toggling works with any desktop shortcut
 
