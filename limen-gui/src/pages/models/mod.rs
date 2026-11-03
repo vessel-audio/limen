@@ -3,7 +3,7 @@
 //! offers its services as cards; a card opens the dialog that sets it up.
 
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Disableable, StyledExt};
+use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, scroll::ScrollbarMode};
 use gpui_kit::*;
 use limen_core::{ModelRole, Polishing};
 
@@ -20,16 +20,20 @@ pub use form::{ModelForms, follow};
 use form::set_polishing;
 
 pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
-    let (form, title, error_id) = match role {
+    let (form, title, error_id, scroll, area) = match role {
         ModelRole::Asr => (
             &view.models.asr,
             rust_i18n::t!("models.asr_title"),
             "asr-error",
+            &view.asr_scroll,
+            "asr-scroll",
         ),
         ModelRole::Polish => (
             &view.models.polish,
             rust_i18n::t!("models.polish_title"),
             "polish-error",
+            &view.polish_scroll,
+            "polish-scroll",
         ),
     };
     let switch = match role {
@@ -70,13 +74,14 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
     };
     // An open dialog shows its own error.
     let error = form.error.clone().filter(|_| !form.open);
-    div()
+    let content = div()
         .v_flex()
         .w_full()
         .max_w(px(720.))
         .mx_auto()
         .gap_5()
         .p_8()
+        .on_scroll(scroll.on_scroll())
         .child(super::title(title))
         .children(switch)
         // Polishing off needs no provider.
@@ -96,5 +101,13 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                     crate::motion::enter(),
                     |alert, t| alert.opacity(t),
                 )
-        }))
+        }));
+    // Taller than the window, as with the providers and an error shown, the
+    // page scrolls rather than running under the footer.
+    scroll
+        .container(
+            div().id(area).accessibility_id(area).child(content),
+            ScrollbarMode::Scrolling,
+        )
+        .flex_1()
 }
