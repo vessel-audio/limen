@@ -1,183 +1,77 @@
 //! The model provider pages under Models in the sidebar: one for the ASR
-//! provider that transcribes, one for the provider that polishes.
+//! provider that transcribes, one for the provider that polishes. Each
+//! offers its services as cards; a card opens the dialog that sets it up.
 
-use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::component::input::Input;
-use gpui_kit::component::select::Select;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Disableable, StyledExt};
 use gpui_kit::*;
 use limen_core::{ModelRole, Polishing};
 
 use crate::a11y;
 use crate::app::AppView;
-use crate::settings::{Segment, segmented};
 
+mod cards;
 mod choices;
+mod dialog;
 mod form;
 
 pub use form::{ModelForms, follow};
 
-use form::{Address, EditedField, check, detect, save};
+use form::set_polishing;
 
 pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
-    let (form, prefix, title) = match role {
-        ModelRole::Asr => (&view.models.asr, "asr", rust_i18n::t!("models.asr_title")),
+    let (form, title, error_id) = match role {
+        ModelRole::Asr => (
+            &view.models.asr,
+            rust_i18n::t!("models.asr_title"),
+            "asr-error",
+        ),
         ModelRole::Polish => (
             &view.models.polish,
-            "polish",
             rust_i18n::t!("models.polish_title"),
+            "polish-error",
         ),
     };
-    let service = (
-        rust_i18n::t!("models.service").to_string(),
-        div()
-            .h_flex()
-            .child(
-                div().w(px(260.)).child(
-                    Select::new(&form.service)
-                        .id(SharedString::from(format!("{prefix}-service")))
-                        .accessibility_label(rust_i18n::t!("models.service").to_string()),
+    let switch = match role {
+        ModelRole::Asr => None,
+        ModelRole::Polish => Some(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_4()
+                .px_5()
+                .py_3()
+                .rounded_xl()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.18))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .font_medium()
+                        .child(rust_i18n::t!("models.polishing").to_string()),
+                )
+                .child(
+                    Switch::new("polishing")
+                        .checked(form.polishing == Polishing::On)
+                        .accessibility_label(rust_i18n::t!("models.polishing").to_string())
+                        .disabled(form.loaded.is_none() || form.saving.is_some())
+                        .on_click(cx.listener(|this, on: &bool, _, cx| {
+                            set_polishing(
+                                this,
+                                match on {
+                                    true => Polishing::On,
+                                    false => Polishing::Off,
+                                },
+                            );
+                            cx.notify();
+                        })),
                 ),
-            )
-            .into_any_element(),
-    );
-    // A vendor's own API has no server to name.
-    let server = form.chosen_service.uses_url();
-    let address = match &form.address {
-        Address::Server { server: input } => [
-            Some(service),
-            server.then(|| {
-                (
-                    rust_i18n::t!("models.server").to_string(),
-                    Input::new(input)
-                        .accessibility_id("asr-server")
-                        .aria_label(rust_i18n::t!("models.server").to_string())
-                        .into_any_element(),
-                )
-            }),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>(),
-        Address::Url { polishing, url } => [
-            Some((
-                rust_i18n::t!("models.polishing").to_string(),
-                // A row of its own, so the track keeps the width of its options.
-                div()
-                    .h_flex()
-                    .child(segmented(
-                        "polishing",
-                        rust_i18n::t!("models.polishing").to_string(),
-                        rems(4.),
-                        vec![
-                            Segment {
-                                id: "polishing-off".into(),
-                                label: rust_i18n::t!("settings.off").to_string(),
-                                value: Polishing::Off,
-                            },
-                            Segment {
-                                id: "polishing-on".into(),
-                                label: rust_i18n::t!("settings.on").to_string(),
-                                value: Polishing::On,
-                            },
-                        ],
-                        *polishing,
-                        |this, polishing, _, _| {
-                            let form = this.models.form(ModelRole::Polish);
-                            if let Address::Url {
-                                polishing: shown, ..
-                            } = &mut form.address
-                            {
-                                *shown = polishing;
-                            }
-                            form.edited(EditedField::Polishing);
-                        },
-                        cx,
-                    ))
-                    .into_any_element(),
-            )),
-            Some(service),
-            server.then(|| {
-                (
-                    rust_i18n::t!("models.url").to_string(),
-                    Input::new(url)
-                        .accessibility_id("polish-url")
-                        .aria_label(rust_i18n::t!("models.url").to_string())
-                        .into_any_element(),
-                )
-            }),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>(),
+        ),
     };
-    let saved_key = form.loaded.as_ref().is_some_and(|(_, key)| key.is_saved()) && !form.clear_key;
-    let key = div()
-        .h_flex()
-        .gap_2()
-        .child(
-            div().flex_1().min_w_0().child(
-                Input::new(&form.key)
-                    .mask_toggle()
-                    .accessibility_id(format!("{prefix}-key"))
-                    .aria_label(rust_i18n::t!("models.key").to_string()),
-            ),
-        )
-        .children(saved_key.then(|| {
-            a11y::button(format!("{prefix}-key-remove"))
-                .ghost()
-                .label(rust_i18n::t!("models.remove_key").to_string())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    let form = this.models.form(role);
-                    form.clear_key = true;
-                    form.edited(EditedField::Key);
-                    form.key.update(cx, |input, cx| {
-                        input.set_placeholder(
-                            rust_i18n::t!("models.key_removed").to_string(),
-                            window,
-                            cx,
-                        )
-                    });
-                }))
-        }));
-    let model = div()
-        .h_flex()
-        .gap_2()
-        .child(
-            div().flex_1().min_w_0().child(
-                Select::new(&form.model)
-                    .id(SharedString::from(format!("{prefix}-model")))
-                    .accessibility_label(rust_i18n::t!("models.model").to_string())
-                    .placeholder(rust_i18n::t!("models.model").to_string())
-                    .search_placeholder(rust_i18n::t!("models.search").to_string()),
-            ),
-        )
-        .child(
-            a11y::button(format!("{prefix}-detect"))
-                .ghost()
-                .label(rust_i18n::t!("models.detect").to_string())
-                .flex_shrink_0()
-                .disabled(form.loaded.is_none() || form.detecting())
-                .on_click(cx.listener(move |this, _, _, cx| detect(this, role, cx))),
-        )
-        .child(
-            a11y::button(format!("{prefix}-test"))
-                .ghost()
-                .label(rust_i18n::t!("models.test").to_string())
-                .flex_shrink_0()
-                .disabled(!form.can_check())
-                .on_click(cx.listener(move |this, _, _, cx| check(this, role, cx))),
-        );
-    let rows = address.into_iter().chain([
-        (
-            rust_i18n::t!("models.key").to_string(),
-            key.into_any_element(),
-        ),
-        (
-            rust_i18n::t!("models.model").to_string(),
-            model.into_any_element(),
-        ),
-    ]);
+    // An open dialog shows its own error.
+    let error = form.error.clone().filter(|_| !form.open);
     div()
         .v_flex()
         .w_full()
@@ -186,65 +80,17 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
         .gap_5()
         .p_8()
         .child(super::title(title))
-        .child(
-            div()
-                .v_flex()
-                .rounded_xl()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted.opacity(0.18))
-                .children(rows.enumerate().map(|(index, (label, control))| {
-                    let row = div()
-                        .h_flex()
-                        .items_center()
-                        .gap_4()
-                        .px_5()
-                        .py_3()
-                        .border_color(cx.theme().border)
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .w(px(96.))
-                                .text_sm()
-                                .font_medium()
-                                .child(label),
-                        )
-                        .child(div().flex_1().min_w_0().child(control));
-                    match index {
-                        0 => row,
-                        _ => row.border_t_1(),
-                    }
-                })),
-        )
-        .child(
-            div()
-                .h_flex()
-                .items_start()
-                .gap_4()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .children(form.error.as_ref().map(|error| {
-                            a11y::alert(
-                                match role {
-                                    ModelRole::Asr => "asr-error",
-                                    ModelRole::Polish => "polish-error",
-                                },
-                                error.clone(),
-                            )
-                            .text_sm()
-                            .text_color(cx.theme().danger)
-                            .child(error.clone())
-                        })),
+        .children(switch)
+        .child(cards::grid(view, role, cx))
+        .children(error.map(|error| {
+            a11y::alert(error_id, error.clone())
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(error.clone())
+                .with_animation(
+                    SharedString::from(format!("{error_id}-{error}")),
+                    crate::motion::enter(),
+                    |alert, t| alert.opacity(t),
                 )
-                .child(
-                    a11y::button(format!("{prefix}-save"))
-                        .primary()
-                        .label(rust_i18n::t!("models.save").to_string())
-                        .flex_shrink_0()
-                        .disabled(!form.touched || form.saving.is_some() || form.loaded.is_none())
-                        .on_click(cx.listener(move |this, _, _, cx| save(this, role, cx))),
-                ),
-        )
+        }))
 }

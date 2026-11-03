@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, ensure};
 use atspi::{Role, State};
-use limen_core::{Config, Service, v1};
+use limen_core::{Config, Format, Service, v1};
 
 use super::retype;
 use crate::daemon::Scenario;
 use crate::desktop::{Key, Node};
-use crate::session::{Launch, Session, Target};
+use crate::session::{Session, Target};
 
 /// An OpenAI-compatible server that lists `models`, transcribes every
 /// take to nothing, and corrects every text; returns its address and the
@@ -83,13 +83,35 @@ fn closed(session: &Session) -> Result<()> {
     })
 }
 
-/// Pick the service at `index` from the list; its items have no accessible
-/// names. The ASR list offers an OpenAI-compatible server, the whisper.cpp
-/// server, then the vendors; the polishing list the OpenAI-compatible
-/// server, OpenAI, Anthropic, then the other vendors.
-fn choose_service(session: &Session, index: usize) -> Result<()> {
-    session.click(Target::Named(Role::ComboBox, "Service"))?;
-    let item = session.settled_by("a service in the list", |nodes| {
+/// Open the dialog of the card `card`, such as `asr-provider-custom`, once
+/// the page's settings have loaded.
+fn open_card(session: &Session, card: &str, prefix: &str) -> Result<()> {
+    let open = || {
+        session.wait("the page", |nodes| {
+            Some(nodes.iter().any(|node| node.id == format!("{prefix}-key")))
+        })
+    };
+    // A card does nothing until the settings load; clicking it again while
+    // its dialog opens would land on the backdrop and close it.
+    session.until(&format!("{card} to open its dialog"), || {
+        if open()? {
+            return Ok(true);
+        }
+        session.click(card)?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        open()
+    })
+}
+
+/// The page's polishing switch.
+const POLISHING: Target = Target::Named(Role::ToggleButton, "Polishing");
+
+/// Pick the type at `index` from a custom server's list; its items have no
+/// accessible names. Both lists start with OpenAI-compatible; the ASR list
+/// offers whisper.cpp next, the polishing list OpenAI.
+fn choose_format(session: &Session, index: usize) -> Result<()> {
+    session.click(Target::Named(Role::ComboBox, "Type"))?;
+    let item = session.settled_by("a type in the list", |nodes| {
         nodes
             .iter()
             .filter(|node| node.role == Role::ListItem)
@@ -130,19 +152,22 @@ pub fn the_dictation_button_opens_the_asr_page() -> Result<()> {
     Ok(())
 }
 
-/// A service, a server, a key, and a typed model are saved together: the
-/// config holds the service, URL, and model, the key goes to a private file
-/// of its own, and the daemon reloads the provider once.
+/// A custom whisper.cpp server, its key, and a typed model are saved from
+/// the dialog together: the config holds the service, type, URL, and model,
+/// the key goes to a private file of its own, the daemon reloads the
+/// provider once, and the dialog closes.
 pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    choose_service(&session, 1)?;
-    retype(&session, "asr-server", "http://10.0.0.2:9000")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
+    choose_format(&session, 1)?;
+    retype(&session, "asr-url", "http://10.0.0.2:9000/inference")?;
     session.click("asr-key")?;
     session.x11().type_text("sk-asr")?;
     type_model(&session, "Qwen/Qwen3-ASR-1.7B")?;
     session.click("asr-save")?;
     session.named("toast", "ASR settings applied")?;
+    session.absent("asr-key")?;
     let config_file = &session.paths().config_file;
     let config = Config::load(config_file)?;
     let keys = config_file.with_file_name("keys.toml");
@@ -150,21 +175,21 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     ensure!(
         (
             config.provider.service,
+            config.provider.format,
             config.provider.url.as_str(),
             config.provider.model.as_str(),
             config.api_key().as_deref(),
             mode,
         ) == (
-            Some(Service::WhisperCpp),
+            Some(Service::Custom),
+            Some(Format::WhisperCpp),
             "http://10.0.0.2:9000/inference",
             "Qwen/Qwen3-ASR-1.7B",
             Some("sk-asr"),
             0o600
         ),
-        "saved {:?}, {:?}, a key {:?} in mode {mode:o}",
-        config.provider.url,
-        config.provider.model,
-        config.api_key(),
+        "saved {:?}",
+        config.provider
     );
     ensure!(
         !std::fs::read_to_string(config_file)?.contains("sk-asr"),
@@ -177,12 +202,39 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     Ok(())
 }
 
-/// A server that is not a bare http(s) address is reported under the page
-/// and neither written nor sent to the daemon.
+/// A vendor needs only its key and model: its dialog asks for nothing else,
+/// and saving it names the vendor.
+pub fn a_vendor_is_chosen_from_its_card() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("asr-page")?;
+    open_card(&session, "asr-provider-groq", "asr")?;
+    session.absent("asr-url")?;
+    session.click("asr-key")?;
+    session.x11().type_text("sk-groq")?;
+    type_model(&session, "whisper-large-v3")?;
+    session.click("asr-save")?;
+    session.named("toast", "ASR settings applied")?;
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        (
+            config.provider.service,
+            config.provider.model.as_str(),
+            config.api_key().as_deref()
+        ) == (Some(Service::Groq), "whisper-large-v3", Some("sk-groq")),
+        "saved {:?}",
+        config.provider
+    );
+    Ok(())
+}
+
+/// A URL that is not an http(s) address is reported in the dialog and
+/// neither written nor sent to the daemon.
 pub fn an_invalid_asr_server_is_reported() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    retype(&session, "asr-server", "ftp://10.0.0.2")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
+    retype(&session, "asr-url", "ftp://10.0.0.2")?;
+    type_model(&session, "typed-model")?;
     session.click("asr-save")?;
     let error = session.node("asr-error")?;
     ensure!(
@@ -201,40 +253,18 @@ pub fn an_invalid_asr_server_is_reported() -> Result<()> {
     Ok(())
 }
 
-/// Polishing is turned on with a local server and a typed model. Once
-/// saved, the page lists the models the new server offers, asking with the
-/// saved key.
+/// A local polishing server is set up in its dialog, asking for its models
+/// with the typed key, and the page's switch then turns polishing on.
 pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
-    session.click("polishing-on")?;
-    retype(
-        &session,
-        "polish-url",
-        &format!("{server}/v1/chat/completions"),
-    )?;
+    open_card(&session, "polish-provider-custom", "polish")?;
+    retype(&session, "polish-url", &format!("{server}/v1"))?;
     session.click("polish-key")?;
     session.x11().type_text("sk-polish")?;
-    type_model(&session, "listed-b")?;
-    session.click("polish-save")?;
-    session.named("toast", "Polish settings applied")?;
-    let config = Config::load(&session.paths().config_file)?;
-    ensure!(
-        (
-            config.polish.enabled,
-            config.polish.model.as_str(),
-            config.polish.api_key().as_deref()
-        ) == (true, "listed-b", Some("sk-polish")),
-        "saved {:?}",
-        config.polish
-    );
-    ensure!(
-        reloads(&session, &v1::Request::PolishReload)? == 1,
-        "the daemon was not asked to reload polishing once"
-    );
     // The list may arrive after the select first opens, and an open select
-    // keeps its items: reopen until it offers the chosen and the other model.
+    // keeps its items: reopen until it offers both listed models.
     session.until("the listed models to be offered", || {
         session.click(Target::Named(Role::ComboBox, "Model"))?;
         session.node(Role::List)?;
@@ -243,6 +273,36 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
         closed(&session)?;
         Ok(offered)
     })?;
+    type_model(&session, "listed-b")?;
+    session.click("polish-save")?;
+    session.named("toast", "Polish settings applied")?;
+    session.absent("polish-key")?;
+    session.click(POLISHING)?;
+    session.until("polishing to be saved on", || {
+        Ok(Config::load(&session.paths().config_file).is_ok_and(|config| config.polish.enabled))
+    })?;
+    let config = Config::load(&session.paths().config_file)?;
+    ensure!(
+        (
+            config.polish.service,
+            config.polish.format,
+            config.polish.url.as_str(),
+            config.polish.model.as_str(),
+            config.polish.api_key().as_deref()
+        ) == (
+            Some(Service::Custom),
+            Some(Format::OpenAiCompatible),
+            format!("{server}/v1").as_str(),
+            "listed-b",
+            Some("sk-polish")
+        ),
+        "saved {:?}",
+        config.polish
+    );
+    ensure!(
+        reloads(&session, &v1::Request::PolishReload)? == 2,
+        "the daemon was not asked to reload polishing for the dialog and the switch"
+    );
     let asked = requests.lock().unwrap().clone();
     ensure!(
         asked
@@ -256,6 +316,23 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     Ok(())
 }
 
+/// The switch cannot turn polishing on before a server is set up: it says
+/// so and shows polishing off again.
+pub fn polishing_needs_a_server_first() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("polish-page")?;
+    session.until("the switch to answer", || {
+        session.click(POLISHING)?;
+        Ok(session.node("polish-error").is_ok())
+    })?;
+    session.named("polish-error", "enter the server's URL")?;
+    ensure!(
+        !session.paths().config_file.exists(),
+        "a refused switch was written"
+    );
+    Ok(())
+}
+
 /// A saved key can be removed; the other provider's key stays.
 pub fn a_saved_key_is_removed() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
@@ -263,6 +340,7 @@ pub fn a_saved_key_is_removed() -> Result<()> {
     std::fs::create_dir_all(keys.parent().unwrap())?;
     std::fs::write(&keys, "asr = \"sk-asr\"\npolish = \"sk-polish\"\n")?;
     session.click("polish-page")?;
+    open_card(&session, "polish-provider-custom", "polish")?;
     session.click("polish-key-remove")?;
     session.click("polish-save")?;
     session.named("toast", "Polish settings applied")?;
@@ -276,10 +354,11 @@ pub fn a_saved_key_is_removed() -> Result<()> {
 pub fn a_url_credential_is_rejected() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
+    open_card(&session, "polish-provider-custom", "polish")?;
     retype(
         &session,
         "polish-url",
-        "https://ai.example/v1/chat/completions?api_key=do-not-save",
+        "https://ai.example/v1?api_key=do-not-save",
     )?;
     session.click("polish-save")?;
     let error = session.node("polish-error")?;
@@ -304,139 +383,40 @@ pub fn a_url_credential_is_rejected() -> Result<()> {
     Ok(())
 }
 
-/// Editing while a save is in flight keeps the newer text. The first
-/// success neither clears it nor replaces it with a reload, so it can be
-/// saved next.
+/// Editing while a save is in flight keeps the newer text and the dialog
+/// open, so the edits can be saved next.
 pub fn edits_made_while_saving_survive() -> Result<()> {
     let session = Session::fake(Scenario {
         provider_reload_ms: 1000,
         ..Scenario::default()
     })?;
     session.click("asr-page")?;
-    choose_service(&session, 0)?;
-    retype(&session, "asr-server", "http://a")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
+    retype(&session, "asr-url", "http://a/v1")?;
     type_model(&session, "typed-model")?;
     session.click("asr-save")?;
-    retype(&session, "asr-server", "http://b")?;
+    retype(&session, "asr-url", "http://b/v1")?;
     session.named("toast", "ASR settings applied")?;
     session.click("asr-save")?;
     session.until("the edits made during the first save to be saved", || {
         let url = Config::load(&session.paths().config_file)
             .map(|config| config.provider.url)
             .unwrap_or_default();
-        Ok(url == "http://b/v1/audio/transcriptions"
-            && reloads(&session, &v1::Request::ProviderReload)? == 2)
+        Ok(url == "http://b/v1" && reloads(&session, &v1::Request::ProviderReload)? == 2)
     })?;
     Ok(())
 }
 
-/// A model chosen before the first settings load survives it, while the
-/// untouched service and server are still filled from the config.
-pub fn an_early_model_choice_is_completed_by_the_first_load() -> Result<()> {
-    use std::os::fd::AsRawFd;
-
-    // Nothing listens on the discard port, so no model is detected there.
-    let session = Session::launch(Launch {
-        config: Some(
-            "[provider]\nurl = \"http://127.0.0.1:9/v1/audio/transcriptions\"\nmodel = \"m\"\n",
-        ),
-        ..Launch::default()
-    })?;
-    let directory = session.paths().config_file.parent().unwrap().to_path_buf();
-    std::fs::create_dir_all(&directory)?;
-    let lock = std::fs::File::open(&directory)?;
-    // Hold the same directory lock as provider loads and saves, so the first
-    // load cannot finish until after the early choice below. Closing the file
-    // releases it even if the case fails.
-    // SAFETY: flock only operates on this test's own directory descriptor.
-    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0);
-    session.click("asr-page")?;
-    type_model(&session, "early-model")?;
-    // SAFETY: unlocks the descriptor locked above.
-    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) } == 0);
-    drop(lock);
-    // Save starts disabled until the first load has filled the other fields.
-    session.until("the completed form to accept a save", || {
-        session.click("asr-save")?;
-        Ok(reloads(&session, &v1::Request::ProviderReload)? == 1)
-    })?;
-    session.until("the early choice and the loaded server to be saved", || {
-        let Ok(config) = Config::load(&session.paths().config_file) else {
-            return Ok(false);
-        };
-        Ok(
-            config.provider.url == "http://127.0.0.1:9/v1/audio/transcriptions"
-                && config.provider.model == "early-model",
-        )
-    })?;
-    Ok(())
-}
-
-/// A hand-edited route that its service does not use follows the server
-/// when only the server address changes.
-pub fn a_custom_route_moves_to_a_new_server() -> Result<()> {
-    let session = Session::launch(Launch {
-        config: Some("[provider]\nurl = \"http://old.example/custom-transcribe\"\nmodel = \"m\"\n"),
-        ..Launch::default()
-    })?;
-    session.click("asr-page")?;
-    retype(&session, "asr-server", "http://new.example")?;
-    session.click("asr-save")?;
-    session.named("toast", "ASR settings applied")?;
-    let provider = Config::load(&session.paths().config_file)?.provider;
-    ensure!(
-        provider.url == "http://new.example/custom-transcribe",
-        "saved {:?}",
-        provider.url
-    );
-    Ok(())
-}
-
-/// A vendor's own API has no server to name, so choosing one hides the URL
-/// row, and choosing a server again shows it.
-pub fn a_vendor_hides_the_server_url() -> Result<()> {
+/// A vendor's dialog has no server to name, and a custom server's does.
+pub fn only_a_custom_server_has_a_url() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
-    session.node("polish-url")?;
-    choose_service(&session, 2)?;
+    open_card(&session, "polish-provider-anthropic", "polish")?;
     session.absent("polish-url")?;
-    choose_service(&session, 0)?;
+    session.chord(&[Key::ESCAPE])?;
+    session.absent("polish-key")?;
+    open_card(&session, "polish-provider-custom", "polish")?;
     session.node("polish-url")?;
-    Ok(())
-}
-
-/// A service chosen before the first settings load keeps the hand-edited
-/// route its saved service uses.
-pub fn an_early_service_choice_keeps_a_custom_route() -> Result<()> {
-    use std::os::fd::AsRawFd;
-
-    let session = Session::launch(Launch {
-        config: Some("[provider]\nurl = \"http://old.example/custom-transcribe\"\nmodel = \"m\"\n"),
-        ..Launch::default()
-    })?;
-    let directory = session.paths().config_file.parent().unwrap().to_path_buf();
-    let lock = std::fs::File::open(&directory)?;
-    // Hold the directory lock so the first load waits for the choice below.
-    // SAFETY: flock only operates on this test's own directory descriptor.
-    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0);
-    session.click("asr-page")?;
-    choose_service(&session, 1)?;
-    // SAFETY: unlocks the descriptor locked above.
-    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) } == 0);
-    drop(lock);
-    session.until("the completed form to accept a save", || {
-        session.click("asr-save")?;
-        Ok(reloads(&session, &v1::Request::ProviderReload)? == 1)
-    })?;
-    let provider = Config::load(&session.paths().config_file)?.provider;
-    // The inferred service is the one chosen, so the writer leaves it out.
-    ensure!(
-        (provider.service(), provider.url.as_str())
-            == (Service::WhisperCpp, "http://old.example/custom-transcribe"),
-        "saved {:?} at {:?}",
-        provider.service(),
-        provider.url
-    );
     Ok(())
 }
 
@@ -446,21 +426,26 @@ pub fn the_model_is_detected_from_the_typed_server() -> Result<()> {
     let (server, requests) = serve_models(&["only-asr"])?;
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    session.node("asr-server")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
     ensure!(
         requests.lock().unwrap().is_empty(),
         "a server was asked before one was entered"
     );
-    retype(&session, "asr-server", &server)?;
+    retype(&session, "asr-url", &format!("{server}/v1"))?;
+    // Saving closes the dialog once the detected model is in it.
     session.until("the detected model to be saved", || {
+        if Config::load(&session.paths().config_file)
+            .is_ok_and(|config| config.provider.model == "only-asr")
+        {
+            return Ok(true);
+        }
         session.click("asr-save")?;
-        Ok(Config::load(&session.paths().config_file)
-            .is_ok_and(|config| config.provider.model == "only-asr"))
+        Ok(false)
     })?;
     let provider = Config::load(&session.paths().config_file)?.provider;
     let asked = requests.lock().unwrap().clone();
     ensure!(
-        provider.url == format!("{server}/v1/audio/transcriptions")
+        provider.url == format!("{server}/v1")
             && asked
                 .iter()
                 .any(|request| request.starts_with("GET /v1/models ")),
@@ -476,10 +461,10 @@ pub fn the_models_are_detected_on_request() -> Result<()> {
     let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    session.node("asr-server")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
     session.click("asr-detect")?;
     session.named("asr-error", "Enter the server first")?;
-    retype(&session, "asr-server", &server)?;
+    retype(&session, "asr-url", &format!("{server}/v1"))?;
     session.click("asr-detect")?;
     session.until("the listed models to be offered", || {
         session.click(Target::Named(Role::ComboBox, "Model"))?;
@@ -505,17 +490,17 @@ pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
     let (server, requests) = serve_models(&["only-model"])?;
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
-    retype(&session, "asr-server", &server)?;
+    open_card(&session, "asr-provider-custom", "asr")?;
+    retype(&session, "asr-url", &format!("{server}/v1"))?;
     // Test turns on once the server's only model fills the field.
     session.state("asr-test", State::Focusable, true)?;
     session.click("asr-test")?;
     session.named("toast", "The ASR model answered")?;
+    session.chord(&[Key::ESCAPE])?;
+    session.absent("asr-key")?;
     session.click("polish-page")?;
-    retype(
-        &session,
-        "polish-url",
-        &format!("{server}/v1/chat/completions"),
-    )?;
+    open_card(&session, "polish-provider-custom", "polish")?;
+    retype(&session, "polish-url", &format!("{server}/v1"))?;
     session.state("polish-test", State::Focusable, true)?;
     session.click("polish-test")?;
     session.named("toast", "The polish model answered")?;

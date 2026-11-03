@@ -20,10 +20,12 @@ use crate::models::ModelRole;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Key {
     ProviderService,
+    ProviderFormat,
     ProviderUrl,
     ProviderModel,
     PolishEnabled,
     PolishService,
+    PolishFormat,
     PolishUrl,
     PolishModel,
 }
@@ -40,21 +42,25 @@ impl Key {
     fn path(self) -> (&'static str, &'static str) {
         match self {
             Self::ProviderService => ("provider", "service"),
+            Self::ProviderFormat => ("provider", "format"),
             Self::ProviderUrl => ("provider", "url"),
             Self::ProviderModel => ("provider", "model"),
             Self::PolishEnabled => ("polish", "enabled"),
             Self::PolishService => ("polish", "service"),
+            Self::PolishFormat => ("polish", "format"),
             Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
         }
     }
 
-    /// The value as the config means it: a service left out reads as the
-    /// one inferred, so saving that service again changes nothing.
+    /// The value as the config means it: a service or format left out reads
+    /// as the one inferred, so saving that one again changes nothing.
     fn read(self, config: &Config) -> Value {
         match self {
             Self::ProviderService => Value::Text(config.provider.service().as_str().to_string()),
             Self::PolishService => Value::Text(config.polish.service().as_str().to_string()),
+            Self::ProviderFormat => Value::Text(config.provider.format().as_str().to_string()),
+            Self::PolishFormat => Value::Text(config.polish.format().as_str().to_string()),
             Self::ProviderUrl => Value::Text(config.provider.url.clone()),
             Self::ProviderModel => Value::Text(config.provider.model.clone()),
             Self::PolishEnabled => Value::Switch(config.polish.enabled),

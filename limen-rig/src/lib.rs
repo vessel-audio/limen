@@ -52,7 +52,12 @@ impl Rig {
         let openai = |dialect: &Dialect| {
             let config = OpenAIConfig::with_key(dialect, key.clone());
             let config = match &base_url {
-                Some(base_url) => config.with_base_url(base_url),
+                // A custom server speaking a vendor's API may run without a
+                // key, and then gets no `Authorization` header.
+                Some(base_url) => OpenAIConfig {
+                    auth: Auth::OptionalBearer,
+                    ..config.with_base_url(base_url)
+                },
                 None => config,
             };
             Client::OpenAi(Box::new(config.connect(http.clone())))

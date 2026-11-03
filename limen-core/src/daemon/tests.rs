@@ -500,6 +500,7 @@ fn provider_reload_applies_only_a_valid_config() {
         harness.session.try_recv(),
         Ok(SessionCommand::Provider(ProviderConfig {
             service: None,
+            format: None,
             url: "https://asr.example/v1?api-version=1".to_string(),
             model: "big".to_string(),
             language: "auto".to_string(),

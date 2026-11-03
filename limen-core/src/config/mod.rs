@@ -24,12 +24,10 @@ mod transaction;
 mod value;
 mod write;
 
-pub(crate) use endpoint::{
-    check_polish_route, check_polish_url, check_url_parameters, display_url,
-};
+pub(crate) use endpoint::{check_polish_root, check_polish_url, check_url_parameters, display_url};
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
-pub use service::Service;
+pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
 pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
@@ -62,14 +60,18 @@ const DEFAULT_CONFIG: &str = r#"# Limen configuration
 
 [provider]
 # Who transcribes each take:
-#   "openai-compatible": an OpenAI-compatible server at `url`, such as
-#                        vLLM or sglang-omni
-#   "whisper-cpp":       the whisper.cpp server, or any server that takes
-#                        the upload at exactly `url`
-#   "openai", "groq", "mistral", "gemini": the vendor's own API; `url` is
-#                        not used
-service = "openai-compatible"
-# e.g. "http://127.0.0.1:8000/v1/audio/transcriptions"
+#   "custom": your server at `url`, speaking `format`
+#   "openai", "groq", "mistral", "gemini": the vendor's own API; `url` and
+#            `format` are not used
+service = "custom"
+# What a custom server speaks:
+#   "openai-compatible": OpenAI's routes under `url`, such as vLLM or
+#                        sglang-omni at "http://127.0.0.1:8000/v1"
+#   "whisper-cpp":       the take uploaded to exactly `url`, such as
+#                        "http://127.0.0.1:8080/inference"
+#   "openai", "gemini", "mistral", "groq", "openrouter", "xai": that API,
+#                        with `url` as its base URL
+format = "openai-compatible"
 url = ""
 # One of the models the server lists; the ASR page offers them
 model = ""
@@ -98,12 +100,15 @@ chunk_ms = 100
 # model of your choice; audio is never sent to it.
 enabled = false
 # Who corrects it:
-#   "openai-compatible": a chat-completions server at `url`, such as
-#                        llama.cpp, Ollama, or vLLM
+#   "custom": your server at `url`, speaking `format`
 #   "openai", "anthropic", "gemini", "deepseek", "mistral", "groq",
-#   "openrouter", "xai": the vendor's own API; `url` is not used
-service = "openai-compatible"
-# e.g. "http://127.0.0.1:8080/v1/chat/completions"
+#   "openrouter", "xai": the vendor's own API; `url` and `format` are not
+#   used
+service = "custom"
+# What a custom server speaks: "openai-compatible", such as llama.cpp,
+# Ollama, or vLLM at "http://127.0.0.1:8080/v1", or any of the vendors'
+# APIs above, with `url` as its base URL
+format = "openai-compatible"
 url = ""
 model = ""
 # Read the API key from this environment variable; a vendor's own variable,
@@ -176,7 +181,10 @@ pub struct Config {
 pub struct ProviderConfig {
     /// Left out by configs from before services; see [`Self::service`].
     pub service: Option<Service>,
-    /// The server's URL; unused by a vendor's own API.
+    /// What a custom server speaks; see [`Self::format`].
+    pub format: Option<Format>,
+    /// A custom server's base URL, or its upload URL; unused by a vendor's
+    /// own API.
     #[serde(default)]
     pub url: String,
     /// Empty until one is chosen; a take then fails and says so.
@@ -223,10 +231,11 @@ pub struct InputMethodConfig {
 #[serde(default)]
 pub struct PolishConfig {
     pub enabled: bool,
-    /// Left out by configs from before services, which all used an
-    /// OpenAI-compatible server.
+    /// Left out by configs from before services; see [`Self::service`].
     pub service: Option<Service>,
-    /// The chat-completions URL; unused by a vendor's own API.
+    /// What a custom server speaks; see [`Self::format`].
+    pub format: Option<Format>,
+    /// A custom server's base URL; unused by a vendor's own API.
     pub url: String,
     pub model: String,
     pub api_key_env: Option<String>,
@@ -241,6 +250,7 @@ impl Default for PolishConfig {
         Self {
             enabled: false,
             service: None,
+            format: None,
             url: String::new(),
             model: String::new(),
             api_key_env: None,
@@ -328,11 +338,17 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        let service = self.provider.service();
+        let (service, format) = (self.provider.service(), self.provider.format());
         if !Service::TRANSCRIBING.contains(&service) {
             bail!(
                 "provider.service \"{}\" does not transcribe audio",
                 service.as_str()
+            );
+        }
+        if !Format::TRANSCRIBING.contains(&format) {
+            bail!(
+                "provider.format \"{}\" does not transcribe audio",
+                format.as_str()
             );
         }
         // An empty URL is a server not chosen yet, as in the default config;
@@ -345,13 +361,16 @@ impl Config {
                 _ => bail!("provider.url must be an http(s):// URL with a host"),
             }
             check_url_parameters(&provider_url, "provider.url")?;
-            let route = crate::connection::TRANSCRIPTIONS;
-            if service == Service::OpenAiCompatible
-                && crate::connection::base_url(url, route).is_none()
-            {
-                bail!(
-                    "provider.url must end in {route}, without a query, for an OpenAI-compatible server; use service = \"whisper-cpp\" to upload to exactly this URL"
-                );
+            // Only the whisper.cpp upload goes to exactly the URL, query and
+            // all; an API's routes hang off a base URL without one.
+            match (
+                format,
+                crate::connection::custom_root(url, format, crate::connection::TRANSCRIPTIONS),
+            ) {
+                (Format::WhisperCpp, _) | (_, Some(_)) => {}
+                (_, None) => bail!(
+                    "provider.url must be the server's base URL, without a query; use format = \"whisper-cpp\" to upload to exactly this URL"
+                ),
             }
         }
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
@@ -359,12 +378,15 @@ impl Config {
             bail!("audio.chunk_ms must be in 1..=1000");
         }
         if self.polish.enabled {
-            let service = self.polish.service();
+            let (service, format) = (self.polish.service(), self.polish.format());
             if !Service::POLISHING.contains(&service) {
                 bail!(
                     "polish.service \"{}\" does not polish text",
                     service.as_str()
                 );
+            }
+            if !Format::POLISHING.contains(&format) {
+                bail!("polish.format \"{}\" does not polish text", format.as_str());
             }
             match (service.uses_url(), self.polish.url.trim().is_empty()) {
                 (true, true) => bail!(
@@ -411,18 +433,23 @@ fn key(saved: &Option<ApiKey>, env: Option<&str>) -> Option<String> {
 }
 
 impl ProviderConfig {
-    /// The configured service; a config from before services named the
-    /// server by its URL alone, which is an OpenAI-compatible server when
-    /// it ends in `/audio/transcriptions` and an upload to exactly that URL
-    /// otherwise.
+    /// The configured service; a config from before services named a
+    /// custom server by its URL alone.
     pub fn service(&self) -> Service {
+        self.service.unwrap_or(Service::Custom)
+    }
+
+    /// What a custom server speaks. A config from before formats named the
+    /// server by its URL alone: an OpenAI-compatible server when it ends in
+    /// `/audio/transcriptions`, and an upload to exactly that URL otherwise.
+    pub fn format(&self) -> Format {
         match (
-            self.service,
+            self.format,
             crate::connection::base_url(&self.url, crate::connection::TRANSCRIPTIONS),
         ) {
-            (Some(service), _) => service,
-            (None, Some(_)) => Service::OpenAiCompatible,
-            (None, None) => Service::WhisperCpp,
+            (Some(format), _) => format,
+            (None, Some(_)) => Format::OpenAiCompatible,
+            (None, None) => Format::WhisperCpp,
         }
     }
 
@@ -436,8 +463,8 @@ impl ProviderConfig {
 }
 
 impl PolishConfig {
-    /// The configured service. Configs from before services named an
-    /// OpenAI-compatible server by its URL; DeepSeek's own, the old
+    /// The configured service. Configs from before services named a custom
+    /// server by its URL; DeepSeek's own, the old
     /// default, is the DeepSeek service, whose requests turn its thinking
     /// off.
     pub fn service(&self) -> Service {
@@ -446,8 +473,14 @@ impl PolishConfig {
         match (self.service, deepseek) {
             (Some(service), _) => service,
             (None, true) => Service::DeepSeek,
-            (None, false) => Service::OpenAiCompatible,
+            (None, false) => Service::Custom,
         }
+    }
+
+    /// What a custom server speaks; configs from before formats all named
+    /// an OpenAI-compatible one.
+    pub fn format(&self) -> Format {
+        self.format.unwrap_or(Format::OpenAiCompatible)
     }
 
     /// The variable the key is read from: `api_key_env`, else the
@@ -470,7 +503,7 @@ impl PolishConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Service, ShortcutConfig};
+    use super::{Config, Format, Service, ShortcutConfig};
     use crate::shortcut::Backend;
 
     fn base_config() -> Config {
@@ -563,26 +596,28 @@ mod tests {
         config.provider.url = String::new();
         config.validate().unwrap();
 
-        config.polish.service = Some(Service::WhisperCpp);
+        config.polish.service = Some(Service::Custom);
+        config.polish.format = Some(Format::WhisperCpp);
         assert_eq!(
             config.validate().unwrap_err().to_string(),
-            "polish.service \"whisper-cpp\" does not polish text"
+            "polish.format \"whisper-cpp\" does not polish text"
         );
     }
 
     #[test]
-    fn a_compatible_asr_server_needs_its_transcriptions_route() {
+    fn only_a_whisper_cpp_upload_url_may_carry_a_query() {
         let mut config = base_config();
-        config.provider.service = Some(Service::OpenAiCompatible);
-        config.provider.url = "http://127.0.0.1:8080/inference".to_string();
+        config.provider.service = Some(Service::Custom);
+        config.provider.format = Some(Format::OpenAiCompatible);
+        config.provider.url = "http://127.0.0.1:8080/inference?language=zh".to_string();
         assert!(
             config
                 .validate()
                 .unwrap_err()
                 .to_string()
-                .starts_with("provider.url must end in /audio/transcriptions")
+                .starts_with("provider.url must be the server's base URL, without a query")
         );
-        config.provider.service = Some(Service::WhisperCpp);
+        config.provider.format = Some(Format::WhisperCpp);
         config.validate().unwrap();
     }
 
@@ -591,18 +626,22 @@ mod tests {
         let mut config = base_config();
         config.polish.enabled = true;
         config.polish.model = "corrector".to_string();
-        config.polish.url = "https://ai.example/v1/completions".to_string();
+        config.polish.url =
+            "https://ai.example/chat/completions?api-version=2026-01-01".to_string();
         config.validate().unwrap();
         assert_eq!(
             [
-                "https://ai.example/v1/completions",
                 "https://ai.example/chat/completions?api-version=2026-01-01",
+                "https://ai.example/v1",
                 "https://ai.example/v1/chat/completions",
             ]
-            .map(|url| super::check_polish_route(url).map_err(|error| error.to_string())),
+            .map(|url| {
+                super::check_polish_root(url, Format::OpenAiCompatible)
+                    .map_err(|error| error.to_string())
+            }),
             [
-                Err("polish.url must end in /chat/completions, without a query".to_string()),
-                Err("polish.url must end in /chat/completions, without a query".to_string()),
+                Err("polish.url must be the server's base URL, without a query".to_string()),
+                Ok(()),
                 Ok(()),
             ]
         );
