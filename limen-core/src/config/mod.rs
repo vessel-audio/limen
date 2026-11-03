@@ -394,9 +394,10 @@ impl Config {
                 ),
                 (true, false) => {
                     check_polish_url(&self.polish.url)?;
-                    // A config from before services may name a route with a
-                    // query; it loads, and its polisher keeps the originals.
-                    if self.polish.service.is_some() {
+                    // A config from before services and formats may name a
+                    // route with a query; it loads, and its polisher keeps the
+                    // originals.
+                    if self.polish.service.is_some() || self.polish.format.is_some() {
                         check_polish_root(&self.polish.url, format)?;
                     }
                 }
@@ -635,9 +636,14 @@ mod tests {
         config.polish.service = Some(Service::Custom);
         config.polish.model = "corrector".to_string();
         config.polish.url = "https://ai.example/v1?api-version=2026-01-01".to_string();
+        let explicit_service = config.validate().map_err(|error| error.to_string());
+        config.polish.service = None;
+        config.polish.format = Some(Format::OpenAiCompatible);
+        let explicit_format = config.validate().map_err(|error| error.to_string());
+        let refused = Err("polish.url must be the server's base URL, without a query".to_string());
         assert_eq!(
-            config.validate().unwrap_err().to_string(),
-            "polish.url must be the server's base URL, without a query"
+            [explicit_service, explicit_format],
+            [refused.clone(), refused]
         );
     }
 
