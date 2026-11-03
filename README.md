@@ -81,15 +81,18 @@ protocol takes effect.
 The Models pages, opened from the sidebar or the Models button on the dictation
 page, show each role's providers as cards, the saved one marked; the Polish page
 also has the switch that turns polishing on or off. A card opens a dialog: a
-vendor's needs only an API key and a model, and Custom names your own server by
-its URL and the API it speaks, OpenAI-compatible, whisper.cpp for ASR, or any
-vendor's. No server or model is set until you choose one. Once the server
+vendor's shows the URL its API is reached at, which a gateway's can replace,
+and needs an API key and a model; Custom names your own server by its URL and
+the API it speaks, OpenAI-compatible, whisper.cpp for ASR, or any vendor's.
+Polishing over OpenAI's API or a compatible one also chooses its chat API,
+Chat Completions or Responses; OpenAI and xAI default to Responses, the others
+to Chat Completions. No server or model is set until you choose one. Once the server
 address or key stops changing, the dialog asks the provider for its models: a
 server that offers exactly one fills it in, and otherwise the list offers them
 and also takes a typed name; Detect asks at once. The whisper.cpp server lists
 none. Test asks the model to do its job once with the fields as typed, without
 saving them. Each dialog's Advanced settings belong to that provider alone:
-a route under the base URL in place of the API's own, the header the key is
+the header the key is
 sent in, extra request headers, extra JSON body fields, a timeout for each
 try, and how many times a request that failed for now (the service was
 unreachable, busy, or failing) is tried again; a rejected key or a refused
@@ -216,13 +219,18 @@ timeout_ms = 5000
 ```
 
 A vendor's own API takes no `url` or `format`, and reads its key from its own
-variable unless `api_key_env` names another:
+variable unless `api_key_env` names another. Its URL, and for polishing its
+chat API, are its own unless its options name others:
 
 ```toml
 [polish]
 enabled = true
-service = "anthropic"   # or openai, gemini, deepseek, mistral, groq, openrouter, xai
+service = "openai"   # or anthropic, gemini, deepseek, mistral, groq, openrouter, xai
 model = "your-model"
+
+[polish.options.openai]
+url = "https://gateway.example/v1"
+chat_api = "chat-completions"   # or "responses"
 ```
 
 A custom server's URL is its API's base URL, without a query. Remote servers

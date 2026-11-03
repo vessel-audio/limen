@@ -6,26 +6,32 @@ use anyhow::{Context, Result, bail};
 /// Check that `url` may carry the polishing API key: HTTPS, or HTTP on a
 /// loopback address, without credentials of its own.
 pub(crate) fn check_polish_url(url: &str) -> Result<()> {
-    let polish_url = reqwest::Url::parse(url).context("invalid polish.url")?;
-    let Some(polish_host) = polish_url.host_str() else {
-        bail!("polish.url must include a host");
+    check_key_url(url, "polish.url")
+}
+
+/// Check that `url`, the setting `field` names, may carry an API key:
+/// HTTPS, or HTTP on a loopback address, without credentials of its own.
+pub(crate) fn check_key_url(url: &str, field: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid {field}"))?;
+    let Some(host) = parsed.host_str() else {
+        bail!("{field} must include a host");
     };
-    match polish_url.scheme() {
+    match parsed.scheme() {
         "https" => {}
         "http" => {
-            let is_loopback = polish_host.eq_ignore_ascii_case("localhost")
-                || polish_host
+            let is_loopback = host.eq_ignore_ascii_case("localhost")
+                || host
                     .trim_start_matches('[')
                     .trim_end_matches(']')
                     .parse::<std::net::IpAddr>()
                     .is_ok_and(|address| address.is_loopback());
             if !is_loopback {
-                bail!("polish.url must use HTTPS, or HTTP on a loopback address");
+                bail!("{field} must use HTTPS, or HTTP on a loopback address");
             }
         }
-        _ => bail!("polish.url must use HTTPS, or HTTP on a loopback address"),
+        _ => bail!("{field} must use HTTPS, or HTTP on a loopback address"),
     }
-    check_url_parameters(&polish_url, "polish.url")?;
+    check_url_parameters(&parsed, field)?;
     Ok(())
 }
 

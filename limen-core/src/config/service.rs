@@ -86,6 +86,33 @@ impl Service {
         }
     }
 
+    /// The base URL a vendor's API is reached at unless its settings name
+    /// another; `None` for a custom server, which has only its own.
+    pub fn default_url(self) -> Option<&'static str> {
+        match self {
+            Self::Custom => None,
+            Self::OpenAi => Some("https://api.openai.com/v1"),
+            Self::Anthropic => Some("https://api.anthropic.com"),
+            Self::Gemini => Some("https://generativelanguage.googleapis.com"),
+            Self::DeepSeek => Some("https://api.deepseek.com"),
+            Self::Mistral => Some("https://api.mistral.ai"),
+            Self::Groq => Some("https://api.groq.com/openai/v1"),
+            Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
+            Self::XAi => Some("https://api.x.ai"),
+        }
+    }
+
+    /// The chat API polishing with this service uses unless its settings
+    /// name one, for a custom server the one `format` offers; `None` where
+    /// the API has only its own.
+    pub fn chat_api(self, format: Format) -> Option<super::ChatApi> {
+        match self {
+            Self::Custom => format.api(),
+            vendor => vendor.vendor_api(),
+        }
+        .and_then(Api::chat_api)
+    }
+
     /// The vendor's own API; `None` for a custom server, whose
     /// [`Format`] decides.
     pub(crate) fn vendor_api(self) -> Option<Api> {

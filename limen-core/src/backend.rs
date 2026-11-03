@@ -86,6 +86,21 @@ pub enum Api {
     XAi,
 }
 
+impl Api {
+    /// The chat API polishing uses unless its provider names one; `None`
+    /// for an API that has only its own.
+    pub(crate) fn chat_api(self) -> Option<crate::config::ChatApi> {
+        use crate::config::ChatApi;
+        match self {
+            Self::OpenAi | Self::XAi => Some(ChatApi::Responses),
+            Self::Compatible | Self::DeepSeek | Self::Mistral | Self::Groq | Self::OpenRouter => {
+                Some(ChatApi::ChatCompletions)
+            }
+            Self::Anthropic | Self::Gemini => None,
+        }
+    }
+}
+
 /// A failure worth sending the same request again for: the service could
 /// not be reached, or said it is busy or failing for now. A backend returns
 /// it, inside its `anyhow::Error`, only for such failures; the core tries
@@ -125,8 +140,9 @@ impl std::fmt::Debug for Connection {
 /// a route on an API whose routes it cannot move, refuses the connection.
 #[derive(Clone, Default, PartialEq)]
 pub struct Shape {
-    /// The route requests go to under the base URL, in place of the API's.
-    pub path: Option<String>,
+    /// Which of OpenAI's chat APIs a chat request uses; unset for an API
+    /// that has only its own, and for transcription.
+    pub chat_api: Option<crate::config::ChatApi>,
     /// The header the key is sent in, alone, in place of the API's own.
     pub key_header: Option<String>,
     /// Headers every request carries.
@@ -140,7 +156,7 @@ impl std::fmt::Debug for Shape {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Shape")
-            .field("path", &self.path)
+            .field("chat_api", &self.chat_api)
             .field("key_header", &self.key_header)
             .field(
                 "headers",

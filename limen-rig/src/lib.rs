@@ -5,12 +5,9 @@
 //! Limen's types. Replacing the framework means replacing this crate; the
 //! core and the GUI only see [`limen_core::ModelBackend`].
 
-use std::collections::BTreeSet;
-use std::sync::Mutex;
-
 use anyhow::{Context, Result, bail};
 use limen_core::{
-    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take,
+    Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take,
     Transcriber, Transient,
 };
 use rig_core::DynModel;
@@ -20,10 +17,10 @@ use rig_core::operation::{Completion, Transcription};
 use rig_core::providers::anthropic::wire::Auth as AnthropicAuth;
 use rig_core::providers::anthropic::{Anthropic, AnthropicConfig};
 use rig_core::providers::gemini::{Gemini, GeminiConfig};
-use rig_core::providers::openai::OpenAI;
 use rig_core::providers::openai::wire::{
     Auth, DEEPSEEK, Dialect, GROQ, MISTRAL, OPENAI, OPENROUTER, OpenAIConfig,
 };
+use rig_core::providers::openai::{OpenAI, Route};
 use rig_core::transcription::TranscriptionRequestBuilder;
 use rig_reqwest::ReqwestClient;
 
@@ -42,23 +39,6 @@ const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "http://127.0.
 /// system without CA certificates cannot build one, and that must fail the
 /// request, not stop the daemon or the GUI from starting.
 pub struct Rig;
-
-/// `path` as the `'static` route rig's quirks take. Each distinct route is
-/// kept once for the life of the process, and a user sets few.
-fn route(path: &str) -> &'static str {
-    static ROUTES: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
-    let mut routes = ROUTES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match routes.get(path) {
-        Some(route) => route,
-        None => {
-            let route: &'static str = Box::leak(path.to_string().into_boxed_str());
-            routes.insert(route);
-            route
-        }
-    }
-}
 
 impl Rig {
     /// The rig client for `connection`, and the fields every request body
@@ -100,7 +80,6 @@ impl Rig {
                 .build()
                 .context("failed to build the model HTTP client")?,
         );
-        let path = shape.path.as_deref().map(route);
         let openai = |dialect: &Dialect| {
             let mut config = OpenAIConfig::with_key(dialect, key.clone());
             if let Some(base_url) = &base_url {
@@ -113,15 +92,15 @@ impl Rig {
             if key.is_empty() {
                 config.auth = Auth::OptionalBearer;
             }
-            if let Some(path) = path {
-                config.dialect.quirks.completion_path = path;
-                config.dialect.quirks.responses.path = path;
-                config.dialect.quirks.transcription_path = path;
-            }
+            let config = match shape.chat_api {
+                Some(ChatApi::ChatCompletions) => config.with_route(Route::Chat),
+                Some(ChatApi::Responses) => config.with_route(Route::Responses),
+                None => config,
+            };
             Client::OpenAi(Box::new(config.connect(http.clone())))
         };
-        let fixed_routes = |name: &str| match path {
-            Some(_) => bail!("{name}'s route cannot be changed; set it in the base URL"),
+        let one_chat_api = |name: &str| match shape.chat_api {
+            Some(_) => bail!("{name} has one chat API; only OpenAI's APIs offer a choice"),
             None => Ok(()),
         };
         let client = match api {
@@ -136,7 +115,7 @@ impl Rig {
             Api::OpenRouter => openai(&OPENROUTER),
             Api::XAi => openai(&rig_core::providers::xai::DIALECT),
             Api::Anthropic => {
-                fixed_routes("Anthropic")?;
+                one_chat_api("Anthropic")?;
                 let mut config = AnthropicConfig::new(key.clone());
                 // A keyless server, or a key in its own header, gets no
                 // credential header from rig, rather than an empty one.
@@ -150,7 +129,7 @@ impl Rig {
                 Client::Anthropic(config.connect(http.clone()))
             }
             Api::Gemini => {
-                fixed_routes("Gemini")?;
+                one_chat_api("Gemini")?;
                 // Gemini always sends its key in the URL; without one it
                 // would ask with an empty key.
                 if key.is_empty() {

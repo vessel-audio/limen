@@ -1,6 +1,6 @@
-//! A provider's settings beyond its key and model: where its requests go
-//! under the base URL, what they carry, and how long and how often they are
-//! tried. Each provider keeps its own, so choosing another and back
+//! A provider's settings beyond its key and model: a vendor's base URL in
+//! place of its own, the API its chat requests use, what requests carry,
+//! and how long and how often they are tried. Each provider keeps its own, so choosing another and back
 //! restores them.
 
 use std::collections::BTreeMap;
@@ -12,10 +12,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderOptions {
-    /// The route requests go to under the base URL, such as `/v2/chat`, in
-    /// place of the API's own.
+    /// A vendor's base URL, such as a gateway's, in place of its own. A
+    /// custom server's is the role's `url`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
+    pub url: Option<String>,
+    /// Which of OpenAI's chat APIs polishing requests use; the provider's
+    /// own choice when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_api: Option<ChatApi>,
     /// The header the key is sent in, such as `api-key`, in place of the
     /// API's own.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,6 +41,20 @@ pub struct ProviderOptions {
     pub headers: BTreeMap<String, String>,
 }
 
+/// Which of OpenAI's two chat APIs a request goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatApi {
+    /// `/chat/completions`, which every OpenAI-compatible server serves.
+    ChatCompletions,
+    /// `/responses`, OpenAI's newer API.
+    Responses,
+}
+
+impl ChatApi {
+    pub const ALL: [Self; 2] = [Self::ChatCompletions, Self::Responses];
+}
+
 /// The longest one attempt may be allowed, in milliseconds.
 const MAX_TIMEOUT_MS: u64 = 120_000;
 /// The most retries a provider may ask for.
@@ -56,10 +74,12 @@ impl ProviderOptions {
 
     /// Check every setting `field` names, such as `polish.options.custom`.
     pub(crate) fn check(&self, field: &str) -> Result<()> {
-        if let Some(path) = &self.path
-            && !(path.starts_with('/') && !path.contains(['?', '#']))
-        {
-            bail!("{field}.path must start with / and carry no query");
+        // The key goes to this URL: HTTPS, or HTTP on this computer.
+        if let Some(url) = &self.url {
+            super::check_key_url(url, &format!("{field}.url"))?;
+            if url.contains(['?', '#']) {
+                bail!("{field}.url must be a base URL, without a query");
+            }
         }
         if let Some(header) = &self.key_header {
             reqwest::header::HeaderName::try_from(header.as_str())

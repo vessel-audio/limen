@@ -17,11 +17,8 @@ pub struct Server {
 impl Server {
     /// The server at exactly `url`, its requests shaped as `shape` says.
     /// Fails where no HTTP client can be built, such as on a system without
-    /// CA certificates, and for a route, which `url` already names.
+    /// CA certificates.
     pub fn new(url: String, model: String, api_key: Option<String>, shape: Shape) -> Result<Self> {
-        if shape.path.is_some() {
-            bail!("the whisper.cpp upload goes to exactly its URL; put the route in the URL");
-        }
         let http = reqwest::Client::builder()
             .build()
             .context("failed to build the transcription HTTP client")?;
@@ -233,23 +230,6 @@ mod tests {
         ] {
             assert!(lower.contains(part), "missing {part:?} in {request}");
         }
-    }
-
-    #[test]
-    fn a_route_is_refused_for_an_exact_upload_url() {
-        let shape = Shape {
-            path: Some("/v2".to_string()),
-            ..Shape::default()
-        };
-        assert!(
-            Server::new(
-                "http://127.0.0.1:9/inference".to_string(),
-                "m".to_string(),
-                None,
-                shape
-            )
-            .is_err()
-        );
     }
 
     #[tokio::test]

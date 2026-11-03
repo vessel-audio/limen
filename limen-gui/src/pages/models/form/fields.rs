@@ -8,8 +8,10 @@ use gpui_kit::component::input::InputState;
 pub enum EditedField {
     /// What a custom server speaks.
     Format,
-    /// A custom server's URL.
+    /// A custom server's URL, or the one a vendor is reached at.
     Address,
+    /// The chat API polishing requests use.
+    ChatApi,
     Key,
     Model,
     /// One of the provider's advanced settings.
@@ -18,7 +20,6 @@ pub enum EditedField {
 
 /// The inputs of a provider's advanced settings.
 pub struct AdvancedFields {
-    pub path: Entity<InputState>,
     pub key_header: Entity<InputState>,
     pub headers: Entity<InputState>,
     pub body: Entity<InputState>,
@@ -28,9 +29,8 @@ pub struct AdvancedFields {
 
 impl AdvancedFields {
     /// Every input, with what it holds.
-    pub fn all(&self) -> [&Entity<InputState>; 6] {
+    pub fn all(&self) -> [&Entity<InputState>; 5] {
         [
-            &self.path,
             &self.key_header,
             &self.headers,
             &self.body,

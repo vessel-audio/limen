@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use atspi::{Role, State};
-use limen_core::{Config, Format, ProviderOptions, Service, v1};
+use limen_core::{ChatApi, Config, Format, ProviderOptions, Service, v1};
 
 use super::retype;
 use crate::daemon::Scenario;
@@ -116,12 +116,13 @@ fn show_polish_providers(session: &Session) -> Result<()> {
     })
 }
 
-/// Pick the type at `index` from a custom server's list; its items have no
-/// accessible names. Both lists start with OpenAI-compatible; the ASR list
-/// offers whisper.cpp next, the polishing list OpenAI.
-fn choose_format(session: &Session, index: usize) -> Result<()> {
-    session.click(Target::Named(Role::ComboBox, "Type"))?;
-    let item = session.settled_by("a type in the list", |nodes| {
+/// Pick the item at `index` from the list of the select named `select`;
+/// its items have no accessible names. Both type lists start with
+/// OpenAI-compatible; the ASR list offers whisper.cpp next, the polishing
+/// list OpenAI. The chat API list offers Chat Completions, then Responses.
+fn choose(session: &Session, select: &str, index: usize) -> Result<()> {
+    session.click(Target::Named(Role::ComboBox, select))?;
+    let item = session.settled_by("an item in the list", |nodes| {
         nodes
             .iter()
             .filter(|node| node.role == Role::ListItem)
@@ -170,7 +171,7 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
-    choose_format(&session, 1)?;
+    choose(&session, "Type", 1)?;
     retype(&session, "asr-url", "http://10.0.0.2:9000/inference")?;
     session.click("asr-key")?;
     session.x11().type_text("sk-asr")?;
@@ -212,13 +213,13 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     Ok(())
 }
 
-/// A vendor needs only its key and model: its dialog asks for nothing else,
-/// and saving it names the vendor.
+/// A vendor is reached at its own URL unless another is typed, as for a
+/// gateway; saving it names the vendor and keeps that URL in its table.
 pub fn a_vendor_is_chosen_from_its_card() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("asr-page")?;
     open_card(&session, "asr-provider-groq", "asr")?;
-    session.absent("asr-url")?;
+    retype(&session, "asr-url", "https://gateway.example/groq/v1")?;
     session.click("asr-key")?;
     session.x11().type_text("sk-groq")?;
     type_model(&session, "whisper-large-v3")?;
@@ -233,6 +234,19 @@ pub fn a_vendor_is_chosen_from_its_card() -> Result<()> {
         ) == (Some(Service::Groq), "whisper-large-v3", Some("sk-groq")),
         "saved {:?}",
         config.provider
+    );
+    let options = config.provider.options;
+    ensure!(
+        options
+            == [(
+                Service::Groq,
+                ProviderOptions {
+                    url: Some("https://gateway.example/groq/v1".to_string()),
+                    ..ProviderOptions::default()
+                }
+            )]
+            .into(),
+        "saved {options:?}"
     );
     Ok(())
 }
@@ -418,17 +432,36 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
     Ok(())
 }
 
-/// A vendor's dialog has no server to name, and a custom server's does.
-pub fn only_a_custom_server_has_a_url() -> Result<()> {
+/// Only OpenAI's APIs offer a choice of chat API, and one made other
+/// than the provider's own is saved under its table.
+pub fn openai_polishing_chooses_its_chat_api() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-anthropic", "polish")?;
-    session.absent("polish-url")?;
+    session.absent("polish-chat-api")?;
     session.chord(&[Key::ESCAPE])?;
     session.absent("polish-key")?;
-    open_card(&session, "polish-provider-custom", "polish")?;
-    session.node("polish-url")?;
+    open_card(&session, "polish-provider-openai", "polish")?;
+    choose(&session, "Chat API", 0)?;
+    session.click("polish-key")?;
+    session.x11().type_text("sk-openai")?;
+    type_model(&session, "typed-model")?;
+    session.click("polish-save")?;
+    session.named("toast", "Polish settings applied")?;
+    let options = Config::load(&session.paths().config_file)?.polish.options;
+    ensure!(
+        options
+            == [(
+                Service::OpenAi,
+                ProviderOptions {
+                    chat_api: Some(ChatApi::ChatCompletions),
+                    ..ProviderOptions::default()
+                }
+            )]
+            .into(),
+        "saved {options:?}"
+    );
     Ok(())
 }
 
@@ -546,20 +579,19 @@ pub fn advanced_settings_belong_to_their_provider() -> Result<()> {
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", "http://10.0.0.2:9000/v1")?;
     session.click("asr-advanced")?;
-    retype(&session, "asr-route", "/v2/transcribe")?;
     retype(&session, "asr-key-header", "api-key")?;
     retype(&session, "asr-headers", "X-Org: limen")?;
     // The advanced settings run past the dialog's height: scroll to the
     // rest over a row's label, as a user does; an input keeps the wheel for
     // its own text.
-    let route = session
-        .settled("asr-route")?
+    let key_header = session
+        .settled("asr-key-header")?
         .bounds
-        .context("the route field has no bounds")?;
-    let (_, y) = route.center();
+        .context("the key header field has no bounds")?;
+    let (_, y) = key_header.center();
     session
         .x11()
-        .scroll(route.x - 60, y, Button::WheelDown, 10)?;
+        .scroll(key_header.x - 60, y, Button::WheelDown, 10)?;
     retype(&session, "asr-timeout", "8000")?;
     type_model(&session, "typed-model")?;
     session.click("asr-save")?;
@@ -571,7 +603,6 @@ pub fn advanced_settings_belong_to_their_provider() -> Result<()> {
             == [(
                 Service::Custom,
                 ProviderOptions {
-                    path: Some("/v2/transcribe".to_string()),
                     key_header: Some("api-key".to_string()),
                     timeout_ms: Some(8000),
                     headers: [("X-Org".to_string(), "limen".to_string())].into(),

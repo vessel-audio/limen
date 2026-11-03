@@ -48,7 +48,20 @@ impl Config {
             ("polish", &self.polish.options),
         ] {
             for (service, options) in options {
-                options.check(&format!("{role}.options.{}", service.as_str()))?;
+                let field = format!("{role}.options.{}", service.as_str());
+                options.check(&field)?;
+                if let (Service::Custom, Some(_)) = (service, &options.url) {
+                    bail!("{field}.url is not used: a custom server's URL is {role}.url");
+                }
+                match (role, options.chat_api) {
+                    ("provider", Some(_)) => {
+                        bail!("{field}.chat_api is not used: only polishing chats")
+                    }
+                    (_, Some(_)) if service.chat_api(self.polish.format()).is_none() => {
+                        bail!("{field}.chat_api is not used: this API has only its own")
+                    }
+                    (_, Some(_) | None) => {}
+                }
             }
         }
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.

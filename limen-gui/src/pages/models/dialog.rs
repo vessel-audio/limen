@@ -1,5 +1,6 @@
-//! The dialog a provider card opens: a custom server's format and URL, the
-//! key, and the model, which can be detected and tested before saving.
+//! The dialog a provider card opens: a custom server's format, the URL, the
+//! chat API where there is a choice, the key, and the model, which can be
+//! detected and tested before saving.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants;
@@ -57,29 +58,42 @@ fn body(
             entity.update(cx, |this, cx| action(this, role, cx))
         }
     };
-    let server = service.uses_url().then(|| {
-        [
-            (
-                rust_i18n::t!("models.type").to_string(),
-                div()
-                    .h_flex()
-                    .child(
-                        div().w(px(240.)).child(
-                            Select::new(&form.format)
-                                .id(SharedString::from(format!("{prefix}-format")))
-                                .accessibility_label(rust_i18n::t!("models.type").to_string()),
-                        ),
-                    )
+    let narrow = |select: AnyElement| div().h_flex().child(div().w(px(240.)).child(select));
+    let format = service.uses_url().then(|| {
+        (
+            rust_i18n::t!("models.type").to_string(),
+            narrow(
+                Select::new(&form.format)
+                    .id(SharedString::from(format!("{prefix}-format")))
+                    .accessibility_label(rust_i18n::t!("models.type").to_string())
                     .into_any_element(),
-            ),
-            (
-                rust_i18n::t!("models.url").to_string(),
-                Input::new(&form.url)
-                    .accessibility_id(format!("{prefix}-url"))
-                    .aria_label(rust_i18n::t!("models.url").to_string())
+            )
+            .into_any_element(),
+        )
+    });
+    let url = (
+        rust_i18n::t!("models.url").to_string(),
+        Input::new(&form.url)
+            .accessibility_id(format!("{prefix}-url"))
+            .aria_label(rust_i18n::t!("models.url").to_string())
+            .into_any_element(),
+    );
+    // Only polishing chats, and only OpenAI's APIs offer two ways to.
+    let chat_api = match role {
+        ModelRole::Asr => None,
+        ModelRole::Polish => service.chat_api(form.chosen_format),
+    }
+    .map(|_| {
+        (
+            rust_i18n::t!("models.chat_api").to_string(),
+            narrow(
+                Select::new(&form.chat_api)
+                    .id(SharedString::from(format!("{prefix}-chat-api")))
+                    .accessibility_label(rust_i18n::t!("models.chat_api").to_string())
                     .into_any_element(),
-            ),
-        ]
+            )
+            .into_any_element(),
+        )
     });
     // Only the saved service's key can be removed; another service has none.
     let saved_key = form
@@ -138,7 +152,7 @@ fn body(
                 .disabled(form.detecting())
                 .on_click(on(detect)),
         );
-    let rows = server.into_iter().flatten().chain([
+    let rows = format.into_iter().chain([url]).chain(chat_api).chain([
         (
             rust_i18n::t!("models.key").to_string(),
             key.into_any_element(),
@@ -150,7 +164,6 @@ fn body(
     ]);
     let fields = &form.advanced;
     let advanced = [
-        ("models.route", "route", &fields.path),
         ("models.key_header", "key-header", &fields.key_header),
         ("models.headers", "headers", &fields.headers),
         ("models.body", "body", &fields.body),
