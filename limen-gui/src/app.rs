@@ -64,6 +64,9 @@ pub struct AppView {
     pub shortcuts_scroll: SmoothScroll,
     pub history_scroll: SmoothScroll,
     pub requests_scroll: SmoothScroll,
+    /// The ASR and Polish pages, each scrolled on its own.
+    pub asr_scroll: SmoothScroll,
+    pub polish_scroll: SmoothScroll,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
 }
@@ -176,6 +179,8 @@ impl AppView {
             shortcut_report: None,
             expanded_request: None,
             settings_scroll: SmoothScroll::default(),
+            asr_scroll: SmoothScroll::default(),
+            polish_scroll: SmoothScroll::default(),
             shortcuts_scroll: SmoothScroll::default(),
             history_scroll: SmoothScroll::default(),
             requests_scroll: SmoothScroll::default(),
@@ -423,6 +428,8 @@ impl Render for AppView {
             &self.shortcuts_scroll,
             &self.history_scroll,
             &self.requests_scroll,
+            &self.asr_scroll,
+            &self.polish_scroll,
         ] {
             scroll.step(window);
         }

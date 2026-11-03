@@ -432,6 +432,35 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
     Ok(())
 }
 
+/// An error under all the polishing providers scrolls into view within the
+/// page, above the footer, rather than running under it.
+pub fn a_page_error_below_the_providers_scrolls_into_view() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("polish-page")?;
+    show_polish_providers(&session)?;
+    open_card(&session, "polish-provider-custom", "polish")?;
+    retype(&session, "polish-url", "ftp://10.0.0.2")?;
+    type_model(&session, "typed-model")?;
+    session.click("polish-save")?;
+    session.node("polish-error")?;
+    // Closed, the dialog leaves its error on the page.
+    session.chord(&[Key::ESCAPE])?;
+    session.absent("polish-save")?;
+    let error = session
+        .reveal("polish-error")?
+        .bounds
+        .context("the error has no bounds")?;
+    let page = session
+        .settled("polish-scroll")?
+        .bounds
+        .context("the page has no bounds")?;
+    ensure!(
+        error.y >= page.y && error.bottom() <= page.bottom(),
+        "the error at {error:?} is outside the page at {page:?}"
+    );
+    Ok(())
+}
+
 /// A subscription is signed in to rather than given a key: its dialog asks
 /// for no key or URL, says it is not signed in yet, and saves without one.
 pub fn a_subscription_is_signed_in_to_not_given_a_key() -> Result<()> {
