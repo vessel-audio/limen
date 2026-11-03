@@ -14,13 +14,18 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(url: String, model: String, api_key: Option<String>) -> Self {
-        Self {
-            http: reqwest::Client::new(),
+    /// The server at exactly `url`. Fails where no HTTP client can be built,
+    /// such as on a system without CA certificates.
+    pub fn new(url: String, model: String, api_key: Option<String>) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .build()
+            .context("failed to build the transcription HTTP client")?;
+        Ok(Self {
+            http,
             url,
             model,
             api_key,
-        }
+        })
     }
 }
 
@@ -129,7 +134,8 @@ mod tests {
     #[tokio::test]
     async fn the_take_is_uploaded_to_exactly_the_configured_url() {
         let (url, server) = mock_server("200 OK", json!({"text": "完整文本"}).to_string()).await;
-        let transcriber = Server::new(url, "test-model".to_string(), Some("sk-asr".to_string()));
+        let transcriber =
+            Server::new(url, "test-model".to_string(), Some("sk-asr".to_string())).unwrap();
 
         let text = transcriber.transcribe(take(Some("zh"))).await.unwrap();
 
@@ -153,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn no_key_and_automatic_language_send_neither() {
         let (url, server) = mock_server("200 OK", json!({"text": ""}).to_string()).await;
-        let transcriber = Server::new(url, "test-model".to_string(), None);
+        let transcriber = Server::new(url, "test-model".to_string(), None).unwrap();
 
         transcriber.transcribe(take(None)).await.unwrap();
 
@@ -169,7 +175,7 @@ mod tests {
             ("200 OK", "not-json"),
         ] {
             let (url, server) = mock_server(status, body.to_string()).await;
-            let transcriber = Server::new(url, "test-model".to_string(), None);
+            let transcriber = Server::new(url, "test-model".to_string(), None).unwrap();
 
             assert!(
                 transcriber.transcribe(take(None)).await.is_err(),

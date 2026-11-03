@@ -79,7 +79,7 @@ pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn A
     }
     let model = cfg.provider.model.clone();
     let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg)? {
-        AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())),
+        AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())?),
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
     Ok(Box::new(buffered::Provider::new(transcriber)))
