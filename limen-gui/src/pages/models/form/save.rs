@@ -13,7 +13,8 @@ use crate::bridge::{BridgeCommand, ModelRequest};
 
 /// The provider and key change the dialog's fields describe. A vendor's own
 /// API keeps the saved custom server's format and URL, which it does not
-/// use, and polishing stays as the switch has it; the core validates the
+/// use, and saves its own URL or chat API only where they differ from its
+/// defaults; polishing stays as the switch has it; the core validates the
 /// rest.
 pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChange)> {
     let Some((loaded, _)) = &form.loaded else {
@@ -21,20 +22,34 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
     };
     let service = form.chosen_service;
     let model = form.chosen.clone().map(String::from).unwrap_or_default();
-    let (format, url) = match (service.uses_url(), loaded) {
-        (true, _) => (
-            form.chosen_format,
-            form.url.read(cx).value().trim().to_string(),
+    let typed_url = form.url.read(cx).value().trim().to_string();
+    let (format, url, vendor_url) = match (service.uses_url(), loaded) {
+        (true, _) => (form.chosen_format, typed_url, None),
+        (false, Provider::Asr { format, url, .. } | Provider::Polish { format, url, .. }) => (
+            *format,
+            url.clone(),
+            Some(typed_url).filter(|typed| {
+                !typed.is_empty() && Some(typed.trim_end_matches('/')) != service.default_url()
+            }),
         ),
-        (false, Provider::Asr { format, url, .. } | Provider::Polish { format, url, .. }) => {
-            (*format, url.clone())
-        }
+    };
+    let chat_api = match loaded {
+        Provider::Asr { .. } => None,
+        Provider::Polish { .. } => service
+            .chat_api(form.chosen_format)
+            .filter(|own| *own != form.chosen_chat_api)
+            .map(|_| form.chosen_chat_api),
     };
     // The chosen provider's settings as typed; the others' as saved.
     let mut options = match loaded {
         Provider::Asr { options, .. } | Provider::Polish { options, .. } => options.clone(),
     };
-    match advanced(form, cx)? {
+    let typed = ProviderOptions {
+        url: vendor_url,
+        chat_api,
+        ..advanced(form, cx)?
+    };
+    match typed {
         typed if typed == ProviderOptions::default() => options.remove(&service),
         typed => options.insert(service, typed),
     };
@@ -82,7 +97,6 @@ fn advanced(form: &ProviderForm, cx: &App) -> Result<ProviderOptions> {
         })
         .collect::<Result<_>>()?;
     Ok(ProviderOptions {
-        path: text(&fields.path),
         key_header: text(&fields.key_header),
         timeout_ms: text(&fields.timeout)
             .map(|ms| {
@@ -95,6 +109,7 @@ fn advanced(form: &ProviderForm, cx: &App) -> Result<ProviderOptions> {
             .transpose()?,
         body: text(&fields.body),
         headers,
+        ..ProviderOptions::default()
     })
 }
 

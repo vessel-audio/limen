@@ -70,7 +70,7 @@ fn shape(options: Option<&ProviderOptions>) -> Result<Shape> {
     let options = options.cloned().unwrap_or_default();
     Ok(Shape {
         body: options.body_fields()?,
-        path: options.path,
+        chat_api: options.chat_api,
         key_header: options.key_header,
         headers: options.headers.into_iter().collect(),
     })
@@ -90,9 +90,14 @@ pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
             shape,
         )
         .map(AsrRoute::Api),
-        (vendor, _) => {
-            vendor_endpoint(vendor, config.api_key(), provider.key_env(), shape).map(AsrRoute::Api)
-        }
+        (vendor, _) => vendor_endpoint(
+            vendor,
+            provider.options.get(&vendor),
+            config.api_key(),
+            provider.key_env(),
+            shape,
+        )
+        .map(AsrRoute::Api),
     }
 }
 
@@ -100,6 +105,13 @@ pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
 /// `api_key`.
 pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<Connection> {
     let shape = shape(config.options.get(&config.service()))?;
+    // The core, not the backend, decides which chat API a provider uses.
+    let shape = Shape {
+        chat_api: shape
+            .chat_api
+            .or(config.service().chat_api(config.format())),
+        ..shape
+    };
     match config.service() {
         Service::Custom => custom(
             config.format(),
@@ -108,7 +120,13 @@ pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<C
             api_key,
             shape,
         ),
-        vendor => vendor_endpoint(vendor, api_key, config.key_env(), shape),
+        vendor => vendor_endpoint(
+            vendor,
+            config.options.get(&vendor),
+            api_key,
+            config.key_env(),
+            shape,
+        ),
     }
 }
 
@@ -134,9 +152,11 @@ fn custom(
     })
 }
 
-/// The connection to a vendor's own endpoint, which needs a key.
+/// The connection to a vendor's endpoint, its own or the one its `options`
+/// name, which needs a key.
 fn vendor_endpoint(
     service: Service,
+    options: Option<&ProviderOptions>,
     api_key: Option<String>,
     key_env: Option<&str>,
     shape: Shape,
@@ -147,7 +167,7 @@ fn vendor_endpoint(
     match api_key {
         Some(api_key) => Ok(Connection {
             api,
-            base_url: None,
+            base_url: options.and_then(|options| options.url.clone()),
             api_key: Some(api_key),
             shape,
         }),
@@ -209,8 +229,8 @@ mod tests {
 #[cfg(test)]
 mod routes {
     use super::{AsrRoute, asr, polish};
-    use crate::backend::{Api, Connection};
-    use crate::config::{ApiKey, Config, Format, PolishConfig, Service};
+    use crate::backend::{Api, Connection, Shape};
+    use crate::config::{ApiKey, ChatApi, Config, Format, PolishConfig, Service};
 
     fn config(provider: &str) -> Config {
         toml::from_str(&format!("[provider]\n{provider}\nmodel = \"asr\"\n")).unwrap()
@@ -291,7 +311,10 @@ mod routes {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                     api_key: None,
-                    shape: Default::default(),
+                    shape: Shape {
+                        chat_api: Some(ChatApi::ChatCompletions),
+                        ..Shape::default()
+                    },
                 },
             ]
         );
@@ -336,13 +359,13 @@ mod routes {
             url = "http://127.0.0.1:8080/v1"
 
             [options.custom]
-            path = "/v2/chat"
+            chat_api = "responses"
             key_header = "api-key"
             body = '{"top_p": 0.9}'
             headers = { X-Org = "limen" }
 
             [options.openai]
-            path = "/elsewhere"
+            url = "https://gateway.example/v1"
             "#,
         )
         .unwrap();
@@ -350,7 +373,7 @@ mod routes {
         assert_eq!(
             polish(&config, None).unwrap().shape,
             crate::backend::Shape {
-                path: Some("/v2/chat".to_string()),
+                chat_api: Some(crate::config::ChatApi::Responses),
                 key_header: Some("api-key".to_string()),
                 headers: vec![("X-Org".to_string(), "limen".to_string())],
                 body: serde_json::json!({"top_p": 0.9})

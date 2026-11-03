@@ -140,6 +140,7 @@ models.type: Type
 models.format_compatible: OpenAI-compatible
 models.polishing: Polishing
 models.url: URL
+models.chat_api: Chat API
 models.key: API key
 models.key_saved: Saved; type to replace
 models.key_missing: None
@@ -149,7 +150,6 @@ models.model: Model
 models.search: Search or enter a model
 models.save: Save
 models.advanced: Advanced
-models.route: Route
 models.key_header: Key header
 models.headers: Headers
 models.body: Extra body

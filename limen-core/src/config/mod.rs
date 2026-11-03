@@ -27,10 +27,12 @@ mod validate;
 mod value;
 mod write;
 
-pub(crate) use endpoint::{check_polish_root, check_polish_url, check_url_parameters, display_url};
+pub(crate) use endpoint::{
+    check_key_url, check_polish_root, check_polish_url, check_url_parameters, display_url,
+};
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
-pub use options::ProviderOptions;
+pub use options::{ChatApi, ProviderOptions};
 pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
@@ -119,11 +121,13 @@ model = ""
 # such as OPENAI_API_KEY, is read when unset
 # api_key_env = "MY_POLISH_KEY"
 timeout_ms = 5000
-# Settings of one provider, here the custom server; [provider] takes the same
-# [polish.options.custom]
-# path = "/v2/chat"              # route under `url`, in place of the API's own
+# Settings of one provider, here OpenAI; [provider] takes the same but
+# `chat_api`, and a custom server's URL is `url` above
+# [polish.options.openai]
+# url = "https://gateway.example/v1"  # in place of the vendor's own
+# chat_api = "chat-completions"  # or "responses", OpenAI's default
 # key_header = "api-key"         # the header the key is sent in
-# timeout_ms = 8000              # one try; overrides timeout_ms above
+# timeout_ms = 4000              # one try; timeout_ms above bounds them all
 # retries = 1                    # tries again after a failure
 # body = '{"top_p": 0.9}'        # fields every request body also carries
 # headers = { X-Org = "limen" }  # never a key: this file is not private
@@ -568,7 +572,7 @@ mod tests {
             url = ""
 
             [polish.options.custom]
-            path = "/v2/chat"
+            chat_api = "responses"
             key_header = "api-key"
             body = '{"top_p": 0.9}'
 
@@ -576,6 +580,7 @@ mod tests {
             X-Org = "limen"
 
             [polish.options.anthropic]
+            url = "https://gateway.example"
             timeout_ms = 8000
             "#,
         )
@@ -588,7 +593,7 @@ mod tests {
                 (
                     Service::Custom,
                     super::ProviderOptions {
-                        path: Some("/v2/chat".to_string()),
+                        chat_api: Some(super::ChatApi::Responses),
                         key_header: Some("api-key".to_string()),
                         body: Some(r#"{"top_p": 0.9}"#.to_string()),
                         headers: [("X-Org".to_string(), "limen".to_string())].into(),
@@ -598,6 +603,7 @@ mod tests {
                 (
                     Service::Anthropic,
                     super::ProviderOptions {
+                        url: Some("https://gateway.example".to_string()),
                         timeout_ms: Some(8000),
                         ..Default::default()
                     }
@@ -618,7 +624,7 @@ mod tests {
         };
         assert_eq!(
             [
-                "path = \"v2/chat\"",
+                "url = \"http://192.0.2.1/v1\"",
                 "key_header = \"bad header\"",
                 "timeout_ms = 50",
                 "retries = 9",
@@ -627,12 +633,34 @@ mod tests {
             ]
             .map(refused),
             [
-                "polish.options.custom.path must start with / and carry no query",
+                "polish.options.custom.url must use HTTPS, or HTTP on a loopback address",
                 "polish.options.custom.key_header is not a header name",
                 "polish.options.custom.timeout_ms must be in 100..=120000",
                 "polish.options.custom.retries must be at most 5",
                 "invalid polish.options.custom.body",
                 "polish.options.custom.headers.X-Org is not a header value",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_setting_its_provider_cannot_use_is_refused() {
+        let refused = |options: &str| {
+            let config: Config =
+                toml::from_str(&format!("[provider]\nurl = \"\"\n\n{options}\n")).unwrap();
+            config.validate().unwrap_err().to_string()
+        };
+        assert_eq!(
+            [
+                "[polish.options.custom]\nurl = \"https://gateway.example/v1\"",
+                "[provider.options.openai]\nchat_api = \"responses\"",
+                "[polish.options.anthropic]\nchat_api = \"chat-completions\"",
+            ]
+            .map(refused),
+            [
+                "polish.options.custom.url is not used: a custom server's URL is polish.url",
+                "provider.options.openai.chat_api is not used: only polishing chats",
+                "polish.options.anthropic.chat_api is not used: this API has only its own",
             ]
         );
     }

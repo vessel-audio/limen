@@ -27,7 +27,7 @@ pub use backend::{
     Transcriber, Transient,
 };
 pub use config::{
-    ApiKey, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,
+    ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,
 };
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{

@@ -6,12 +6,14 @@
 //! not reach, such as the whisper.cpp server, list nothing, and any model
 //! name may still be set.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use crate::backend::ModelBackend;
-use crate::config::{self, ApiKey, Config, KeyChange, Paths};
+
+use crate::config::{self, ApiKey, Config, KeyChange, Paths, ProviderOptions, Service};
 use crate::connection::{self, AsrRoute};
 
 mod check;
@@ -45,37 +47,62 @@ pub(crate) fn is_saved(config: &Config, provider: &Provider) -> bool {
             .trim_end_matches('/')
             .to_string()
     };
+    // A vendor's endpoint: the base URL its settings name, else its own.
+    let vendor_url = |options: &BTreeMap<Service, ProviderOptions>, service: Service| {
+        options
+            .get(&service)
+            .and_then(|options| options.url.as_deref())
+            .map(normalized)
+    };
     let (saved, chosen) = match provider {
         Provider::Asr {
             service,
             format,
             url,
+            options,
             ..
         } => (
             (
                 config.provider.service(),
                 config.provider.format(),
                 config.provider.url.as_str(),
+                vendor_url(&config.provider.options, *service),
             ),
-            (*service, *format, url.as_str()),
+            (
+                *service,
+                *format,
+                url.as_str(),
+                vendor_url(options, *service),
+            ),
         ),
         Provider::Polish {
             service,
             format,
             url,
+            options,
             ..
         } => (
             (
                 config.polish.service(),
                 config.polish.format(),
                 config.polish.url.as_str(),
+                vendor_url(&config.polish.options, *service),
             ),
-            (*service, *format, url.as_str()),
+            (
+                *service,
+                *format,
+                url.as_str(),
+                vendor_url(options, *service),
+            ),
         ),
     };
+    // A custom server is the same one at the same URL speaking the same
+    // format; a vendor, the same vendor at the same endpoint.
     chosen.0 == saved.0
-        && (!chosen.0.uses_url()
-            || (chosen.1 == saved.1 && normalized(saved.2) == normalized(chosen.2)))
+        && match chosen.0.uses_url() {
+            true => chosen.1 == saved.1 && normalized(saved.2) == normalized(chosen.2),
+            false => chosen.3 == saved.3,
+        }
 }
 
 /// The config as the page's unsaved fields would leave it for `provider`'s
@@ -210,8 +237,8 @@ mod tests {
 
     use super::list_models;
     use crate::backend::testing::{Built, Recording, Refusing};
-    use crate::backend::{Api, Connection};
-    use crate::config::{ApiKey, Format, KeyChange, Paths, Service};
+    use crate::backend::{Api, Connection, Shape};
+    use crate::config::{ApiKey, ChatApi, Format, KeyChange, Paths, Service};
     use crate::models::{Polishing, Provider};
 
     /// Paths in a fresh directory holding `config`, where no daemon listens.
@@ -313,7 +340,10 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some(base_url.to_string()),
                 api_key: None,
-                shape: Default::default(),
+                shape: Shape {
+                    chat_api: Some(ChatApi::ChatCompletions),
+                    ..Shape::default()
+                },
             })
         };
         assert_eq!(
@@ -391,7 +421,10 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                 api_key: api_key.map(str::to_string),
-                shape: Default::default(),
+                shape: Shape {
+                    chat_api: Some(ChatApi::ChatCompletions),
+                    ..Shape::default()
+                },
             })
         };
         assert_eq!(

@@ -522,7 +522,6 @@ mod tests {
             ..ProviderOptions::default()
         };
         let custom = ProviderOptions {
-            path: Some("/v2/transcribe".to_string()),
             key_header: Some("api-key".to_string()),
             retries: Some(2),
             body: Some(r#"{"prompt": "names"}"#.to_string()),

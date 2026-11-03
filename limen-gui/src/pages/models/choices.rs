@@ -1,10 +1,10 @@
 //! The models a model select offers, and a typed name it takes; the names
-//! of the services and formats a provider page offers.
+//! of the services, formats, and chat APIs a provider page offers.
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem};
 use gpui_kit::*;
-use limen_core::{Format, ModelRole, Service};
+use limen_core::{ChatApi, Format, ModelRole, Service};
 
 /// The models a select offers: the current one first, then those the server
 /// lists. While searching it shows the ones that match and, last, the typed
@@ -133,5 +133,30 @@ impl SearchableListItem for FormatChoice {
 
     fn value(&self) -> &Format {
         &self.format
+    }
+}
+
+/// One of OpenAI's chat APIs, under the name OpenAI gives it.
+#[derive(Debug, Clone)]
+pub struct ChatApiChoice(ChatApi);
+
+impl ChatApiChoice {
+    pub fn new(api: ChatApi) -> Self {
+        Self(api)
+    }
+}
+
+impl SearchableListItem for ChatApiChoice {
+    type Value = ChatApi;
+
+    fn title(&self) -> SharedString {
+        match self.0 {
+            ChatApi::ChatCompletions => "Chat Completions".into(),
+            ChatApi::Responses => "Responses".into(),
+        }
+    }
+
+    fn value(&self) -> &ChatApi {
+        &self.0
     }
 }

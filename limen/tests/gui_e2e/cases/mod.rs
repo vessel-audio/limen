@@ -45,7 +45,7 @@ pub const ALL: &[Case] = cases![
     models::a_saved_key_is_removed,
     models::a_url_credential_is_rejected,
     models::edits_made_while_saving_survive,
-    models::only_a_custom_server_has_a_url,
+    models::openai_polishing_chooses_its_chat_api,
     models::the_model_is_detected_from_the_typed_server,
     models::the_models_are_detected_on_request,
     models::a_model_is_tested_before_it_is_saved,

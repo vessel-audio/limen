@@ -10,17 +10,18 @@ use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 use limen_core::{
-    ConfigChange, Format, KeySource, KeyState, ModelRole, Polishing, Provider, ProviderOptions,
-    Service,
+    ChatApi, ConfigChange, Format, KeySource, KeyState, ModelRole, Polishing, Provider,
+    ProviderOptions, Service,
 };
 
-use super::choices::{FormatChoice, ModelChoices, url_example};
+use super::choices::{ChatApiChoice, FormatChoice, ModelChoices, url_example};
 use crate::app::{AppView, Page};
 use crate::bridge::{BridgeCommand, ModelRequest};
 use crate::model::{Action, Toast};
 use discovery::{Check, Listing};
 
 pub type FormatSelect = SelectState<SearchableVec<FormatChoice>>;
+pub type ChatApiSelect = SelectState<SearchableVec<ChatApiChoice>>;
 
 /// One provider page: its settings as loaded, and the dialog that edits
 /// the service of a card.
@@ -30,7 +31,11 @@ pub struct ProviderForm {
     /// What a custom server speaks, as chosen in the dialog.
     pub chosen_format: Format,
     pub format: Entity<FormatSelect>,
+    /// A custom server's URL, or the one the vendor is reached at.
     pub url: Entity<InputState>,
+    /// The chat API polishing requests use, as chosen in the dialog.
+    pub chosen_chat_api: ChatApi,
+    pub chat_api: Entity<ChatApiSelect>,
     pub key: Entity<InputState>,
     pub model: Entity<SelectState<ModelChoices>>,
     pub advanced: AdvancedFields,
@@ -121,6 +126,14 @@ impl ModelForms {
                     cx,
                 )
             });
+            let chat_api = cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(ChatApi::ALL.map(ChatApiChoice::new).to_vec()),
+                    None,
+                    window,
+                    cx,
+                )
+            });
             let url = cx.new(|cx| InputState::new(window, cx));
             let key = cx.new(|cx| InputState::new(window, cx).masked(true));
             let mut input = |placeholder: &str| {
@@ -128,7 +141,6 @@ impl ModelForms {
                 cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
             };
             let advanced = AdvancedFields {
-                path: input("/chat/completions"),
                 key_header: input("Authorization"),
                 headers: input("X-Org: limen; X-Team: dictation"),
                 body: input(r#"{"top_p": 0.9}"#),
@@ -176,12 +188,32 @@ impl ModelForms {
                             }
                             form.chosen_format = *format;
                             form.edited(EditedField::Format);
+                            // Each API starts on its own chat API.
+                            if let Some(api) = Service::Custom.chat_api(*format) {
+                                form.chosen_chat_api = api;
+                                form.chat_api.update(cx, |select, cx| {
+                                    select.set_selected_value(&api, window, cx)
+                                });
+                            }
                             form.url.update(cx, |input, cx| {
                                 input.set_placeholder(url_example(role, *format), window, cx)
                             });
                         }
                         SelectEvent::Confirm(None) => {}
                     }
+                },
+            ));
+            subscriptions.push(cx.subscribe_in(
+                &chat_api,
+                window,
+                move |this, _, event: &SelectEvent<SearchableVec<ChatApiChoice>>, _, _| match event
+                {
+                    SelectEvent::Confirm(Some(api)) => {
+                        let form = this.models.form(role);
+                        form.chosen_chat_api = *api;
+                        form.edited(EditedField::ChatApi);
+                    }
+                    SelectEvent::Confirm(None) => {}
                 },
             ));
             subscriptions.push(cx.subscribe_in(
@@ -203,6 +235,8 @@ impl ModelForms {
                 chosen_format: Format::OpenAiCompatible,
                 format,
                 url,
+                chosen_chat_api: ChatApi::ChatCompletions,
+                chat_api,
                 key,
                 model,
                 advanced,
@@ -343,7 +377,7 @@ impl ProviderForm {
                 self.key_edits += 1;
                 restart(self);
             }
-            EditedField::Model => {}
+            EditedField::ChatApi | EditedField::Model => {}
         }
         self.error = None;
     }
@@ -412,8 +446,9 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
 }
 
 /// Fill the dialog for `service` from the loaded settings: a custom
-/// server's format and URL as saved, the saved model if `service` is the
-/// saved one, and an empty key showing where the key would come from.
+/// server's format and URL as saved, a vendor's URL and any chat API as
+/// set, else its own, the saved model if `service` is the saved one, and
+/// an empty key showing where the key would come from.
 pub fn fill(
     form: &mut ProviderForm,
     role: ModelRole,
@@ -449,8 +484,20 @@ pub fn fill(
     };
     // Each provider keeps its own settings; another's start empty.
     let options = options.get(&service).cloned().unwrap_or_default();
+    let (url, url_shown) = match service.default_url() {
+        Some(own) => (options.url.clone().unwrap_or(own.to_string()), own),
+        None => (url, url_example(role, format)),
+    };
+    let chat_api = options
+        .chat_api
+        .or(service.chat_api(format))
+        .unwrap_or(ChatApi::ChatCompletions);
     // Settings already made show; none stay folded away.
-    form.show_advanced = options != ProviderOptions::default();
+    form.show_advanced = ProviderOptions {
+        url: None,
+        chat_api: None,
+        ..options.clone()
+    } != ProviderOptions::default();
     let headers = options
         .headers
         .iter()
@@ -458,7 +505,6 @@ pub fn fill(
         .collect::<Vec<_>>()
         .join("; ");
     for (input, value) in [
-        (&form.advanced.path, options.path.unwrap_or_default()),
         (
             &form.advanced.key_header,
             options.key_header.unwrap_or_default(),
@@ -489,7 +535,11 @@ pub fn fill(
     });
     form.url.update(cx, |input, cx| {
         input.set_value(url, window, cx);
-        input.set_placeholder(url_example(role, format), window, cx);
+        input.set_placeholder(url_shown, window, cx);
+    });
+    form.chosen_chat_api = chat_api;
+    form.chat_api.update(cx, |select, cx| {
+        select.set_selected_value(&chat_api, window, cx)
     });
     let placeholder = key_placeholder(&key, service);
     form.key.update(cx, |input, cx| {

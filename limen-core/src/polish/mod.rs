@@ -150,8 +150,8 @@ mod tests {
     use super::{CONSERVATIVE_PROMPT, MAX_TOKENS, Polisher};
     use crate::attempts::Attempts;
     use crate::backend::testing::{Built, Recording, Refusing};
-    use crate::backend::{Api, BoxFuture, ChatModel, Connection, Exchange, Finish, Reply};
-    use crate::config::{ApiKey, PolishConfig, Service};
+    use crate::backend::{Api, BoxFuture, ChatModel, Connection, Exchange, Finish, Reply, Shape};
+    use crate::config::{ApiKey, ChatApi, PolishConfig, Service};
 
     /// How a scripted model answers.
     type Answer = fn() -> Result<Reply>;
@@ -336,7 +336,10 @@ mod tests {
                         api: Api::Compatible,
                         base_url: Some("https://ai.example/v1".to_string()),
                         api_key: Some("sk-polish".to_string()),
-                        shape: Default::default(),
+                        shape: Shape {
+                            chat_api: Some(ChatApi::ChatCompletions),
+                            ..Shape::default()
+                        },
                     },
                     "corrector".to_string()
                 ),
@@ -345,7 +348,10 @@ mod tests {
                         api: Api::Compatible,
                         base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                         api_key: None,
-                        shape: Default::default(),
+                        shape: Shape {
+                            chat_api: Some(ChatApi::ChatCompletions),
+                            ..Shape::default()
+                        },
                     },
                     "corrector".to_string()
                 ),
