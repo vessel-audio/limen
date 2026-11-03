@@ -27,24 +27,22 @@ use rig_reqwest::ReqwestClient;
 const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "http://127.0.0.1/v1", "");
 
 /// The [`ModelBackend`] that reaches every [`Api`] through rig.
-pub struct Rig {
-    http: ReqwestClient,
-}
+///
+/// Each model client gets its own HTTP client, which never follows
+/// redirects so a key is only ever sent to the host it was configured for.
+/// It is built with the model client rather than with the backend: a
+/// system without CA certificates cannot build one, and that must fail the
+/// request, not stop the daemon or the GUI from starting.
+pub struct Rig;
 
 impl Rig {
-    /// A backend on its own HTTP client, which never follows redirects so
-    /// a key is only ever sent to the host it was configured for.
-    pub fn new() -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .context("failed to build the model HTTP client")?;
-        Ok(Self {
-            http: ReqwestClient::from(http),
-        })
-    }
-
     fn client(&self, connection: Connection) -> Result<Client> {
+        let http = ReqwestClient::from(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .context("failed to build the model HTTP client")?,
+        );
         let Connection {
             api,
             base_url,
@@ -57,7 +55,7 @@ impl Rig {
                 Some(base_url) => config.with_base_url(base_url),
                 None => config,
             };
-            Client::OpenAi(Box::new(config.connect(self.http.clone())))
+            Client::OpenAi(Box::new(config.connect(http.clone())))
         };
         Ok(match api {
             Api::Compatible => {
@@ -66,7 +64,7 @@ impl Rig {
                 // A local server started without a key rejects any
                 // `Authorization` header, so send one only with a key.
                 config.auth = Auth::OptionalBearer;
-                Client::OpenAi(Box::new(config.connect(self.http.clone())))
+                Client::OpenAi(Box::new(config.connect(http.clone())))
             }
             Api::OpenAi => openai(&OPENAI),
             Api::DeepSeek => openai(&DEEPSEEK),
@@ -80,7 +78,7 @@ impl Rig {
                     Some(base_url) => config.with_base_url(base_url),
                     None => config,
                 };
-                Client::Anthropic(config.connect(self.http.clone()))
+                Client::Anthropic(config.connect(http.clone()))
             }
             Api::Gemini => {
                 let config = GeminiConfig::new(key);
@@ -88,7 +86,7 @@ impl Rig {
                     Some(base_url) => config.with_base_url(base_url),
                     None => config,
                 };
-                Client::Gemini(config.connect(self.http.clone()))
+                Client::Gemini(config.connect(http.clone()))
             }
         })
     }

@@ -111,8 +111,7 @@ fn chat_reply(finish_reason: &str) -> Value {
 #[tokio::test]
 async fn a_keyless_compatible_server_gets_the_take_without_a_credential() {
     let (base, server) = mock_server(json!({"text": "完整文本"})).await;
-    let transcriber = Rig::new()
-        .unwrap()
+    let transcriber = Rig
         .transcriber(
             connection(Api::Compatible, format!("{base}/v1"), None),
             "asr".to_string(),
@@ -154,8 +153,7 @@ async fn a_keyless_compatible_server_gets_the_take_without_a_credential() {
 #[tokio::test]
 async fn a_compatible_chat_is_asked_deterministically_and_its_reply_reported() {
     let (base, server) = mock_server(chat_reply("stop")).await;
-    let model = Rig::new()
-        .unwrap()
+    let model = Rig
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish")),
             "corrector".to_string(),
@@ -195,8 +193,7 @@ async fn a_compatible_chat_is_asked_deterministically_and_its_reply_reported() {
 #[tokio::test]
 async fn a_cut_off_reply_reports_why_it_stopped() {
     let (base, server) = mock_server(chat_reply("length")).await;
-    let model = Rig::new()
-        .unwrap()
+    let model = Rig
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), None),
             "corrector".to_string(),
@@ -216,10 +213,31 @@ async fn a_cut_off_reply_reports_why_it_stopped() {
 }
 
 #[tokio::test]
+async fn an_unknown_finish_reason_keeps_none_of_its_text() {
+    let (base, server) = mock_server(chat_reply("sk-secret-in-the-reason")).await;
+    let model = Rig
+        .chat(
+            connection(Api::Compatible, format!("{base}/v1"), None),
+            "corrector".to_string(),
+        )
+        .unwrap();
+
+    let reply = model.reply(EXCHANGE).await.unwrap();
+
+    server.await.unwrap();
+    assert_eq!(
+        reply,
+        Reply {
+            text: "你好，世界。".to_string(),
+            finish: Some(Finish::Other),
+        }
+    );
+}
+
+#[tokio::test]
 async fn deepseek_is_asked_not_to_think() {
     let (base, server) = mock_server(chat_reply("stop")).await;
-    let model = Rig::new()
-        .unwrap()
+    let model = Rig
         .chat(
             connection(Api::DeepSeek, base, Some("sk-deepseek")),
             "deepseek-flash".to_string(),
@@ -255,8 +273,7 @@ async fn a_compatible_server_lists_its_models_from_its_api_root() {
     }))
     .await;
 
-    let models = Rig::new()
-        .unwrap()
+    let models = Rig
         .models(connection(Api::Compatible, format!("{base}/v1"), None))
         .await
         .unwrap();
@@ -273,7 +290,7 @@ async fn a_compatible_server_lists_its_models_from_its_api_root() {
 
 #[test]
 fn chat_only_vendors_refuse_to_transcribe() {
-    let rig = Rig::new().unwrap();
+    let rig = Rig;
     for api in [Api::DeepSeek, Api::Anthropic] {
         let connection = Connection {
             api,
@@ -294,12 +311,7 @@ fn a_compatible_server_needs_its_url() {
         base_url: None,
         api_key: None,
     };
-    assert!(
-        Rig::new()
-            .unwrap()
-            .chat(connection, "m".to_string())
-            .is_err()
-    );
+    assert!(Rig.chat(connection, "m".to_string()).is_err());
 }
 
 #[tokio::test]
@@ -310,8 +322,7 @@ async fn a_rejected_key_is_never_quoted_back() {
         json!({"error": {"message": "Invalid API key: sk-secret-123", "code": "invalid_api_key"}}),
     )
     .await;
-    let model = Rig::new()
-        .unwrap()
+    let model = Rig
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
             "corrector".to_string(),
@@ -335,8 +346,7 @@ async fn a_failed_reply_names_its_status_but_not_its_body() {
         json!({"error": {"message": "upstream said sk-secret-123"}}),
     )
     .await;
-    let transcriber = Rig::new()
-        .unwrap()
+    let transcriber = Rig
         .transcriber(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-secret-123")),
             "asr".to_string(),
@@ -366,8 +376,7 @@ async fn a_redirect_is_never_followed_with_the_key() {
         .into_boxed_str(),
     );
     let (base, server) = answering("307 Temporary Redirect", location, json!({})).await;
-    let model = Rig::new()
-        .unwrap()
+    let model = Rig
         .chat(
             connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish")),
             "corrector".to_string(),
