@@ -85,20 +85,49 @@ impl ModelForms {
     }
 }
 
+/// The model check a page started last. One runs at a time; a check whose
+/// fields were edited, or whose daemon was replaced, still runs to its end,
+/// but its reply only frees the Test button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Check {
+    Idle,
+    /// Its reply reports on the fields as they are.
+    Running(u64),
+    /// Its reply is about fields since changed.
+    Superseded(u64),
+}
+
+impl Check {
+    /// This check, its reply no longer about the fields.
+    pub(super) fn superseded(self) -> Self {
+        match self {
+            Self::Running(id) | Self::Superseded(id) => Self::Superseded(id),
+            Self::Idle => Self::Idle,
+        }
+    }
+}
+
 impl ModelForms {
-    /// Record how the model check `id` ended, if it is the one in flight.
+    /// Record how the model check `id` ended: report it if it still tried
+    /// the fields as they are, and free Test either way.
     pub fn checked(&mut self, role: ModelRole, id: u64, result: Result<(), String>) -> Vec<Action> {
         let form = self.form(role);
-        if form.checking != Some(id) {
-            return Vec::new();
-        }
-        form.checking = None;
-        match result {
-            Ok(()) => vec![Action::Toast(Toast::ModelWorks(role))],
-            Err(message) => {
-                form.error = Some(message);
+        match form.checking {
+            Check::Running(running) if running == id => {
+                form.checking = Check::Idle;
+                match result {
+                    Ok(()) => vec![Action::Toast(Toast::ModelWorks(role))],
+                    Err(message) => {
+                        form.error = Some(message);
+                        Vec::new()
+                    }
+                }
+            }
+            Check::Superseded(running) if running == id => {
+                form.checking = Check::Idle;
                 Vec::new()
             }
+            Check::Running(_) | Check::Superseded(_) | Check::Idle => Vec::new(),
         }
     }
 }
@@ -109,9 +138,9 @@ impl ProviderForm {
         matches!(self.listing, Listing::Asked(..))
     }
 
-    /// A model is chosen and no check of one is in flight.
+    /// A model is chosen and no check is running.
     pub fn can_check(&self) -> bool {
-        self.loaded.is_some() && self.chosen.is_some() && self.checking.is_none()
+        self.loaded.is_some() && self.chosen.is_some() && self.checking == Check::Idle
     }
 }
 
@@ -169,7 +198,7 @@ pub fn check(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
             key,
         })) {
         Ok(()) => {
-            form.checking = Some(id);
+            form.checking = Check::Running(id);
             form.error = None;
         }
         Err(error) => form.error = Some(error.to_string()),

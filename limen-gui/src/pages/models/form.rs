@@ -16,7 +16,7 @@ use super::choices::{ModelChoices, ServiceChoice};
 use crate::app::{AppView, Page};
 use crate::bridge::{BridgeCommand, ModelRequest};
 use crate::model::{Action, Toast};
-use discovery::Listing;
+use discovery::{Check, Listing};
 
 pub type ServiceSelect = SelectState<SearchableVec<ServiceChoice>>;
 
@@ -71,7 +71,7 @@ pub struct ProviderForm {
     /// The user asked for the models, so a failure to list them shows.
     detecting: bool,
     /// The model check in flight.
-    checking: Option<u64>,
+    checking: Check,
     /// Counts key edits, so a list asked with an older key is told apart
     /// without keeping the key itself.
     key_edits: u64,
@@ -220,7 +220,7 @@ impl ModelForms {
                 clear_key: false,
                 edited_at: None,
                 detecting: false,
-                checking: None,
+                checking: Check::Idle,
                 key_edits: 0,
                 touched: false,
                 next_request: 0,
@@ -251,6 +251,7 @@ impl ModelForms {
             form.loading = None;
             form.arrived = None;
             form.error = None;
+            form.checking = form.checking.superseded();
         }
     }
 
@@ -313,7 +314,7 @@ impl ProviderForm {
     pub fn edited(&mut self, field: EditedField) {
         self.touched = true;
         // A model check in flight tried other fields: drop its reply.
-        self.checking = None;
+        self.checking = self.checking.superseded();
         // What the server was asked no longer describes the fields: drop
         // its reply when it comes.
         let restart = |form: &mut Self| {
