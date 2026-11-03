@@ -19,7 +19,7 @@ pub use form::{ModelForms, follow};
 
 use form::set_polishing;
 
-pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
+pub fn models(view: &AppView, role: ModelRole, window: &Window, cx: &mut Context<AppView>) -> Div {
     let (form, title, error_id, scroll, area) = match role {
         ModelRole::Asr => (
             &view.models.asr,
@@ -75,7 +75,6 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
     let content = div()
         .v_flex()
         .w_full()
-        .max_w(px(720.))
         .gap_5()
         .p_8()
         .on_scroll(scroll.on_scroll())
@@ -84,7 +83,12 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
         // Polishing off needs no provider.
         .children(match (role, form.polishing) {
             (ModelRole::Asr, _) | (ModelRole::Polish, Polishing::On) => {
-                Some(cards::grid(view, role, cx))
+                // The window less the sidebar, the main area's margin and
+                // border, and the page's padding.
+                let width = window.viewport_size().width
+                    - view.sidebar_mode.width(view.sidebar_width)
+                    - px(8. + 2. + 64.);
+                Some(cards::grid(view, role, width, cx))
             }
             (ModelRole::Polish, Polishing::Off) => None,
         })

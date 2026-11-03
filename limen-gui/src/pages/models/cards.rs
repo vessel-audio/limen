@@ -14,8 +14,14 @@ use crate::motion;
 
 /// The space inside a card around its logo, name, and chevron.
 const CARD_PADDING: Pixels = px(20.);
+/// The narrowest a card may be, which fits the longest name.
+const MIN_CARD: f32 = 200.;
+/// The space between cards.
+const GAP: f32 = 12.;
 
-pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
+/// The cards of `role`'s page, laid out across `width`: as many columns as
+/// fit there, the cards widening to fill them.
+pub fn grid(view: &AppView, role: ModelRole, width: Pixels, cx: &mut Context<AppView>) -> Div {
     let (form, prefix, services) = match role {
         ModelRole::Asr => (&view.models.asr, "asr", Service::TRANSCRIBING.to_vec()),
         ModelRole::Polish => (&view.models.polish, "polish", Service::POLISHING.to_vec()),
@@ -30,6 +36,10 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
         .partition(|(_, service)| service.subscription().is_some());
     // A page with only one kind needs no headings.
     let headed = !subscriptions.is_empty() && !apis.is_empty();
+    // The cards reach into the page's margin by their padding.
+    let columns = ((f32::from(width + CARD_PADDING) + GAP) / (MIN_CARD + GAP))
+        .floor()
+        .max(1.) as u16;
     let group = |title: SharedString, cards: Vec<AnimationElement<Stateful<Div>>>| {
         div()
             .v_flex()
@@ -45,9 +55,9 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
             // with the heading, the cards reaching into the page's margin.
             .child(
                 div()
-                    .h_flex()
-                    .flex_wrap()
-                    .gap_3()
+                    .grid()
+                    .grid_cols(columns)
+                    .gap(px(GAP))
                     .ml(-CARD_PADDING)
                     .children(cards),
             )
@@ -62,7 +72,8 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                 .accessibility_id(id.clone())
                 .role(Role::Button)
                 .aria_label(label.clone())
-                .w(px(200.))
+                .w_full()
+                .min_w(px(MIN_CARD))
                 .h(px(60.))
                 .px(CARD_PADDING)
                 .h_flex()

@@ -450,7 +450,7 @@ impl Render for AppView {
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(pages::models(self, role, cx)),
+                .child(pages::models(self, role, window, cx)),
             Page::Settings(page) => match page {
                 SettingsPage::General => div()
                     .v_flex()
