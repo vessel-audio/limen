@@ -5,7 +5,7 @@
 //! refreshing it when it has expired, so a sign-in made in the GUI reaches
 //! the daemon without a restart.
 
-use std::os::unix::fs::DirBuilderExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -134,15 +134,18 @@ pub(crate) fn kept(dir: &Path, subscription: Subscription) -> bool {
         .exists()
 }
 
-/// Why a sign-in failed, without what a service sent back.
+/// Why a sign-in failed, without what a service sent back: rig's own
+/// messages can quote a reply, which can echo a credential.
 fn sign_in_failed(name: &str, error: AuthError) -> anyhow::Error {
     match error {
         AuthError::Http(_) => {
             anyhow::anyhow!("{name} could not be reached, or refused the sign-in")
         }
         AuthError::Json(_) => anyhow::anyhow!("{name} sent a sign-in reply that could not be read"),
-        // rig's own account of what went wrong, or the local file's.
-        error @ (AuthError::Message(_) | AuthError::Io(_) | AuthError::Store(_)) => {
+        AuthError::Message(_) => anyhow::anyhow!("{name} did not complete the sign-in; try again"),
+        // This computer's own failures, such as a port in use or a file
+        // that could not be written.
+        error @ (AuthError::Io(_) | AuthError::Store(_)) => {
             anyhow::anyhow!("signing in to {name} failed: {error}")
         }
     }
@@ -155,12 +158,15 @@ pub(crate) async fn sign_in(
     http: ReqwestClient,
     prompt: Prompt,
 ) -> Result<()> {
-    // Only the user may read the sign-ins.
+    // Only the user may read the sign-ins, in a directory made before as
+    // much as in a new one.
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)
         .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to make {} private", dir.display()))?;
     let (key, name) = names(subscription);
     match Account::new(subscription, dir, http, Some(Arc::clone(&prompt))) {
         Account::ChatGpt(auth, http) => auth
