@@ -12,7 +12,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, Wi
 use gpui_kit::*;
 use limen_core::{KeyState, ModelRole, Service};
 
-use super::choices::service_label;
+use super::choices::{logo, service_label};
 use super::form::{EditedField, check, detect, fill, save};
 use crate::a11y;
 use crate::app::AppView;
@@ -260,7 +260,14 @@ fn body(
             })
     };
     dialog
-        .title(service_label(service))
+        .title(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(logo(service, cx))
+                .child(service_label(service)),
+        )
         .w(px(600.))
         .rounded(px(20.))
         .centered()

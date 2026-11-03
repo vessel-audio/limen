@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt};
 use gpui_kit::*;
 use limen_core::{ModelRole, Service};
 
-use super::choices::service_label;
+use super::choices::{logo, service_label};
 use super::dialog;
 use crate::app::AppView;
 use crate::motion;
@@ -50,7 +50,7 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                 .accessibility_id(id.clone())
                 .role(Role::Button)
                 .aria_label(label.clone())
-                .w(px(172.))
+                .w(px(200.))
                 .h(px(60.))
                 .px_5()
                 .h_flex()
@@ -72,10 +72,13 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                     true => style.opacity(0.75),
                     false => style,
                 })
+                .child(logo(service, cx))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
+                        .whitespace_nowrap()
+                        .truncate()
                         .text_sm()
                         .font_medium()
                         .child(label),

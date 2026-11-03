@@ -1,8 +1,10 @@
 //! The models a model select offers, and a typed name it takes; the names
-//! of the services, formats, and chat APIs a provider page offers.
+//! and logos of the services, and the names of the formats and chat APIs,
+//! a provider page offers.
 
-use gpui_kit::component::IndexPath;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem};
+use gpui_kit::component::{ActiveTheme, Icon, IndexPath};
 use gpui_kit::*;
 use limen_core::{ChatApi, Format, ModelRole, Service};
 
@@ -59,6 +61,38 @@ impl SearchableListDelegate for ModelChoices {
             .chain(typed)
             .collect();
         Task::ready(())
+    }
+}
+
+/// The logo `service`'s card and dialog show: a server icon for a custom
+/// server, else its vendor's, in its colors where it has its own and in the
+/// text color otherwise.
+pub fn logo(service: Service, cx: &App) -> AnyElement {
+    let size = px(18.);
+    let tinted = |path: &'static str| {
+        svg()
+            .path(path)
+            .flex_shrink_0()
+            .size(size)
+            .text_color(cx.theme().foreground)
+            .into_any_element()
+    };
+    let colored = |path: &'static str| img(path).flex_shrink_0().size(size).into_any_element();
+    match service {
+        Service::Custom => Icon::new(IconName::Server)
+            .flex_shrink_0()
+            .size(size)
+            .text_color(cx.theme().muted_foreground)
+            .into_any_element(),
+        Service::ChatGpt | Service::OpenAi => tinted("limen/logos/openai.svg"),
+        Service::Copilot => tinted("limen/logos/githubcopilot.svg"),
+        Service::Anthropic => tinted("limen/logos/anthropic.svg"),
+        Service::Gemini => colored("limen/logos/gemini-color.svg"),
+        Service::DeepSeek => colored("limen/logos/deepseek-color.svg"),
+        Service::Mistral => colored("limen/logos/mistral-color.svg"),
+        Service::Groq => tinted("limen/logos/groq.svg"),
+        Service::OpenRouter => tinted("limen/logos/openrouter.svg"),
+        Service::XAi => tinted("limen/logos/xai.svg"),
     }
 }
 
