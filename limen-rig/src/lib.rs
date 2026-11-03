@@ -13,6 +13,7 @@ use rig_core::DynModel;
 use rig_core::completion::{CompletionRequest, FinishReason, OnUnsupported, Reasoning};
 use rig_core::error::ProviderError;
 use rig_core::operation::{Completion, Transcription};
+use rig_core::providers::anthropic::wire::Auth as AnthropicAuth;
 use rig_core::providers::anthropic::{Anthropic, AnthropicConfig};
 use rig_core::providers::gemini::{Gemini, GeminiConfig};
 use rig_core::providers::openai::OpenAI;
@@ -78,7 +79,12 @@ impl Rig {
             Api::OpenRouter => openai(&OPENROUTER),
             Api::XAi => openai(&rig_core::providers::xai::DIALECT),
             Api::Anthropic => {
-                let config = AnthropicConfig::new(key);
+                let mut config = AnthropicConfig::new(key.clone());
+                // A keyless custom server gets no credential header at all,
+                // rather than an empty `x-api-key`.
+                if key.is_empty() {
+                    config.dialect.quirks.auth = AnthropicAuth::OptionalBearer;
+                }
                 let config = match &base_url {
                     Some(base_url) => config.with_base_url(base_url),
                     None => config,
@@ -86,6 +92,11 @@ impl Rig {
                 Client::Anthropic(config.connect(http.clone()))
             }
             Api::Gemini => {
+                // Gemini always sends its key in the URL; without one it
+                // would ask with an empty key.
+                if key.is_empty() {
+                    bail!("a Gemini server needs an API key");
+                }
                 let config = GeminiConfig::new(key);
                 let config = match &base_url {
                     Some(base_url) => config.with_base_url(base_url),
@@ -154,7 +165,8 @@ fn sanitized(error: ProviderError) -> anyhow::Error {
                 None => anyhow::anyhow!("the service returned an error"),
             }
         }
-        ProviderError::Http(error) => anyhow::anyhow!("the request did not complete: {error}"),
+        // The transport's error quotes the URL, where Gemini puts the key.
+        ProviderError::Http(_) => anyhow::anyhow!("the service could not be reached"),
         ProviderError::Json(_) | ProviderError::Response(_) => {
             anyhow::anyhow!("the service sent a reply that could not be read")
         }
