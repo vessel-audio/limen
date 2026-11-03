@@ -212,6 +212,7 @@ mod tests {
     const ONCE: Attempts = Attempts {
         timeout: super::REQUEST_TIMEOUT,
         retries: 0,
+        budget: super::REQUEST_TIMEOUT,
     };
 
     /// Records each take and answers it once `release` is notified.

@@ -84,12 +84,12 @@ pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn A
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
     let options = cfg.provider.options.get(&cfg.provider.service());
-    let attempts = Attempts {
-        timeout: options
+    let attempts = Attempts::each(
+        options
             .and_then(|options| options.timeout_ms)
             .map_or(buffered::REQUEST_TIMEOUT, Duration::from_millis),
-        retries: options.and_then(|options| options.retries).unwrap_or(0),
-    };
+        options.and_then(|options| options.retries).unwrap_or(0),
+    );
     Ok(Box::new(buffered::Provider::new(transcriber, attempts)))
 }
 
