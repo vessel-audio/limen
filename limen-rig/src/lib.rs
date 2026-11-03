@@ -208,9 +208,8 @@ impl ChatModel for RigChat {
                     FinishReason::Length => Finish::Length,
                     FinishReason::ContentFilter => Finish::ContentFilter,
                     FinishReason::ToolCalls => Finish::ToolCalls,
-                    FinishReason::Other(other) => Finish::Other(other),
                     // rig may add reasons; none of them is a complete reply.
-                    other => Finish::Other(format!("{other:?}")),
+                    _ => Finish::Other,
                 }),
             })
         })

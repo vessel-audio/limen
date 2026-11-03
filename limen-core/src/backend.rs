@@ -56,8 +56,9 @@ pub enum Finish {
     ContentFilter,
     /// The model stopped to call a tool.
     ToolCalls,
-    /// A reason outside this list, in the provider's own spelling.
-    Other(String),
+    /// A reason outside this list. The service's own spelling is not kept:
+    /// it is text the service chose, and errors and logs show this value.
+    Other,
 }
 
 /// What a chat model answered.
