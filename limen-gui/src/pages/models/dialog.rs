@@ -3,10 +3,11 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::{Dialog, DialogEntrance};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, StyledExt, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, WindowExt as _};
 use gpui_kit::*;
 use limen_core::{KeyState, ModelRole, Service};
 
@@ -14,6 +15,7 @@ use super::choices::service_label;
 use super::form::{EditedField, check, detect, fill, save};
 use crate::a11y;
 use crate::app::AppView;
+use crate::motion;
 
 /// Open the dialog for `service` on `role`'s page, once its settings have
 /// loaded.
@@ -147,24 +149,22 @@ fn body(
         ),
     ]);
     let fields = &form.advanced;
-    let advanced = form.show_advanced.then(|| {
-        [
-            ("models.route", "route", &fields.path),
-            ("models.key_header", "key-header", &fields.key_header),
-            ("models.headers", "headers", &fields.headers),
-            ("models.body", "body", &fields.body),
-            ("models.timeout", "timeout", &fields.timeout),
-            ("models.retries", "retries", &fields.retries),
-        ]
-        .map(|(label, id, input)| {
-            (
-                rust_i18n::t!(label).to_string(),
-                Input::new(input)
-                    .accessibility_id(format!("{prefix}-{id}"))
-                    .aria_label(rust_i18n::t!(label).to_string())
-                    .into_any_element(),
-            )
-        })
+    let advanced = [
+        ("models.route", "route", &fields.path),
+        ("models.key_header", "key-header", &fields.key_header),
+        ("models.headers", "headers", &fields.headers),
+        ("models.body", "body", &fields.body),
+        ("models.timeout", "timeout", &fields.timeout),
+        ("models.retries", "retries", &fields.retries),
+    ]
+    .map(|(label, id, input)| {
+        (
+            rust_i18n::t!(label).to_string(),
+            Input::new(input)
+                .accessibility_id(format!("{prefix}-{id}"))
+                .aria_label(rust_i18n::t!(label).to_string())
+                .into_any_element(),
+        )
     });
     let row = |(label, control): (String, AnyElement)| {
         div()
@@ -181,16 +181,35 @@ fn body(
             )
             .child(div().flex_1().min_w_0().child(control))
     };
+    // How far the advanced settings are open, 0 to 1, as the spring
+    // follows the toggle; the chevron turns and the rows unfold with it.
+    let open = SpringAnimation::new(motion::SPRING).to(match form.show_advanced {
+        true => 1.,
+        false => 0.,
+    });
     let toggle = {
         let entity = entity.clone();
-        a11y::button(format!("{prefix}-advanced"))
-            .ghost()
-            .small()
-            .icon(match form.show_advanced {
-                true => IconName::ChevronDown,
-                false => IconName::ChevronRight,
-            })
-            .label(rust_i18n::t!("models.advanced").to_string())
+        let id = SharedString::from(format!("{prefix}-advanced"));
+        div()
+            .id(id.clone())
+            .accessibility_id(id.clone())
+            .role(Role::Button)
+            .aria_label(rust_i18n::t!("models.advanced").to_string())
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .rounded_md()
+            .cursor_pointer()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .active(|style| style.opacity(0.7))
+            .child(Icon::new(IconName::ChevronRight).small().with_spring(
+                SharedString::from(format!("{id}-chevron")),
+                open.clone(),
+                |chevron, open| chevron.rotate(radians(open * std::f32::consts::FRAC_PI_2)),
+            ))
+            .child(rust_i18n::t!("models.advanced").to_string())
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
                     let form = this.models.form(role);
@@ -202,6 +221,7 @@ fn body(
     dialog
         .title(service_label(service))
         .w(px(600.))
+        .centered()
         .entrance(DialogEntrance::FadeSlide)
         .child(
             div()
@@ -218,15 +238,23 @@ fn body(
                         .overflow_y_scroll()
                         .children(rows.map(row))
                         .child(div().h_flex().child(toggle))
-                        .children(advanced.into_iter().flatten().enumerate().map(
-                            |(index, field)| {
-                                row(field).with_animation(
-                                    SharedString::from(format!("{prefix}-advanced-{index}")),
-                                    crate::motion::stagger(index),
-                                    |row, t| row.opacity(t),
-                                )
-                            },
-                        )),
+                        .child(
+                            // Unfolds to its rows' height on the theme's
+                            // spring and stays drawn while folding, so the
+                            // fields below slide rather than jump.
+                            Collapsible::new()
+                                .w_full()
+                                .motion_id(SharedString::from(format!("{prefix}-advanced-rows")))
+                                .open(form.show_advanced)
+                                .content(
+                                    div()
+                                        .w_full()
+                                        .v_flex()
+                                        .gap_3()
+                                        .pt_3()
+                                        .children(advanced.map(row)),
+                                ),
+                        ),
                 )
                 .child(
                     div()
