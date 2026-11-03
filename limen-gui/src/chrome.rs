@@ -102,7 +102,8 @@ impl AppView {
                             )
                             .with_spring(
                                 "brand-width",
-                                SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.width()),
+                                SpringAnimation::new(motion::SPRING)
+                                    .to(self.sidebar_mode.width(self.sidebar_width)),
                                 |brand, width| brand.w(width),
                             ),
                     )

@@ -17,6 +17,12 @@ pub fn apply(cx: &mut App) {
         theme.colors.accent = rgb(accent).into();
         theme.colors.accent_foreground = rgb(foreground).into();
         theme.colors.border = rgb(border).into();
+        // The page behind a dialog dims well back, so the dialog reads as
+        // the one thing to answer.
+        theme.colors.overlay = Hsla::from(rgb(0x141413)).opacity(match dark {
+            false => 0.32,
+            true => 0.55,
+        });
         theme.colors.title_bar = rgb(background).into();
         theme.colors.title_bar_border = rgb(border).into();
         theme.colors.primary = rgb(0xcc785c).into();

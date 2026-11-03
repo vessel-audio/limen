@@ -42,9 +42,7 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                 .px_5()
                 .py_3()
                 .rounded_xl()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted.opacity(0.18))
+                .bg(cx.theme().muted)
                 .child(
                     div()
                         .flex_1()
