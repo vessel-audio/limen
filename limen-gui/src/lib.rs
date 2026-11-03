@@ -58,9 +58,9 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds {
                         origin: point(px(0.0), px(0.0)),
-                        size: size(px(820.0), px(580.0)),
+                        size: size(px(980.0), px(660.0)),
                     })),
-                    window_min_size: Some(size(px(560.0), px(420.0))),
+                    window_min_size: Some(size(px(600.0), px(440.0))),
                     app_id: Some("io.github.Emin017.Limen".to_string()),
                     ..TitleBar::window_options()
                 },

@@ -40,22 +40,16 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                 .items_center()
                 .gap_3()
                 .rounded_xl()
-                .border_1()
-                .border_color(match marked {
-                    true => theme.primary.opacity(0.55),
-                    false => theme.border,
-                })
-                .bg(theme.muted.opacity(0.18))
+                // Borderless: the fill sets a card apart, and it lifts only
+                // under the pointer.
+                .bg(theme.muted)
                 .cursor(match loaded {
                     true => CursorStyle::PointingHand,
                     false => CursorStyle::Arrow,
                 })
-                .hover({
-                    let hover = theme.muted.opacity(0.4);
-                    move |style| match loaded {
-                        true => style.bg(hover),
-                        false => style,
-                    }
+                .hover(move |style| match loaded {
+                    true => style.shadow_md(),
+                    false => style,
                 })
                 .active(move |style| match loaded {
                     true => style.opacity(0.75),

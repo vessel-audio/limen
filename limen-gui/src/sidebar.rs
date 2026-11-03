@@ -2,7 +2,8 @@
 //!
 //! Horizontal rhythm shared with the title bar: navigation icons sit 22px from
 //! the window edge and labels start at 48px. Collapsing narrows the sidebar to
-//! its icon column, which keeps every icon in place.
+//! its icon column, which keeps every icon in place. The expanded sidebar is
+//! as wide as its edge is dragged.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
@@ -15,6 +16,13 @@ use crate::motion;
 
 const ROW_HEIGHT: f32 = 34.;
 const ROW_GAP: f32 = 4.;
+/// How wide the expanded sidebar starts, and the widths its edge can be
+/// dragged between.
+pub const DEFAULT_WIDTH: Pixels = px(168.);
+const MIN_WIDTH: f32 = 140.;
+const MAX_WIDTH: f32 = 280.;
+/// How wide the draggable edge is.
+const EDGE: f32 = 8.;
 
 /// Whether the sidebar shows labels or only icons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,10 +32,11 @@ pub enum SidebarMode {
 }
 
 impl SidebarMode {
-    /// The sidebar's width, which the title bar's brand area follows.
-    pub fn width(self) -> Pixels {
+    /// The sidebar's width, `expanded` while it shows its labels, which the
+    /// title bar's brand area follows.
+    pub fn width(self, expanded: Pixels) -> Pixels {
         match self {
-            Self::Expanded => px(192.),
+            Self::Expanded => expanded,
             Self::Collapsed => px(60.),
         }
     }
@@ -38,6 +47,16 @@ impl SidebarMode {
             Self::Expanded => 1.,
             Self::Collapsed => 0.,
         }
+    }
+}
+
+/// The sidebar's edge being dragged; it draws nothing under the pointer.
+#[derive(Clone)]
+struct Resizing;
+
+impl Render for Resizing {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
     }
 }
 
@@ -107,9 +126,34 @@ impl AppView {
             ))
             .with_spring(
                 "sidebar-width",
-                SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.width()),
+                SpringAnimation::new(motion::SPRING)
+                    .to(self.sidebar_mode.width(self.sidebar_width)),
                 |sidebar, width| sidebar.w(width),
             )
+    }
+
+    /// The expanded sidebar's edge, dragged to set its width. It lies over
+    /// the sidebar's own right padding, so it moves nothing; the sidebar
+    /// starts at the window's left edge.
+    pub(crate) fn sidebar_edge(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        match self.sidebar_mode {
+            SidebarMode::Collapsed => None,
+            SidebarMode::Expanded => Some(
+                div()
+                    .id("sidebar-edge")
+                    .h_full()
+                    .w(px(EDGE))
+                    .ml(px(-EDGE))
+                    .flex_shrink_0()
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .on_drag(Resizing, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                    .on_drag_move(cx.listener(|this, event: &DragMoveEvent<Resizing>, _, cx| {
+                        this.sidebar_width = px((f32::from(event.event.position.x) + EDGE / 2.)
+                            .clamp(MIN_WIDTH, MAX_WIDTH));
+                        cx.notify();
+                    })),
+            ),
+        }
     }
 
     /// One labelled group of destinations, a tab list named `id`.

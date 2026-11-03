@@ -151,6 +151,14 @@ fn body(
                 .flex_shrink_0()
                 .disabled(form.detecting())
                 .on_click(on(detect)),
+        )
+        .child(
+            a11y::button(format!("{prefix}-test"))
+                .ghost()
+                .label(rust_i18n::t!("models.test").to_string())
+                .flex_shrink_0()
+                .disabled(!form.can_check())
+                .on_click(on(check)),
         );
     let rows = format.into_iter().chain([url]).chain(chat_api).chain([
         (
@@ -234,6 +242,7 @@ fn body(
     dialog
         .title(service_label(service))
         .w(px(600.))
+        .rounded(px(20.))
         .centered()
         .entrance(DialogEntrance::FadeSlide)
         .child(
@@ -283,12 +292,11 @@ fn body(
                             },
                         )))
                         .child(
-                            a11y::button(format!("{prefix}-test"))
+                            a11y::button(format!("{prefix}-cancel"))
                                 .ghost()
-                                .label(rust_i18n::t!("models.test").to_string())
+                                .label(rust_i18n::t!("action.cancel").to_string())
                                 .flex_shrink_0()
-                                .disabled(!form.can_check())
-                                .on_click(on(check)),
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
                             a11y::button(format!("{prefix}-save"))

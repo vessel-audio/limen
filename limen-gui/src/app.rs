@@ -42,6 +42,8 @@ pub struct AppView {
     pub models: ModelForms,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
+    /// The expanded sidebar's width, as its edge was last dragged.
+    pub sidebar_width: Pixels,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_scale: FontScale,
@@ -154,6 +156,7 @@ impl AppView {
                 .chain(model_subscriptions)
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
+            sidebar_width: crate::sidebar::DEFAULT_WIDTH,
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
             font_scale: FontScale::DEFAULT,
@@ -448,6 +451,7 @@ impl Render for AppView {
                     .pr_2()
                     .pb_2()
                     .child(self.sidebar(cx))
+                    .children(self.sidebar_edge(cx))
                     .child(
                         div()
                             .v_flex()
