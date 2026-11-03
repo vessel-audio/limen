@@ -20,10 +20,12 @@ pub struct ProviderOptions {
     /// API's own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_header: Option<String>,
-    /// How long one attempt may take, in milliseconds.
+    /// How long one try may take, in milliseconds. For polishing,
+    /// `[polish].timeout_ms` still bounds every try together.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
-    /// How many times a failed request is tried again.
+    /// How many times a request that failed for now, as when the service
+    /// could not be reached or was busy, is tried again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retries: Option<u32>,
     /// A JSON object whose fields every request body also carries.

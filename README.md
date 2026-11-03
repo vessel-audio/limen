@@ -90,8 +90,11 @@ and also takes a typed name; Detect asks at once. The whisper.cpp server lists
 none. Test asks the model to do its job once with the fields as typed, without
 saving them. Each dialog's Advanced settings belong to that provider alone:
 a route under the base URL in place of the API's own, the header the key is
-sent in, extra request headers, extra JSON body fields, and a timeout and
-retries for each request. They are saved under `[provider.options.<service>]`
+sent in, extra request headers, extra JSON body fields, a timeout for each
+try, and how many times a request that failed for now (the service was
+unreachable, busy, or failing) is tried again; a rejected key or a refused
+request is never repeated, and `[polish].timeout_ms` bounds a whole
+correction, retries included. They are saved under `[provider.options.<service>]`
 or `[polish.options.<service>]`; the config file is not private, so a key
 belongs in the API key field, sent in the key header, never in the headers. Saving writes `config.toml` and applies the change to a running
 daemon from its next take. API keys never go into

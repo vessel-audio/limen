@@ -24,7 +24,7 @@ mod task;
 pub use audio::Level;
 pub use backend::{
     Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Take,
-    Transcriber,
+    Transcriber, Transient,
 };
 pub use config::{
     ApiKey, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,

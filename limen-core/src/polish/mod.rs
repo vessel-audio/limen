@@ -53,6 +53,8 @@ impl Polisher {
                 return Ok(Self::UnreachableUrl);
             }
         };
+        // `timeout_ms` bounds the whole correction, which holds the next
+        // transcript back; a provider's own timeout bounds each try in it.
         let options = config.options.get(&config.service());
         Ok(Self::Enabled {
             model: backend.chat(connection, config.model.clone())?,
@@ -63,6 +65,7 @@ impl Polisher {
                         .unwrap_or(config.timeout_ms),
                 ),
                 retries: options.and_then(|options| options.retries).unwrap_or(0),
+                budget: Duration::from_millis(config.timeout_ms),
             },
         })
     }
@@ -186,10 +189,7 @@ mod tests {
                 delay,
                 asked: asked.clone(),
             }),
-            attempts: Attempts {
-                timeout: Duration::from_millis(100),
-                retries: 0,
-            },
+            attempts: Attempts::each(Duration::from_millis(100), 0),
         };
         (polisher, asked)
     }

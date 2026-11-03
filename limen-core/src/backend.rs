@@ -86,6 +86,15 @@ pub enum Api {
     XAi,
 }
 
+/// A failure worth sending the same request again for: the service could
+/// not be reached, or said it is busy or failing for now. A backend returns
+/// it, inside its `anyhow::Error`, only for such failures; the core tries
+/// nothing else again, so a rejected key or a refused request is never
+/// repeated.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Transient(pub String);
+
 /// Where a backend sends one role's requests, and with which key.
 #[derive(Clone, PartialEq)]
 pub struct Connection {

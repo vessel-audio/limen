@@ -10,7 +10,8 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
 use limen_core::{
-    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
+    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take,
+    Transcriber, Transient,
 };
 use rig_core::DynModel;
 use rig_core::completion::{CompletionRequest, FinishReason, OnUnsupported, Reasoning};
@@ -222,20 +223,26 @@ fn sanitized(error: ProviderError) -> anyhow::Error {
                 Some(status @ (401 | 403)) => {
                     anyhow::anyhow!("the service rejected the API key with HTTP {status}")
                 }
+                // Busy, or failing for now: worth trying again.
+                Some(status @ (408 | 429 | 500..=599)) => {
+                    Transient(format!("the service returned HTTP {status}")).into()
+                }
                 Some(status) => anyhow::anyhow!("the service returned HTTP {status}"),
                 None => anyhow::anyhow!("the service returned an error"),
             }
         }
         // The transport's error quotes the URL, where Gemini puts the key.
-        ProviderError::Http(_) => anyhow::anyhow!("the service could not be reached"),
+        ProviderError::Http(_) => Transient("the service could not be reached".to_string()).into(),
         ProviderError::Json(_) | ProviderError::Response(_) => {
             anyhow::anyhow!("the service sent a reply that could not be read")
         }
         ProviderError::Url(_) | ProviderError::Request(_) => {
             anyhow::anyhow!("the request could not be built")
         }
-        ProviderError::Truncated => anyhow::anyhow!("the reply ended early"),
-        ProviderError::Stalled(after) => anyhow::anyhow!("the reply stalled for {after:?}"),
+        ProviderError::Truncated => Transient("the reply ended early".to_string()).into(),
+        ProviderError::Stalled(after) => {
+            Transient(format!("the reply stalled for {after:?}")).into()
+        }
         // rig's own diagnostics and refusals of an option name no reply.
         error @ (ProviderError::Provider(_) | ProviderError::UnsupportedOption(_)) => {
             anyhow::anyhow!("{error}")

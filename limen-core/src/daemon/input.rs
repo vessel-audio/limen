@@ -239,10 +239,7 @@ mod tests {
     async fn keep_retains_polishing_without_backend_compatibility_or_commit() {
         let polisher = Polisher::Enabled {
             model: Box::new(Correcting),
-            attempts: crate::attempts::Attempts {
-                timeout: Duration::from_secs(1),
-                retries: 0,
-            },
+            attempts: crate::attempts::Attempts::each(Duration::from_secs(1), 0),
         };
         // Dotool rejects any Unicode commit before spawning a process. A
         // compatibility fallback would return the original and fail the test.

@@ -540,3 +540,40 @@ fn a_route_or_key_header_the_api_cannot_take_is_refused() {
         ]
     );
 }
+
+#[tokio::test]
+async fn only_failures_that_may_pass_are_marked_transient() {
+    let mut transient = Vec::new();
+    for status in [
+        "503 Service Unavailable",
+        "429 Too Many Requests",
+        "401 Unauthorized",
+        "400 Bad Request",
+    ] {
+        let (base, server) = answering(status, "", json!({"error": {"message": "no"}})).await;
+        let model = Rig
+            .chat(
+                connection(Api::Compatible, format!("{base}/v1"), Some("sk")),
+                "corrector".to_string(),
+            )
+            .unwrap();
+        let error = model.reply(EXCHANGE).await.unwrap_err();
+        server.await.unwrap();
+        transient.push(error.is::<limen_core::Transient>());
+    }
+    let unreachable = Rig
+        .chat(
+            connection(Api::Compatible, "http://127.0.0.1:9/v1".to_string(), None),
+            "corrector".to_string(),
+        )
+        .unwrap()
+        .reply(EXCHANGE)
+        .await
+        .unwrap_err()
+        .is::<limen_core::Transient>();
+
+    assert_eq!(
+        (transient, unreachable),
+        (vec![true, true, false, false], true)
+    );
+}

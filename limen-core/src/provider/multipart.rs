@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::{BoxFuture, Shape, Take, Transcriber};
+use crate::backend::{BoxFuture, Shape, Take, Transcriber, Transient};
 
 pub struct Server {
     http: reqwest::Client,
@@ -68,10 +68,17 @@ impl Transcriber for Server {
                 (Some(key), None) => request.bearer_auth(key),
                 (None, _) => request,
             };
-            let response = request.send().await.context("transcription request")?;
+            let response = request
+                .send()
+                .await
+                .map_err(|_| Transient("the server could not be reached".to_string()))?;
             // The body is never quoted: it can echo the request or the key.
-            if !response.status().is_success() {
-                bail!("the server returned HTTP {}", response.status());
+            match response.status().as_u16() {
+                200..=299 => {}
+                status @ (408 | 429 | 500..=599) => {
+                    return Err(Transient(format!("the server returned HTTP {status}")).into());
+                }
+                status => bail!("the server returned HTTP {status}"),
             }
             response
                 .json::<TranscriptionResponse>()
