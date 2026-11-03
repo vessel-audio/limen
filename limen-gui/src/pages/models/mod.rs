@@ -43,10 +43,8 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
                 .h_flex()
                 .items_center()
                 .gap_4()
-                .px_5()
                 .py_3()
                 .rounded_xl()
-                .bg(cx.theme().muted)
                 .child(
                     div()
                         .flex_1()
@@ -78,7 +76,6 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
         .v_flex()
         .w_full()
         .max_w(px(720.))
-        .mx_auto()
         .gap_5()
         .p_8()
         .on_scroll(scroll.on_scroll())
