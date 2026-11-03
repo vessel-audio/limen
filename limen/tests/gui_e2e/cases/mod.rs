@@ -25,6 +25,7 @@ macro_rules! cases {
 pub const ALL: &[Case] = cases![
     navigation::sidebar_switches_pages,
     navigation::sidebar_collapses_to_icons_and_back,
+    navigation::dragging_the_sidebar_edge_resizes_and_collapses_it,
     navigation::title_bar_buttons_show_tooltips,
     navigation::settings_button_opens_general_settings,
     navigation::the_keyboard_reaches_and_presses_controls,
