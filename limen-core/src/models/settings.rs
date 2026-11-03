@@ -50,35 +50,28 @@ pub enum KeyState {
 }
 
 /// Where a provider's key may come from, whichever service the page
-/// chooses: the key saved for its role, `api_key_env`, or the service's own
-/// variable.
+/// chooses: the key saved for its role and the variable the config reads,
+/// for the saved service, or else the chosen service's own variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeySource {
     saved: bool,
-    /// `api_key_env` as the config names it.
-    variable: Option<String>,
-    /// The saved service and the variable the config reads for it, which
-    /// for a config from before services may be neither of the above.
+    /// The saved service and the variable the config reads for it:
+    /// `api_key_env`, the service's own, or, for a config from before
+    /// services, the old default.
     loaded: (Service, Option<String>),
 }
 
 impl KeySource {
-    /// Whether a key is saved for the role.
-    pub fn is_saved(&self) -> bool {
-        self.saved
-    }
-
-    /// Where the key comes from once `service` is chosen.
+    /// Where the key comes from once `service` is chosen. The saved key and
+    /// the variable the config names belong to the saved service; another
+    /// one has only its own variable, such as OPENAI_API_KEY.
     pub fn state(&self, service: Service) -> KeyState {
-        let variable = match &self.loaded {
-            (loaded, variable) if *loaded == service => variable.clone(),
-            _ => self
-                .variable
-                .clone()
-                .or_else(|| service.key_env().map(str::to_string)),
+        let (saved, variable) = match &self.loaded {
+            (loaded, variable) if *loaded == service => (self.saved, variable.clone()),
+            _ => (false, service.key_env().map(str::to_string)),
         };
         let set = |variable: &String| std::env::var(variable).is_ok_and(|key| !key.is_empty());
-        match (self.saved, variable.filter(set)) {
+        match (saved, variable.filter(set)) {
             (true, _) => KeyState::Saved,
             (false, Some(variable)) => KeyState::Environment(variable),
             (false, None) => KeyState::Missing,
@@ -95,7 +88,7 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
     config::recover_provider_save(&paths.config_file)?;
     let config = Config::read_unchecked(&paths.config_file)?;
     let keys = config::saved_keys(&paths.config_file)?;
-    let (provider, saved, variable, resolved) = match role {
+    let (provider, saved, resolved) = match role {
         ModelRole::Asr => (
             Provider::Asr {
                 service: config.provider.service(),
@@ -104,7 +97,6 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                 model: config.provider.model.clone(),
             },
             keys.asr,
-            config.provider.api_key_env.clone(),
             (
                 config.provider.service(),
                 config.provider.key_env().map(str::to_string),
@@ -127,7 +119,6 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                 model: config.polish.model.clone(),
             },
             keys.polish,
-            config.polish.api_key_env.clone(),
             (
                 config.polish.service(),
                 config.polish.key_env().map(str::to_string),
@@ -138,7 +129,6 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
         provider,
         KeySource {
             saved: saved.is_some(),
-            variable,
             loaded: resolved,
         },
     ))
@@ -199,6 +189,15 @@ pub async fn save_provider(
         } if blank(model) => bail!("enter a model name"),
         Provider::Asr { .. } | Provider::Polish { .. } => {}
     }
+    // The key stored for the role, and the variable the config names for
+    // it, belong to the provider saved; another one starts without them.
+    let current = Config::read_unchecked(&paths.config_file)?;
+    let moved = !super::is_saved(&current, &provider);
+    let key = match (key, moved) {
+        (KeyChange::Keep, true) => KeyChange::Clear,
+        (key, _) => key,
+    };
+    let unset = |name: config::Key| moved.then_some((name, config::Value::Unset));
     let text = |text: String| config::Value::Text(text.trim().to_string());
     let service = |service: Service| config::Value::Text(service.as_str().to_string());
     let format = |format: Format| config::Value::Text(format.as_str().to_string());
@@ -220,6 +219,7 @@ pub async fn save_provider(
                     .uses_url()
                     .then(|| (config::Key::ProviderUrl, text(url))),
                 Some((config::Key::ProviderModel, text(model))),
+                unset(config::Key::ProviderKeyEnv),
             ]
             .into_iter()
             .flatten()
@@ -249,6 +249,7 @@ pub async fn save_provider(
                 (chosen.uses_url() || url.trim().is_empty())
                     .then(|| (config::Key::PolishUrl, text(url))),
                 Some((config::Key::PolishModel, text(model))),
+                unset(config::Key::PolishKeyEnv),
             ]
             .into_iter()
             .flatten()
@@ -456,34 +457,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn another_provider_starts_without_the_saved_key_or_variable() {
+        let paths = scratch("provider-moved");
+        fs::write(
+            &paths.config_file,
+            format!("{CONFIG}api_key_env = \"MY_ASR_KEY\"\n"),
+        )
+        .unwrap();
+        fs::write(
+            paths.config_file.with_file_name("keys.toml"),
+            "asr = \"sk-server-a\"\n",
+        )
+        .unwrap();
+        let groq = Provider::Asr {
+            service: Service::Groq,
+            format: Format::OpenAiCompatible,
+            url: "http://127.0.0.1:8000/v1/audio/transcriptions".to_string(),
+            model: "whisper".to_string(),
+        };
+
+        save_provider(&paths, groq, KeyChange::Keep).await.unwrap();
+
+        let config = Config::load(&paths.config_file).unwrap();
+        assert_eq!(
+            (config.provider.api_key_env, config.provider.saved_key),
+            (None, None)
+        );
+    }
+
     #[test]
     fn the_key_state_follows_the_chosen_service() {
         let key = KeySource {
             saved: false,
-            variable: None,
             loaded: (Service::OpenAi, Some("PATH".to_string())),
-        };
-        let named = KeySource {
-            variable: Some("HOME".to_string()),
-            ..key.clone()
         };
         let saved = KeySource {
             saved: true,
             ..key.clone()
         };
 
+        // Another service has neither the saved key nor the saved variable.
         assert_eq!(
             [
                 key.state(Service::OpenAi),
                 key.state(Service::Custom),
-                named.state(Service::Anthropic),
+                saved.state(Service::OpenAi),
                 saved.state(Service::Custom),
             ],
             [
                 KeyState::Environment("PATH".to_string()),
                 KeyState::Missing,
-                KeyState::Environment("HOME".to_string()),
                 KeyState::Saved,
+                KeyState::Missing,
             ]
         );
     }

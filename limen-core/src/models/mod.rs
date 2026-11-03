@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::backend::ModelBackend;
-use crate::config::{self, ApiKey, Config, Format, KeyChange, Paths, Service};
+use crate::config::{self, ApiKey, Config, KeyChange, Paths};
 use crate::connection::{self, AsrRoute};
 
 mod check;
@@ -30,6 +30,52 @@ pub enum ModelRole {
     Asr,
     /// `[polish]`, which corrects each transcript.
     Polish,
+}
+
+/// Whether `provider` is the one `config` saved for its role, so the key
+/// stored for the role belongs to it: a custom server speaking the same
+/// format at the same URL, or the same vendor.
+pub(crate) fn is_saved(config: &Config, provider: &Provider) -> bool {
+    // The page writes a saved URL back in its own form, such as without a
+    // default port, so compare URLs as parsed.
+    let normalized = |url: &str| {
+        reqwest::Url::parse(url.trim())
+            .map(String::from)
+            .unwrap_or_else(|_| url.trim().to_string())
+            .trim_end_matches('/')
+            .to_string()
+    };
+    let (saved, chosen) = match provider {
+        Provider::Asr {
+            service,
+            format,
+            url,
+            ..
+        } => (
+            (
+                config.provider.service(),
+                config.provider.format(),
+                config.provider.url.as_str(),
+            ),
+            (*service, *format, url.as_str()),
+        ),
+        Provider::Polish {
+            service,
+            format,
+            url,
+            ..
+        } => (
+            (
+                config.polish.service(),
+                config.polish.format(),
+                config.polish.url.as_str(),
+            ),
+            (*service, *format, url.as_str()),
+        ),
+    };
+    chosen.0 == saved.0
+        && (!chosen.0.uses_url()
+            || (chosen.1 == saved.1 && normalized(saved.2) == normalized(chosen.2)))
 }
 
 /// The config as the page's unsaved fields would leave it for `provider`'s
@@ -52,22 +98,7 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
         (KeyChange::Keep, true) => saved.map(ApiKey::new),
         (KeyChange::Clear, _) | (KeyChange::Keep, false) => None,
     };
-    // The page writes a saved URL back in its own form, such as without a
-    // default port, so compare URLs as parsed.
-    let normalized = |url: &str| {
-        reqwest::Url::parse(url.trim())
-            .map(String::from)
-            .unwrap_or_else(|_| url.trim().to_string())
-            .trim_end_matches('/')
-            .to_string()
-    };
-    // A custom server is the saved one when it speaks the same format at the
-    // same URL; a vendor when it is the same vendor.
-    let same = |saved: (Service, Format, &str), chosen: (Service, Format, &str)| {
-        chosen.0 == saved.0
-            && (!chosen.0.uses_url()
-                || (chosen.1 == saved.1 && normalized(saved.2) == normalized(chosen.2)))
-    };
+    let same = is_saved(&config, provider);
     match provider {
         Provider::Asr {
             service,
@@ -75,14 +106,6 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             url,
             model,
         } => {
-            let same = same(
-                (
-                    config.provider.service(),
-                    config.provider.format(),
-                    &config.provider.url,
-                ),
-                (*service, *format, url),
-            );
             config.provider.saved_key = stored(keys.asr, same);
             config.provider.model = model.trim().to_string();
             match same {
@@ -102,14 +125,6 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             model,
             ..
         } => {
-            let same = same(
-                (
-                    config.polish.service(),
-                    config.polish.format(),
-                    &config.polish.url,
-                ),
-                (*service, *format, url),
-            );
             config.polish.saved_key = stored(keys.polish, same);
             config.polish.model = model.trim().to_string();
             match same {

@@ -44,6 +44,12 @@ pub struct ProviderForm {
     pub polishing: Polishing,
     /// The dialog is showing.
     pub open: bool,
+    /// Counts the dialog's openings, so a save from an earlier one is told
+    /// apart from one from the dialog showing.
+    opening: u64,
+    /// Where the save in flight came from: the opening of the dialog that
+    /// sent it, or `None` for the polishing switch.
+    saved_from: Option<u64>,
     /// A save from the dialog succeeded with no edits since, so it closes.
     close_requested: bool,
     /// The settings must be loaded again when the page shows.
@@ -173,6 +179,8 @@ impl ModelForms {
                 arrived: None,
                 polishing: Polishing::Off,
                 open: false,
+                opening: 0,
+                saved_from: None,
                 close_requested: false,
                 stale: true,
                 visible: false,
@@ -250,13 +258,15 @@ impl ModelForms {
             return Vec::new();
         }
         form.saving = None;
+        // Only the dialog that sent the save closes, or keeps its edits.
+        let own = form.open && form.saved_from == Some(form.opening);
         match result {
             Ok(change) => {
                 form.error = None;
                 if !form.touched {
                     form.clear_key = false;
                     form.stale = true;
-                    form.close_requested = form.open;
+                    form.close_requested = own;
                 }
                 vec![Action::Toast(match change {
                     ConfigChange::Applied => Toast::ProviderApplied(role),
@@ -268,7 +278,7 @@ impl ModelForms {
                 if let Some((Provider::Polish { polishing, .. }, _)) = &form.loaded {
                     form.polishing = *polishing;
                 }
-                form.touched = form.open;
+                form.touched = form.touched || own;
                 form.error = Some(message);
                 Vec::new()
             }
@@ -405,8 +415,11 @@ pub fn fill(
     form.listing = Listing::Unknown;
     form.edited_at = None;
     form.detecting = false;
+    // A check another opening started reports on fields no longer shown.
+    form.checking = form.checking.superseded();
     form.clear_key = false;
     form.error = None;
+    form.opening += 1;
     // Choosing another service is itself something to save.
     form.touched = service != saved;
     form.open = true;
