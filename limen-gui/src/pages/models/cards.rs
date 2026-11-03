@@ -12,6 +12,9 @@ use super::dialog;
 use crate::app::AppView;
 use crate::motion;
 
+/// The space inside a card around its logo, name, and chevron.
+const CARD_PADDING: Pixels = px(20.);
+
 pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
     let (form, prefix, services) = match role {
         ModelRole::Asr => (&view.models.asr, "asr", Service::TRANSCRIBING.to_vec()),
@@ -38,7 +41,16 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                     .text_color(theme.muted_foreground)
                     .child(title)
             }))
-            .child(div().h_flex().flex_wrap().gap_3().children(cards))
+            // Cards show no edges until lifted, so their contents line up
+            // with the heading, the cards reaching into the page's margin.
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .gap_3()
+                    .ml(-CARD_PADDING)
+                    .children(cards),
+            )
     };
     let card =
         |(index, service): (usize, Service)| {
@@ -52,14 +64,14 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                 .aria_label(label.clone())
                 .w(px(200.))
                 .h(px(60.))
-                .px_5()
+                .px(CARD_PADDING)
                 .h_flex()
                 .items_center()
                 .gap_3()
                 .rounded_xl()
-                // Borderless: the fill sets a card apart, and it lifts only
-                // under the pointer.
-                .bg(theme.muted)
+                // Borderless and on the page's own background: a card shows
+                // its edges only as it lifts under the pointer.
+                .bg(theme.background)
                 .cursor(match loaded {
                     true => CursorStyle::PointingHand,
                     false => CursorStyle::Arrow,
