@@ -12,9 +12,6 @@ use crate::connection::{self, AsrRoute};
 
 mod buffered;
 mod multipart;
-mod setup;
-
-pub use setup::{Endpoint, server_url, server_url_with_route, split_url};
 
 /// Static parameters of one ASR session; the model and key are bound when
 /// the provider is built.
@@ -164,7 +161,7 @@ mod tests {
         };
         assert_eq!(
             [
-                unset("service = \"openai-compatible\"\nmodel = \"asr\""),
+                unset("service = \"custom\"\nmodel = \"asr\""),
                 unset("url = \"http://127.0.0.1:8080/inference\""),
             ],
             [

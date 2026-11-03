@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::backend::ModelBackend;
-use crate::config::{self, ApiKey, Config, KeyChange, Paths, Service};
+use crate::config::{self, ApiKey, Config, Format, KeyChange, Paths, Service};
 use crate::connection::{self, AsrRoute};
 
 mod check;
@@ -61,20 +61,27 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             .trim_end_matches('/')
             .to_string()
     };
-    let same = |saved: Service, saved_url: &str, chosen: Service, url: &str| {
-        chosen == saved && (!chosen.uses_url() || normalized(saved_url) == normalized(url))
+    // A custom server is the saved one when it speaks the same format at the
+    // same URL; a vendor when it is the same vendor.
+    let same = |saved: (Service, Format, &str), chosen: (Service, Format, &str)| {
+        chosen.0 == saved.0
+            && (!chosen.0.uses_url()
+                || (chosen.1 == saved.1 && normalized(saved.2) == normalized(chosen.2)))
     };
     match provider {
         Provider::Asr {
             service,
+            format,
             url,
             model,
         } => {
             let same = same(
-                config.provider.service(),
-                &config.provider.url,
-                *service,
-                url,
+                (
+                    config.provider.service(),
+                    config.provider.format(),
+                    &config.provider.url,
+                ),
+                (*service, *format, url),
             );
             config.provider.saved_key = stored(keys.asr, same);
             config.provider.model = model.trim().to_string();
@@ -82,6 +89,7 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
                 true => {}
                 false => {
                     config.provider.service = Some(*service);
+                    config.provider.format = Some(*format);
                     config.provider.url = url.trim().to_string();
                     config.provider.api_key_env = None;
                 }
@@ -89,17 +97,26 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
         }
         Provider::Polish {
             service,
+            format,
             url,
             model,
             ..
         } => {
-            let same = same(config.polish.service(), &config.polish.url, *service, url);
+            let same = same(
+                (
+                    config.polish.service(),
+                    config.polish.format(),
+                    &config.polish.url,
+                ),
+                (*service, *format, url),
+            );
             config.polish.saved_key = stored(keys.polish, same);
             config.polish.model = model.trim().to_string();
             match same {
                 true => {}
                 false => {
                     config.polish.service = Some(*service);
+                    config.polish.format = Some(*format);
                     config.polish.url = url.trim().to_string();
                     config.polish.api_key_env = None;
                 }
@@ -108,7 +125,7 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             // and the polisher would.
             if service.uses_url() {
                 config::check_polish_url(url.trim())?;
-                config::check_polish_route(url.trim())?;
+                config::check_polish_root(url.trim(), *format)?;
             }
         }
     }
@@ -175,7 +192,7 @@ mod tests {
     use super::list_models;
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, Connection};
-    use crate::config::{ApiKey, KeyChange, Paths, Service};
+    use crate::config::{ApiKey, Format, KeyChange, Paths, Service};
     use crate::models::{Polishing, Provider};
 
     /// Paths in a fresh directory holding `config`, where no daemon listens.
@@ -192,9 +209,10 @@ mod tests {
         }
     }
 
-    fn asr(service: Service, url: &str) -> Provider {
+    fn asr(format: Format, url: &str) -> Provider {
         Provider::Asr {
-            service,
+            service: Service::Custom,
+            format,
             url: url.to_string(),
             model: String::new(),
         }
@@ -219,7 +237,7 @@ mod tests {
         let models = list_models(
             &paths,
             &asr(
-                Service::OpenAiCompatible,
+                Format::OpenAiCompatible,
                 "http://127.0.0.1:8000/v1/audio/transcriptions",
             ),
             &KeyChange::Keep,
@@ -245,7 +263,7 @@ mod tests {
     async fn a_stored_key_never_reaches_another_server_or_service() {
         let paths = scratch(
             "models-stored-key",
-            "[provider]\nurl = \"\"\n\n[polish]\nservice = \"openai-compatible\"\nurl = \"https://saved.example/v1/chat/completions\"\napi_key_env = \"PATH\"\n",
+            "[provider]\nurl = \"\"\n\n[polish]\nservice = \"custom\"\nurl = \"https://saved.example/v1/chat/completions\"\napi_key_env = \"PATH\"\n",
         );
         fs::write(
             paths.config_file.with_file_name("keys.toml"),
@@ -256,27 +274,31 @@ mod tests {
         let polish = |service, url: &str| Provider::Polish {
             polishing: Polishing::Off,
             service,
+            format: Format::OpenAiCompatible,
             url: url.to_string(),
             model: String::new(),
         };
 
         for provider in [
-            polish(
-                Service::OpenAiCompatible,
-                "https://other.example/v1/chat/completions",
-            ),
-            polish(Service::OpenAiCompatible, "https://saved.e"),
+            polish(Service::Custom, "https://other.example/v1/chat/completions"),
+            polish(Service::Custom, "https://saved.e"),
         ] {
             let _ = list_models(&paths, &provider, &KeyChange::Keep, &backend).await;
         }
 
+        let keyless = |base_url: &str| {
+            Built::Models(Connection {
+                api: Api::Compatible,
+                base_url: Some(base_url.to_string()),
+                api_key: None,
+            })
+        };
         assert_eq!(
             backend.built.lock().unwrap().clone(),
-            [Built::Models(Connection {
-                api: Api::Compatible,
-                base_url: Some("https://other.example/v1".to_string()),
-                api_key: None,
-            })]
+            [
+                keyless("https://other.example/v1"),
+                keyless("https://saved.e")
+            ]
         );
     }
 
@@ -296,7 +318,7 @@ mod tests {
         list_models(
             &paths,
             &asr(
-                Service::OpenAiCompatible,
+                Format::OpenAiCompatible,
                 "https://asr.example/v1/audio/transcriptions",
             ),
             &KeyChange::Keep,
@@ -326,7 +348,8 @@ mod tests {
         let backend = Recording::default();
         let polish = Provider::Polish {
             polishing: Polishing::Off,
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: " http://127.0.0.1:8080/v1/chat/completions ".to_string(),
             model: String::new(),
         };
@@ -357,7 +380,7 @@ mod tests {
 
         let error = list_models(
             &paths,
-            &asr(Service::WhisperCpp, "http://127.0.0.1:8080/inference"),
+            &asr(Format::WhisperCpp, "http://127.0.0.1:8080/inference"),
             &KeyChange::Keep,
             &Refusing,
         )
@@ -375,7 +398,8 @@ mod tests {
         let paths = scratch("models-insecure", "[provider]\nurl = \"\"\n");
         let polish = Provider::Polish {
             polishing: Polishing::Off,
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: "http://192.0.2.1/v1/chat/completions".to_string(),
             model: String::new(),
         };

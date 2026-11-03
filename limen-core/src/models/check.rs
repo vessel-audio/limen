@@ -87,7 +87,7 @@ mod tests {
     use super::check_model;
     use crate::backend::testing::Answering;
     use crate::backend::{Finish, Reply};
-    use crate::config::{KeyChange, Paths, Service};
+    use crate::config::{Format, KeyChange, Paths, Service};
     use crate::models::{Polishing, Provider};
 
     /// Paths in a fresh directory holding an empty config.
@@ -117,7 +117,8 @@ mod tests {
     fn polish(model: &str) -> Provider {
         Provider::Polish {
             polishing: Polishing::Off,
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
             model: model.to_string(),
         }
@@ -153,7 +154,8 @@ mod tests {
     async fn an_asr_model_passes_once_it_transcribes_a_take() {
         let paths = scratch("check-asr");
         let asr = Provider::Asr {
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: "http://127.0.0.1:8000/v1/audio/transcriptions".to_string(),
             model: "asr".to_string(),
         };

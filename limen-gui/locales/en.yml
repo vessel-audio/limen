@@ -135,10 +135,9 @@ nav.asr: ASR
 nav.polish: Polish
 models.asr_title: ASR model
 models.polish_title: Polish model
-models.server: Server
-models.service: Service
-models.service_compatible: OpenAI-compatible server
-models.service_whisper: whisper.cpp server
+models.custom: Custom
+models.type: Type
+models.format_compatible: OpenAI-compatible
 models.polishing: Polishing
 models.url: URL
 models.key: API key

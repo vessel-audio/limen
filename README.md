@@ -79,14 +79,17 @@ upgrade leaves an outdated daemon running, restart it from the GUI so the new
 protocol takes effect.
 
 The Models pages, opened from the sidebar or the Models button on the dictation
-page, set up the ASR provider (service, server, API key, model) and the
-polishing provider (on or off, service, URL, API key, model). A service is
-either a server you name, or a vendor's own API, which needs only a key. No
-server or model is set until you choose one. Once the server address or key
-stops changing, the page asks the service for its models: a server that offers
-exactly one fills it in, and otherwise the list offers them and also takes a
-typed name. The whisper.cpp server lists none. Saving writes `config.toml` and applies the
-change to a running daemon from its next take. API keys never go into
+page, show each role's providers as cards, the saved one marked; the Polish page
+also has the switch that turns polishing on or off. A card opens a dialog: a
+vendor's needs only an API key and a model, and Custom names your own server by
+its URL and the API it speaks, OpenAI-compatible, whisper.cpp for ASR, or any
+vendor's. No server or model is set until you choose one. Once the server
+address or key stops changing, the dialog asks the provider for its models: a
+server that offers exactly one fills it in, and otherwise the list offers them
+and also takes a typed name; Detect asks at once. The whisper.cpp server lists
+none. Test asks the model to do its job once with the fields as typed, without
+saving them. Saving writes `config.toml` and applies the change to a running
+daemon from its next take. API keys never go into
 `config.toml`: they are saved in `keys.toml` beside it with mode 0600, and a
 saved key comes before the variable named by `api_key_env`, which defaults to
 the vendor's own, such as `OPENAI_API_KEY`.
@@ -176,12 +179,14 @@ released the key.
 ## Recognition
 
 Each take is buffered in memory and sent in one transcription request when
-recording stops. The `service` in `[provider]` picks where it goes:
-`openai-compatible` and the vendors are reached through
-[rig](https://github.com/0xPlaygrounds/rig), and `whisper-cpp` uploads the take
-to exactly the configured `url`. A config without `service` keeps working: a
-URL ending in `/audio/transcriptions` is an OpenAI-compatible server, and any
-other URL gets the whisper.cpp upload. There are no incremental transcript
+recording stops. The `service` in `[provider]` picks where it goes: a vendor,
+or `custom`, your server at `url` speaking `format`. Vendors and every format
+but `whisper-cpp` are reached through
+[rig](https://github.com/0xPlaygrounds/rig), with `url` as the API's base URL,
+such as `http://127.0.0.1:8000/v1`; `whisper-cpp` uploads the take to exactly
+`url`. A config without `service` keeps working: a URL ending in
+`/audio/transcriptions` is an OpenAI-compatible server, and any other URL gets
+the whisper.cpp upload. There are no incremental transcript
 or text input events during recording. A successful request produces one final
 transcript for the whole take.
 
@@ -190,19 +195,20 @@ transcript for the whole take.
 Polishing is disabled by default, and no model is chosen for it. Enable it on
 the GUI's Polish page with the chat model of your choice, or in the config with
 the API key in the daemon's environment, never in the config file. A local
-OpenAI-compatible server needs no key:
+server needs no key:
 
 ```toml
 [polish]
 enabled = true
-service = "openai-compatible"
-url = "http://127.0.0.1:8080/v1/chat/completions"
+service = "custom"
+format = "openai-compatible"   # or any vendor's API: anthropic, gemini, ...
+url = "http://127.0.0.1:8080/v1"
 model = "qwen3-8b"
 timeout_ms = 5000
 ```
 
-A vendor's own API takes no `url`, and reads its key from its own variable
-unless `api_key_env` names another:
+A vendor's own API takes no `url` or `format`, and reads its key from its own
+variable unless `api_key_env` names another:
 
 ```toml
 [polish]
@@ -211,9 +217,9 @@ service = "anthropic"   # or openai, gemini, deepseek, mistral, groq, openrouter
 model = "your-model"
 ```
 
-A server's URL must end in `/chat/completions`. Remote servers must use HTTPS;
-HTTP is allowed only on a loopback address, for example
-`http://127.0.0.1:3425/v1/chat/completions`. The request asks for temperature 0
+A custom server's URL is its API's base URL, without a query. Remote servers
+must use HTTPS; HTTP is allowed only on a loopback address, for example
+`http://127.0.0.1:3425/v1`. The request asks for temperature 0
 and no reasoning, which each API receives in its own form, or not at all where a
 model cannot take it.
 

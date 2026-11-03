@@ -8,7 +8,7 @@ use gpui_kit::*;
 use limen_core::{ModelRole, Provider};
 use tokio::sync::mpsc;
 
-use super::{Address, EditedField, ModelForms, ProviderForm, save};
+use super::{EditedField, ModelForms, ProviderForm, save};
 use crate::app::AppView;
 use crate::bridge::{BridgeCommand, ModelRequest};
 use crate::model::{Action, Toast};
@@ -144,12 +144,9 @@ impl ProviderForm {
     }
 }
 
-/// The page's fields, or why they name no server to ask.
+/// The dialog's fields, or why they name no server to ask.
 fn named(form: &ProviderForm, cx: &App) -> Result<(Provider, limen_core::KeyChange), String> {
-    let address = match &form.address {
-        Address::Server { server } => server.read(cx).value(),
-        Address::Url { url, .. } => url.read(cx).value(),
-    };
+    let address = form.url.read(cx).value();
     match (form.chosen_service.uses_url(), address.trim().is_empty()) {
         (true, true) => Err(rust_i18n::t!("models.enter_server").to_string()),
         (true, false) | (false, _) => save::fields(form, cx).map_err(|error| format!("{error:#}")),
@@ -219,7 +216,7 @@ pub(super) fn discover(
     // The fields as they are name what the list is about: a server
     // without an address, or one that does not parse, has no models.
     let query = form
-        .filled
+        .open
         .then(|| save::fields(form, cx).ok())
         .flatten()
         .filter(|(provider, _)| match provider {
@@ -229,9 +226,24 @@ pub(super) fn discover(
         })
         .map(|(provider, key)| {
             let endpoint = match &provider {
-                Provider::Asr { service, url, .. } | Provider::Polish { service, url, .. } => {
-                    format!("{} {} {}", service.as_str(), url.trim(), form.key_edits)
+                Provider::Asr {
+                    service,
+                    format,
+                    url,
+                    ..
                 }
+                | Provider::Polish {
+                    service,
+                    format,
+                    url,
+                    ..
+                } => format!(
+                    "{} {} {} {}",
+                    service.as_str(),
+                    format.as_str(),
+                    url.trim(),
+                    form.key_edits
+                ),
             };
             (endpoint, provider, key)
         });

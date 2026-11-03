@@ -24,7 +24,7 @@ pub use audio::Level;
 pub use backend::{
     Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
 };
-pub use config::{ApiKey, Config, KeyChange, Paths, Service, ShortcutConfig};
+pub use config::{ApiKey, Config, Format, KeyChange, Paths, Service, ShortcutConfig};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
@@ -39,10 +39,7 @@ pub use models::{
     KeySource, KeyState, ModelRole, Polishing, Provider, check_model, list_models, load_provider,
     save_provider,
 };
-pub use provider::{
-    Endpoint as ProviderEndpoint, probe, server_url as provider_server_url,
-    server_url_with_route as provider_server_url_with_route, split_url as split_provider_url,
-};
+pub use provider::probe;
 pub use reload::ConfigChange;
 pub use shortcut::desktop_entry::{APP_ID, Launch};
 pub use shortcut::program::Program;

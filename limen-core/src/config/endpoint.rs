@@ -29,17 +29,15 @@ pub(crate) fn check_polish_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Check that `url` is a chat-completions route the backend can reach: one
-/// ending in `/chat/completions`, without a query. Only saves check this,
-/// so a config from before services, which may name another route, still
-/// loads; its polisher then keeps the original transcripts.
-pub(crate) fn check_polish_route(url: &str) -> Result<()> {
-    match crate::connection::base_url(url, crate::connection::CHAT_COMPLETIONS) {
+/// Check that `url` is the base URL of a polishing server speaking
+/// `format`: one without a query, which no route under it can carry. Only
+/// saves check this, so a config from before services, which may name a
+/// route with a query, still loads; its polisher then keeps the original
+/// transcripts.
+pub(crate) fn check_polish_root(url: &str, format: super::Format) -> Result<()> {
+    match crate::connection::custom_root(url, format, crate::connection::CHAT_COMPLETIONS) {
         Some(_) => Ok(()),
-        None => bail!(
-            "polish.url must end in {}, without a query",
-            crate::connection::CHAT_COMPLETIONS
-        ),
+        None => bail!("polish.url must be the server's base URL, without a query"),
     }
 }
 

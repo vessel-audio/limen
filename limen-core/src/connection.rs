@@ -1,10 +1,11 @@
-//! Where each role's requests go: the [`Connection`] its service names, or,
-//! for the whisper.cpp service, Limen's own upload to its URL.
+//! Where each role's requests go: a vendor's own endpoint, the API root of
+//! a custom server in the format it speaks, or, for a custom whisper.cpp
+//! server, Limen's own upload to its URL.
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::{Api, Connection};
-use crate::config::{Config, PolishConfig, Service};
+use crate::backend::Connection;
+use crate::config::{Config, Format, PolishConfig, Service};
 
 /// The transcription route under an OpenAI-compatible API root.
 pub(crate) const TRANSCRIPTIONS: &str = "/audio/transcriptions";
@@ -36,70 +37,87 @@ pub(crate) fn base_url(endpoint: &str, route: &str) -> Option<String> {
     }
 }
 
+/// The API root a custom server's `url` names. An OpenAI-compatible server
+/// may also be named by its `route`, as configs from before custom servers
+/// did. `None` when the URL has no host, or a query, which no route under a
+/// root can carry.
+pub(crate) fn custom_root(url: &str, format: Format, route: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    match (parsed.has_host(), parsed.query(), parsed.fragment()) {
+        (true, None, None) => {
+            let path = parsed.path().trim_end_matches('/');
+            let path = match format {
+                Format::OpenAiCompatible => path.strip_suffix(route).unwrap_or(path),
+                Format::WhisperCpp
+                | Format::OpenAi
+                | Format::Anthropic
+                | Format::Gemini
+                | Format::DeepSeek
+                | Format::Mistral
+                | Format::Groq
+                | Format::OpenRouter
+                | Format::XAi => path,
+            };
+            Some(format!("{}{path}", parsed.origin().ascii_serialization()))
+        }
+        (false, _, _) | (true, Some(_), _) | (true, None, Some(_)) => None,
+    }
+}
+
 /// The route of the configured ASR service.
 pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
     let provider = &config.provider;
-    let service = provider.service();
-    match service.api() {
-        None => Ok(AsrRoute::Upload(provider.url.clone())),
-        Some(api) => connect(
-            service,
-            api,
-            &provider.url,
-            TRANSCRIPTIONS,
-            config.api_key(),
-            provider.key_env(),
-        )
-        .map(AsrRoute::Api),
+    match (provider.service(), provider.format()) {
+        (Service::Custom, Format::WhisperCpp) => Ok(AsrRoute::Upload(provider.url.clone())),
+        (Service::Custom, format) => {
+            custom(format, &provider.url, TRANSCRIPTIONS, config.api_key()).map(AsrRoute::Api)
+        }
+        (vendor, _) => {
+            vendor_endpoint(vendor, config.api_key(), provider.key_env()).map(AsrRoute::Api)
+        }
     }
 }
 
 /// The connection of the configured polishing service, which sends
 /// `api_key`.
 pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<Connection> {
-    let service = config.service();
-    let api = service.api().with_context(|| {
-        format!(
-            "polish.service \"{}\" does not polish text",
-            service.as_str()
-        )
-    })?;
-    connect(
-        service,
-        api,
-        &config.url,
-        CHAT_COMPLETIONS,
-        api_key,
-        config.key_env(),
-    )
+    match config.service() {
+        Service::Custom => custom(config.format(), &config.url, CHAT_COMPLETIONS, api_key),
+        vendor => vendor_endpoint(vendor, api_key, config.key_env()),
+    }
 }
 
-/// The connection to `api`: at the API root of `url`, whose path ends in
-/// `route`, for a server Limen is pointed at; a vendor's own endpoint,
-/// which needs a key, otherwise.
-fn connect(
+/// The connection to a custom server speaking `format` at `url`, which
+/// may need no key.
+fn custom(format: Format, url: &str, route: &str, api_key: Option<String>) -> Result<Connection> {
+    let api = format
+        .api()
+        .with_context(|| format!("a {} server cannot do this", format.as_str()))?;
+    let base_url = custom_root(url, format, route)
+        .context("the server URL must be its API's base URL, without a query")?;
+    Ok(Connection {
+        api,
+        base_url: Some(base_url),
+        api_key,
+    })
+}
+
+/// The connection to a vendor's own endpoint, which needs a key.
+fn vendor_endpoint(
     service: Service,
-    api: Api,
-    url: &str,
-    route: &str,
     api_key: Option<String>,
     key_env: Option<&str>,
 ) -> Result<Connection> {
-    match (service.uses_url(), api_key) {
-        (true, api_key) => match base_url(url, route) {
-            Some(base_url) => Ok(Connection {
-                api,
-                base_url: Some(base_url),
-                api_key,
-            }),
-            None => bail!("the server URL must end in {route}, without a query"),
-        },
-        (false, Some(api_key)) => Ok(Connection {
+    let api = service
+        .vendor_api()
+        .context("a custom server has no endpoint of its own")?;
+    match api_key {
+        Some(api_key) => Ok(Connection {
             api,
             base_url: None,
             api_key: Some(api_key),
         }),
-        (false, None) => bail!(
+        None => bail!(
             "{} needs an API key: save one on its Models page{}",
             service.as_str(),
             key_env
@@ -158,7 +176,7 @@ mod tests {
 mod routes {
     use super::{AsrRoute, asr, polish};
     use crate::backend::{Api, Connection};
-    use crate::config::{ApiKey, Config, PolishConfig, Service};
+    use crate::config::{ApiKey, Config, Format, PolishConfig, Service};
 
     fn config(provider: &str) -> Config {
         toml::from_str(&format!("[provider]\n{provider}\nmodel = \"asr\"\n")).unwrap()
@@ -234,6 +252,35 @@ mod routes {
                     api_key: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_custom_server_speaks_its_format_at_its_base_url() {
+        let anthropic = PolishConfig {
+            service: Some(Service::Custom),
+            format: Some(Format::Anthropic),
+            url: "http://127.0.0.1:4000/".to_string(),
+            ..PolishConfig::default()
+        };
+        let mut gemini = config(
+            "service = \"custom\"\nformat = \"gemini\"\nurl = \"http://10.0.0.2:9000/v1beta\"",
+        );
+        gemini.provider.saved_key = Some(ApiKey::new("sk-gemini".to_string()));
+        assert_eq!(
+            (polish(&anthropic, None).unwrap(), asr(&gemini).unwrap()),
+            (
+                Connection {
+                    api: Api::Anthropic,
+                    base_url: Some("http://127.0.0.1:4000".to_string()),
+                    api_key: None,
+                },
+                AsrRoute::Api(Connection {
+                    api: Api::Gemini,
+                    base_url: Some("http://10.0.0.2:9000/v1beta".to_string()),
+                    api_key: Some("sk-gemini".to_string()),
+                })
+            )
         );
     }
 }

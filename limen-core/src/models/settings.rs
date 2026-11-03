@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 
 use super::ModelRole;
-use crate::config::{self, Config, KeyChange, Paths, Service};
+use crate::config::{self, Config, Format, KeyChange, Paths, Service};
 use crate::ipc::v1;
 use crate::reload::{ConfigChange, reload};
 
@@ -18,19 +18,21 @@ pub enum Polishing {
 /// A model provider as saved in the config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provider {
-    /// The service that transcribes, its server's transcription URL, and
-    /// its model.
+    /// The service that transcribes, and its model. A custom server also
+    /// has the format it speaks and its URL, which a vendor's own API keeps
+    /// but does not use.
     Asr {
         service: Service,
+        format: Format,
         url: String,
         model: String,
     },
-    /// The service that polishes transcripts, its server's
-    /// chat-completions URL, and its model. The URL of a vendor's own API
-    /// is kept but unused.
+    /// The service that polishes transcripts, and its model, with a custom
+    /// server's format and URL as for [`Provider::Asr`].
     Polish {
         polishing: Polishing,
         service: Service,
+        format: Format,
         url: String,
         model: String,
     },
@@ -97,6 +99,7 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
         ModelRole::Asr => (
             Provider::Asr {
                 service: config.provider.service(),
+                format: config.provider.format(),
                 url: config.provider.url.clone(),
                 model: config.provider.model.clone(),
             },
@@ -114,6 +117,7 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                     false => Polishing::Off,
                 },
                 service: config.polish.service(),
+                format: config.polish.format(),
                 // A vendor inferred from its own endpoint, the old default,
                 // has no server of the user's to offer when they choose one.
                 url: match (config.polish.service, config.polish.service().uses_url()) {
@@ -153,11 +157,15 @@ pub async fn save_provider(
         Provider::Polish {
             polishing: Polishing::On,
             service,
+            format,
             url,
             ..
         } if service.uses_url() => {
+            if url.trim().is_empty() {
+                bail!("enter the server's URL");
+            }
             config::check_polish_url(url.trim())?;
-            config::check_polish_route(url.trim())?;
+            config::check_polish_root(url.trim(), *format)?;
         }
         Provider::Polish {
             polishing: Polishing::On,
@@ -193,16 +201,21 @@ pub async fn save_provider(
     }
     let text = |text: String| config::Value::Text(text.trim().to_string());
     let service = |service: Service| config::Value::Text(service.as_str().to_string());
+    let format = |format: Format| config::Value::Text(format.as_str().to_string());
     let (role, values, request) = match provider {
         Provider::Asr {
             service: chosen,
+            format: spoken,
             url,
             model,
         } => (
             ModelRole::Asr,
             [
                 Some((config::Key::ProviderService, service(chosen))),
-                // A vendor's own API leaves the server's URL as it was.
+                // A vendor's own API leaves the custom server as it was.
+                chosen
+                    .uses_url()
+                    .then(|| (config::Key::ProviderFormat, format(spoken))),
                 chosen
                     .uses_url()
                     .then(|| (config::Key::ProviderUrl, text(url))),
@@ -216,6 +229,7 @@ pub async fn save_provider(
         Provider::Polish {
             polishing,
             service: chosen,
+            format: spoken,
             url,
             model,
         } => (
@@ -226,6 +240,9 @@ pub async fn save_provider(
                     config::Value::Switch(polishing == Polishing::On),
                 )),
                 Some((config::Key::PolishService, service(chosen))),
+                chosen
+                    .uses_url()
+                    .then(|| (config::Key::PolishFormat, format(spoken))),
                 // A vendor's own API leaves a server's URL for switching
                 // back, but an empty field, as for a vendor named by its own
                 // endpoint, is written so that endpoint is not offered.
@@ -252,7 +269,7 @@ mod tests {
     use std::fs;
 
     use super::{KeySource, KeyState, Polishing, Provider, load_provider, save_provider};
-    use crate::config::{ApiKey, Config, KeyChange, Paths, Service};
+    use crate::config::{ApiKey, Config, Format, KeyChange, Paths, Service};
     use crate::models::ModelRole;
     use crate::reload::ConfigChange;
 
@@ -278,7 +295,8 @@ mod tests {
         let paths = scratch("provider-save");
         let polish = Provider::Polish {
             polishing: Polishing::On,
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: " http://127.0.0.1:3425/v1/chat/completions ".to_string(),
             model: "qwen3".to_string(),
         };
@@ -295,7 +313,7 @@ mod tests {
         assert_eq!(
             (
                 change,
-                (provider, key.state(Service::OpenAiCompatible)),
+                (provider, key.state(Service::Custom)),
                 Config::load(&paths.config_file).unwrap().polish.api_key(),
             ),
             (
@@ -303,7 +321,8 @@ mod tests {
                 (
                     Provider::Polish {
                         polishing: Polishing::On,
-                        service: Service::OpenAiCompatible,
+                        service: Service::Custom,
+                        format: Format::OpenAiCompatible,
                         url: "http://127.0.0.1:3425/v1/chat/completions".to_string(),
                         model: "qwen3".to_string(),
                     },
@@ -318,7 +337,8 @@ mod tests {
     async fn a_blank_model_is_refused_before_anything_is_written() {
         let paths = scratch("provider-blank");
         let asr = Provider::Asr {
-            service: Service::WhisperCpp,
+            service: Service::Custom,
+            format: Format::WhisperCpp,
             url: "http://127.0.0.1:8000/inference".to_string(),
             model: "  ".to_string(),
         };
@@ -334,9 +354,33 @@ mod tests {
                 load_provider(&paths, ModelRole::Asr)
                     .unwrap()
                     .1
-                    .state(Service::WhisperCpp)
+                    .state(Service::Custom)
             ),
             (CONFIG.to_string(), KeyState::Missing)
+        );
+    }
+
+    #[tokio::test]
+    async fn polishing_a_custom_server_needs_its_url() {
+        let paths = scratch("provider-no-url");
+        let provider = Provider::Polish {
+            polishing: Polishing::On,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
+            url: " ".to_string(),
+            model: "m".to_string(),
+        };
+
+        let error = save_provider(&paths, provider, KeyChange::Keep)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            (
+                error.to_string(),
+                fs::read_to_string(&paths.config_file).unwrap()
+            ),
+            ("enter the server's URL".to_string(), CONFIG.to_string())
         );
     }
 
@@ -345,7 +389,8 @@ mod tests {
         let paths = scratch("provider-disable");
         let provider = Provider::Polish {
             polishing: Polishing::Off,
-            service: Service::OpenAiCompatible,
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
             url: "http://".to_string(),
             model: "m".to_string(),
         };
@@ -356,7 +401,7 @@ mod tests {
 
         let (loaded, key) = load_provider(&paths, ModelRole::Polish).unwrap();
         assert_eq!(
-            (change, loaded, key.state(Service::OpenAiCompatible)),
+            (change, loaded, key.state(Service::Custom)),
             (ConfigChange::Saved, provider, KeyState::Missing)
         );
     }
@@ -372,6 +417,7 @@ mod tests {
         let provider = Provider::Polish {
             polishing: Polishing::Off,
             service: Service::Anthropic,
+            format: Format::OpenAiCompatible,
             url: "https://ignored.example/chat/completions?token=unused".to_string(),
             model: "m".to_string(),
         };
@@ -395,6 +441,7 @@ mod tests {
         let provider = Provider::Polish {
             polishing: Polishing::Off,
             service: Service::Anthropic,
+            format: Format::OpenAiCompatible,
             url: String::new(),
             model: "m".to_string(),
         };
@@ -428,9 +475,9 @@ mod tests {
         assert_eq!(
             [
                 key.state(Service::OpenAi),
-                key.state(Service::OpenAiCompatible),
+                key.state(Service::Custom),
                 named.state(Service::Anthropic),
-                saved.state(Service::OpenAiCompatible),
+                saved.state(Service::Custom),
             ],
             [
                 KeyState::Environment("PATH".to_string()),
@@ -447,6 +494,7 @@ mod tests {
         let polish = Provider::Polish {
             polishing: Polishing::Off,
             service: Service::Anthropic,
+            format: Format::OpenAiCompatible,
             url: "https://ignored.example/v1/chat/completions".to_string(),
             model: String::new(),
         };
@@ -468,6 +516,7 @@ mod tests {
                 Provider::Polish {
                     polishing: Polishing::Off,
                     service: Service::Anthropic,
+                    format: Format::OpenAiCompatible,
                     url: String::new(),
                     model: String::new(),
                 }
@@ -487,7 +536,8 @@ mod tests {
         assert_eq!(
             load_provider(&paths, ModelRole::Asr).unwrap().0,
             Provider::Asr {
-                service: Service::WhisperCpp,
+                service: Service::Custom,
+                format: Format::WhisperCpp,
                 url: "http://".to_string(),
                 model: "m".to_string()
             }

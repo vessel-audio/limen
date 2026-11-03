@@ -135,10 +135,9 @@ nav.asr: 语音识别
 nav.polish: 润色
 models.asr_title: ASR 模型
 models.polish_title: 润色模型
-models.server: 服务器
-models.service: 服务
-models.service_compatible: OpenAI 兼容服务器
-models.service_whisper: whisper.cpp 服务器
+models.custom: 自定义
+models.type: 类型
+models.format_compatible: OpenAI 兼容
 models.polishing: 润色
 models.url: 地址
 models.key: API 密钥
