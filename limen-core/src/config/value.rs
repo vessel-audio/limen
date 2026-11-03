@@ -26,15 +26,18 @@ pub(crate) enum Key {
     PolishEnabled,
     PolishService,
     PolishFormat,
+    ProviderKeyEnv,
+    PolishKeyEnv,
     PolishUrl,
     PolishModel,
 }
 
-/// A value to write: text or a switch.
+/// A value to write: text or a switch, or no value, which removes the key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Value {
     Text(String),
     Switch(bool),
+    Unset,
 }
 
 impl Key {
@@ -48,6 +51,8 @@ impl Key {
             Self::PolishEnabled => ("polish", "enabled"),
             Self::PolishService => ("polish", "service"),
             Self::PolishFormat => ("polish", "format"),
+            Self::ProviderKeyEnv => ("provider", "api_key_env"),
+            Self::PolishKeyEnv => ("polish", "api_key_env"),
             Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
         }
@@ -66,11 +71,22 @@ impl Key {
             Self::PolishEnabled => Value::Switch(config.polish.enabled),
             Self::PolishUrl => Value::Text(config.polish.url.clone()),
             Self::PolishModel => Value::Text(config.polish.model.clone()),
+            Self::ProviderKeyEnv => config
+                .provider
+                .api_key_env
+                .clone()
+                .map_or(Value::Unset, Value::Text),
+            Self::PolishKeyEnv => config
+                .polish
+                .api_key_env
+                .clone()
+                .map_or(Value::Unset, Value::Text),
         }
     }
 }
 
-/// `text` with `key` set to `value`, every other byte unchanged.
+/// `text` with `key` set to `value`, every other byte unchanged; unsetting
+/// it removes its line.
 fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
     let (section, name) = key.path();
     let document = ImDocument::parse(text).context("the config is not valid TOML")?;
@@ -78,35 +94,35 @@ fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
         .get(section)
         .and_then(|table| table.get(name))
         .and_then(Item::span);
-    match span {
-        Some(span) => {
-            let written = match value {
-                Value::Text(text) => toml::Value::String(text.clone()),
-                Value::Switch(on) => toml::Value::Boolean(*on),
-            };
-            let mut edited = text.to_string();
-            edited.replace_range(span, &written.to_string());
-            Ok(edited)
-        }
-        // Keys with a default, such as `polish.model`, may be left out.
-        None => {
+    let replace = |span: std::ops::Range<usize>, written: toml::Value| {
+        let mut edited = text.to_string();
+        edited.replace_range(span, &written.to_string());
+        edited
+    };
+    // Keys with a default, such as `polish.model`, may be left out.
+    let insert = |item: Item| -> Result<String> {
+        let mut document: DocumentMut = text.parse().context("the config is not valid TOML")?;
+        document
+            .entry(section)
+            .or_insert(toml_edit::table())
+            .as_table_like_mut()
+            .with_context(|| format!("`{section}` in the config must be a [{section}] section"))?
+            .insert(name, item);
+        Ok(document.to_string())
+    };
+    match (span, value) {
+        (Some(span), Value::Text(text)) => Ok(replace(span, toml::Value::String(text.clone()))),
+        (Some(span), Value::Switch(on)) => Ok(replace(span, toml::Value::Boolean(*on))),
+        (Some(_), Value::Unset) => {
             let mut document: DocumentMut = text.parse().context("the config is not valid TOML")?;
-            document
-                .entry(section)
-                .or_insert(toml_edit::table())
-                .as_table_like_mut()
-                .with_context(|| {
-                    format!("`{section}` in the config must be a [{section}] section")
-                })?
-                .insert(
-                    name,
-                    match value {
-                        Value::Text(text) => toml_edit::value(text.as_str()),
-                        Value::Switch(on) => toml_edit::value(*on),
-                    },
-                );
+            if let Some(table) = document.get_mut(section).and_then(Item::as_table_like_mut) {
+                table.remove(name);
+            }
             Ok(document.to_string())
         }
+        (None, Value::Text(text)) => insert(toml_edit::value(text.as_str())),
+        (None, Value::Switch(on)) => insert(toml_edit::value(*on)),
+        (None, Value::Unset) => Ok(text.to_string()),
     }
 }
 

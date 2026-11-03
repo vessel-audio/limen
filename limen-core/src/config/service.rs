@@ -132,16 +132,16 @@ pub enum Format {
 }
 
 impl Format {
-    /// The formats a custom ASR server may speak, in the order offered.
-    pub const TRANSCRIBING: [Self; 8] = [
+    /// The formats a custom ASR server may speak, in the order offered: the
+    /// APIs of the vendors that transcribe, as [`Service::TRANSCRIBING`]
+    /// offers them, and the two kinds of server.
+    pub const TRANSCRIBING: [Self; 6] = [
         Self::OpenAiCompatible,
         Self::WhisperCpp,
         Self::OpenAi,
         Self::Gemini,
         Self::Mistral,
         Self::Groq,
-        Self::OpenRouter,
-        Self::XAi,
     ];
 
     /// The formats a custom polishing server may speak, in the order

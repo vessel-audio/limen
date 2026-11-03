@@ -12,7 +12,8 @@ use crate::bridge::{BridgeCommand, ModelRequest};
 
 /// The provider and key change the dialog's fields describe. A vendor's own
 /// API keeps the saved custom server's format and URL, which it does not
-/// use, and polishing stays as saved; the core validates the rest.
+/// use, and polishing stays as the switch has it; the core validates the
+/// rest.
 pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChange)> {
     let Some((loaded, _)) = &form.loaded else {
         bail!("the settings have not loaded yet");
@@ -35,8 +36,8 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
             url,
             model,
         },
-        Provider::Polish { polishing, .. } => Provider::Polish {
-            polishing: *polishing,
+        Provider::Polish { .. } => Provider::Polish {
+            polishing: form.polishing,
             service,
             format,
             url,
@@ -89,6 +90,7 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
         Ok((provider, key)) => {
             let commands = view.commands.clone();
             send_with(&commands, form, provider, key);
+            form.saved_from = Some(form.opening);
         }
         Err(error) => form.error = Some(format!("{error:#}")),
     }
@@ -127,4 +129,5 @@ pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
     let touched = form.touched;
     send_with(&commands, form, provider, KeyChange::Keep);
     form.touched = touched;
+    form.saved_from = None;
 }

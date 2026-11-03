@@ -7,7 +7,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
 use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, WindowExt as _};
 use gpui_kit::*;
-use limen_core::{ModelRole, Service};
+use limen_core::{KeyState, ModelRole, Service};
 
 use super::choices::service_label;
 use super::form::{EditedField, check, detect, fill, save};
@@ -78,7 +78,12 @@ fn body(
             ),
         ]
     });
-    let saved_key = form.loaded.as_ref().is_some_and(|(_, key)| key.is_saved()) && !form.clear_key;
+    // Only the saved service's key can be removed; another service has none.
+    let saved_key = form
+        .loaded
+        .as_ref()
+        .is_some_and(|(_, key)| key.state(service) == KeyState::Saved)
+        && !form.clear_key;
     let key = div()
         .h_flex()
         .gap_2()

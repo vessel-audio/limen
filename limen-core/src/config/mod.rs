@@ -69,8 +69,8 @@ service = "custom"
 #                        sglang-omni at "http://127.0.0.1:8000/v1"
 #   "whisper-cpp":       the take uploaded to exactly `url`, such as
 #                        "http://127.0.0.1:8080/inference"
-#   "openai", "gemini", "mistral", "groq", "openrouter", "xai": that API,
-#                        with `url` as its base URL
+#   "openai", "gemini", "mistral", "groq": that API, with `url` as its
+#                        base URL
 format = "openai-compatible"
 url = ""
 # One of the models the server lists; the ASR page offers them
@@ -392,7 +392,14 @@ impl Config {
                 (true, true) => bail!(
                     "polish.url must name the server when polishing is enabled; choose a service and model on the Polish page"
                 ),
-                (true, false) => check_polish_url(&self.polish.url)?,
+                (true, false) => {
+                    check_polish_url(&self.polish.url)?;
+                    // A config from before services may name a route with a
+                    // query; it loads, and its polisher keeps the originals.
+                    if self.polish.service.is_some() {
+                        check_polish_root(&self.polish.url, format)?;
+                    }
+                }
                 (false, _) => {}
             }
             if self.polish.model.trim().is_empty() {
@@ -619,6 +626,19 @@ mod tests {
         );
         config.provider.format = Some(Format::WhisperCpp);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn a_custom_polishing_url_is_a_base_url_without_a_query() {
+        let mut config = base_config();
+        config.polish.enabled = true;
+        config.polish.service = Some(Service::Custom);
+        config.polish.model = "corrector".to_string();
+        config.polish.url = "https://ai.example/v1?api-version=2026-01-01".to_string();
+        assert_eq!(
+            config.validate().unwrap_err().to_string(),
+            "polish.url must be the server's base URL, without a query"
+        );
     }
 
     #[test]

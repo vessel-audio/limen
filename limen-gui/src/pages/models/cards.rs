@@ -17,6 +17,8 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
         ModelRole::Polish => (&view.models.polish, "polish", Service::POLISHING.to_vec()),
     };
     let active = form.active();
+    // Cards open nothing until the settings they fill the dialog from load.
+    let loaded = form.loaded.is_some();
     let theme = cx.theme().clone();
     div()
         .h_flex()
@@ -44,12 +46,21 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                     false => theme.border,
                 })
                 .bg(theme.muted.opacity(0.18))
-                .cursor_pointer()
+                .cursor(match loaded {
+                    true => CursorStyle::PointingHand,
+                    false => CursorStyle::Arrow,
+                })
                 .hover({
                     let hover = theme.muted.opacity(0.4);
-                    move |style| style.bg(hover)
+                    move |style| match loaded {
+                        true => style.bg(hover),
+                        false => style,
+                    }
                 })
-                .active(|style| style.opacity(0.75))
+                .active(move |style| match loaded {
+                    true => style.opacity(0.75),
+                    false => style,
+                })
                 .child(
                     div()
                         .flex_1()
@@ -86,7 +97,13 @@ pub fn grid(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div {
                 .with_animation(
                     SharedString::from(format!("{id}-enter")),
                     motion::stagger(index),
-                    |card, t| card.opacity(t).top(px(6. * (1. - t))),
+                    move |card, t| {
+                        let rest = match loaded {
+                            true => 1.,
+                            false => 0.55,
+                        };
+                        card.opacity(rest * t).top(px(6. * (1. - t)))
+                    },
                 )
         }))
 }
