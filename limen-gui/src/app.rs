@@ -44,6 +44,9 @@ pub struct AppView {
     pub sidebar_mode: crate::sidebar::SidebarMode,
     /// The expanded sidebar's width, as its edge was last dragged.
     pub sidebar_width: Pixels,
+    /// Where the sidebar's edge was last pressed, and how wide the sidebar
+    /// was then.
+    pub sidebar_press: Option<(Pixels, Pixels)>,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_scale: FontScale,
@@ -157,6 +160,7 @@ impl AppView {
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             sidebar_width: crate::sidebar::DEFAULT_WIDTH,
+            sidebar_press: None,
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
             font_scale: FontScale::DEFAULT,
@@ -466,7 +470,7 @@ impl Render for AppView {
                     .pr_2()
                     .pb_2()
                     .child(self.sidebar(cx))
-                    .children(self.sidebar_edge(cx))
+                    .child(self.sidebar_edge(cx))
                     .child(
                         div()
                             .v_flex()

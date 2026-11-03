@@ -52,6 +52,37 @@ pub fn sidebar_collapses_to_icons_and_back() -> Result<()> {
     Ok(())
 }
 
+/// Dragging the sidebar's edge resizes it; dragged far enough in, it
+/// collapses to its icons, and dragged back out it expands again.
+pub fn dragging_the_sidebar_edge_resizes_and_collapses_it() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    // A tab spans the sidebar but its 12px padding on each side; the edge
+    // lies over the right padding, its middle 8px past the tab.
+    let tab = || -> Result<(i32, i32, i32)> {
+        let bounds = session
+            .settled("history-page")?
+            .bounds
+            .context("tab is off screen")?;
+        Ok((
+            bounds.x + bounds.width + 8,
+            bounds.y + bounds.height / 2,
+            bounds.width,
+        ))
+    };
+    let (edge, y, start) = tab()?;
+    session.x11().drag((edge, y), (edge + 60, y))?;
+    let (edge, _, wider) = tab()?;
+    session.x11().drag((edge, y), (40, y))?;
+    let (edge, _, collapsed) = tab()?;
+    session.x11().drag((edge, y), (edge + 160, y))?;
+    let (_, _, reopened) = tab()?;
+    ensure!(
+        (wider - start, collapsed * 3 < start, reopened - collapsed) == (60, true, 160),
+        "the tab was {start}px, then {wider}px, {collapsed}px, and {reopened}px wide"
+    );
+    Ok(())
+}
+
 /// The title bar's icon buttons explain themselves on hover.
 pub fn title_bar_buttons_show_tooltips() -> Result<()> {
     let session = Session::fake(Scenario::default())?;

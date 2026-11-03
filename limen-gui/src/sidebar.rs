@@ -3,7 +3,8 @@
 //! Horizontal rhythm shared with the title bar: navigation icons sit 22px from
 //! the window edge and labels start at 48px. Collapsing narrows the sidebar to
 //! its icon column, which keeps every icon in place. The expanded sidebar is
-//! as wide as its edge is dragged.
+//! as wide as its edge is dragged; dragged narrower still, it collapses, and
+//! dragged back out, it expands again.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
@@ -21,6 +22,9 @@ const ROW_GAP: f32 = 4.;
 pub const DEFAULT_WIDTH: Pixels = px(168.);
 const MIN_WIDTH: f32 = 140.;
 const MAX_WIDTH: f32 = 280.;
+/// The width below which a dragged sidebar collapses, between the
+/// collapsed width and the narrowest expanded one.
+const COLLAPSE_BELOW: f32 = 100.;
 /// How wide the draggable edge is.
 const EDGE: f32 = 8.;
 
@@ -132,28 +136,46 @@ impl AppView {
             )
     }
 
-    /// The expanded sidebar's edge, dragged to set its width. It lies over
-    /// the sidebar's own right padding, so it moves nothing; the sidebar
-    /// starts at the window's left edge.
-    pub(crate) fn sidebar_edge(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        match self.sidebar_mode {
-            SidebarMode::Collapsed => None,
-            SidebarMode::Expanded => Some(
-                div()
-                    .id("sidebar-edge")
-                    .h_full()
-                    .w(px(EDGE))
-                    .ml(px(-EDGE))
-                    .flex_shrink_0()
-                    .cursor(CursorStyle::ResizeLeftRight)
-                    .on_drag(Resizing, |drag, _, _, cx| cx.new(|_| drag.clone()))
-                    .on_drag_move(cx.listener(|this, event: &DragMoveEvent<Resizing>, _, cx| {
-                        this.sidebar_width = px((f32::from(event.event.position.x) + EDGE / 2.)
-                            .clamp(MIN_WIDTH, MAX_WIDTH));
-                        cx.notify();
-                    })),
-            ),
-        }
+    /// The sidebar's edge, dragged to set its width, or below
+    /// [`COLLAPSE_BELOW`] to collapse it; a collapsed one dragged back out
+    /// expands. The expanded width kept is the last one dragged to, so the
+    /// toggle opens the sidebar as wide as it was. The edge lies over the
+    /// sidebar's own right padding, so it moves nothing; the sidebar starts
+    /// at the window's left edge.
+    pub(crate) fn sidebar_edge(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("sidebar-edge")
+            .h_full()
+            .w(px(EDGE))
+            .ml(px(-EDGE))
+            .flex_shrink_0()
+            .cursor(CursorStyle::ResizeLeftRight)
+            // The press, not where the drag starts a few pixels on, is what
+            // the edge follows, so it neither jumps nor lags the pointer.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, _| {
+                    this.sidebar_press = Some((
+                        event.position.x,
+                        this.sidebar_mode.width(this.sidebar_width),
+                    ));
+                }),
+            )
+            .on_drag(Resizing, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .on_drag_move(cx.listener(|this, event: &DragMoveEvent<Resizing>, _, cx| {
+                let Some((pressed, width)) = this.sidebar_press else {
+                    return;
+                };
+                let wanted = f32::from(width + event.event.position.x - pressed);
+                match wanted < COLLAPSE_BELOW {
+                    true => this.sidebar_mode = SidebarMode::Collapsed,
+                    false => {
+                        this.sidebar_mode = SidebarMode::Expanded;
+                        this.sidebar_width = px(wanted.clamp(MIN_WIDTH, MAX_WIDTH));
+                    }
+                }
+                cx.notify();
+            }))
     }
 
     /// One labelled group of destinations, a tab list named `id`.
