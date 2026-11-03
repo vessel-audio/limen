@@ -4,7 +4,9 @@
 use anyhow::{Context, Result, bail};
 
 use super::ModelRole;
-use crate::config::{self, Config, Format, KeyChange, Paths, Service};
+use std::collections::BTreeMap;
+
+use crate::config::{self, Config, Format, KeyChange, Paths, ProviderOptions, Service};
 use crate::ipc::v1;
 use crate::reload::{ConfigChange, reload};
 
@@ -26,6 +28,9 @@ pub enum Provider {
         format: Format,
         url: String,
         model: String,
+        /// Every provider's settings for the role; saving writes only the
+        /// chosen service's.
+        options: BTreeMap<Service, ProviderOptions>,
     },
     /// The service that polishes transcripts, and its model, with a custom
     /// server's format and URL as for [`Provider::Asr`].
@@ -35,6 +40,7 @@ pub enum Provider {
         format: Format,
         url: String,
         model: String,
+        options: BTreeMap<Service, ProviderOptions>,
     },
 }
 
@@ -95,6 +101,7 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                 format: config.provider.format(),
                 url: config.provider.url.clone(),
                 model: config.provider.model.clone(),
+                options: config.provider.options.clone(),
             },
             keys.asr,
             (
@@ -117,6 +124,7 @@ pub fn load_provider(paths: &Paths, role: ModelRole) -> Result<(Provider, KeySou
                     (Some(_), _) | (None, true) => config.polish.url.clone(),
                 },
                 model: config.polish.model.clone(),
+                options: config.polish.options.clone(),
             },
             keys.polish,
             (
@@ -207,6 +215,7 @@ pub async fn save_provider(
             format: spoken,
             url,
             model,
+            options,
         } => (
             ModelRole::Asr,
             [
@@ -219,6 +228,10 @@ pub async fn save_provider(
                     .uses_url()
                     .then(|| (config::Key::ProviderUrl, text(url))),
                 Some((config::Key::ProviderModel, text(model))),
+                Some((
+                    config::Key::ProviderOptions(chosen),
+                    config::Value::Options(options.get(&chosen).cloned().unwrap_or_default()),
+                )),
                 unset(config::Key::ProviderKeyEnv),
             ]
             .into_iter()
@@ -232,6 +245,7 @@ pub async fn save_provider(
             format: spoken,
             url,
             model,
+            options,
         } => (
             ModelRole::Polish,
             [
@@ -249,6 +263,10 @@ pub async fn save_provider(
                 (chosen.uses_url() || url.trim().is_empty())
                     .then(|| (config::Key::PolishUrl, text(url))),
                 Some((config::Key::PolishModel, text(model))),
+                Some((
+                    config::Key::PolishOptions(chosen),
+                    config::Value::Options(options.get(&chosen).cloned().unwrap_or_default()),
+                )),
                 unset(config::Key::PolishKeyEnv),
             ]
             .into_iter()
@@ -269,8 +287,10 @@ pub async fn save_provider(
 mod tests {
     use std::fs;
 
+    use std::collections::BTreeMap;
+
     use super::{KeySource, KeyState, Polishing, Provider, load_provider, save_provider};
-    use crate::config::{ApiKey, Config, Format, KeyChange, Paths, Service};
+    use crate::config::{ApiKey, Config, Format, KeyChange, Paths, ProviderOptions, Service};
     use crate::models::ModelRole;
     use crate::reload::ConfigChange;
 
@@ -300,6 +320,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: " http://127.0.0.1:3425/v1/chat/completions ".to_string(),
             model: "qwen3".to_string(),
+            options: Default::default(),
         };
 
         let change = save_provider(
@@ -326,6 +347,7 @@ mod tests {
                         format: Format::OpenAiCompatible,
                         url: "http://127.0.0.1:3425/v1/chat/completions".to_string(),
                         model: "qwen3".to_string(),
+                        options: Default::default(),
                     },
                     KeyState::Saved
                 ),
@@ -342,6 +364,7 @@ mod tests {
             format: Format::WhisperCpp,
             url: "http://127.0.0.1:8000/inference".to_string(),
             model: "  ".to_string(),
+            options: Default::default(),
         };
 
         assert!(
@@ -370,6 +393,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: " ".to_string(),
             model: "m".to_string(),
+            options: Default::default(),
         };
 
         let error = save_provider(&paths, provider, KeyChange::Keep)
@@ -394,6 +418,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "http://".to_string(),
             model: "m".to_string(),
+            options: Default::default(),
         };
 
         let change = save_provider(&paths, provider.clone(), KeyChange::Keep)
@@ -421,6 +446,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "https://ignored.example/chat/completions?token=unused".to_string(),
             model: "m".to_string(),
+            options: Default::default(),
         };
 
         assert_eq!(
@@ -445,6 +471,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: String::new(),
             model: "m".to_string(),
+            options: Default::default(),
         };
 
         save_provider(&paths, provider.clone(), KeyChange::Keep)
@@ -475,6 +502,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "http://127.0.0.1:8000/v1/audio/transcriptions".to_string(),
             model: "whisper".to_string(),
+            options: Default::default(),
         };
 
         save_provider(&paths, groq, KeyChange::Keep).await.unwrap();
@@ -483,6 +511,49 @@ mod tests {
         assert_eq!(
             (config.provider.api_key_env, config.provider.saved_key),
             (None, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn each_provider_s_settings_are_saved_and_cleared_on_their_own() {
+        let paths = scratch("provider-options");
+        let groq = ProviderOptions {
+            timeout_ms: Some(8000),
+            ..ProviderOptions::default()
+        };
+        let custom = ProviderOptions {
+            path: Some("/v2/transcribe".to_string()),
+            key_header: Some("api-key".to_string()),
+            retries: Some(2),
+            body: Some(r#"{"prompt": "names"}"#.to_string()),
+            headers: [("X-Org".to_string(), "limen".to_string())].into(),
+            ..ProviderOptions::default()
+        };
+        let asr = |options: BTreeMap<Service, ProviderOptions>| Provider::Asr {
+            service: Service::Custom,
+            format: Format::OpenAiCompatible,
+            url: "http://127.0.0.1:8000/v1".to_string(),
+            model: "m".to_string(),
+            options,
+        };
+
+        // The groq table is not the chosen service's, so it is not written.
+        save_provider(
+            &paths,
+            asr([(Service::Custom, custom.clone()), (Service::Groq, groq)].into()),
+            KeyChange::Keep,
+        )
+        .await
+        .unwrap();
+        let saved = Config::load(&paths.config_file).unwrap().provider.options;
+        save_provider(&paths, asr(BTreeMap::new()), KeyChange::Keep)
+            .await
+            .unwrap();
+        let cleared = Config::load(&paths.config_file).unwrap().provider.options;
+
+        assert_eq!(
+            (saved, cleared),
+            ([(Service::Custom, custom)].into(), BTreeMap::new())
         );
     }
 
@@ -523,6 +594,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "https://ignored.example/v1/chat/completions".to_string(),
             model: String::new(),
+            options: Default::default(),
         };
 
         save_provider(&paths, polish, KeyChange::Keep)
@@ -545,6 +617,7 @@ mod tests {
                     format: Format::OpenAiCompatible,
                     url: String::new(),
                     model: String::new(),
+                    options: Default::default(),
                 }
             )
         );
@@ -565,7 +638,8 @@ mod tests {
                 service: Service::Custom,
                 format: Format::WhisperCpp,
                 url: "http://".to_string(),
-                model: "m".to_string()
+                model: "m".to_string(),
+                options: Default::default(),
             }
         );
     }

@@ -148,6 +148,13 @@ models.remove_key: Remove
 models.model: Model
 models.search: Search or enter a model
 models.save: Save
+models.advanced: Advanced
+models.route: Route
+models.key_header: Key header
+models.headers: Headers
+models.body: Extra body
+models.timeout: Timeout (ms)
+models.retries: Retries
 models.detect: Detect
 models.test: Test
 models.no_models: The server listed no models

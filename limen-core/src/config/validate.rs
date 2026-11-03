@@ -43,6 +43,14 @@ impl Config {
                 ),
             }
         }
+        for (role, options) in [
+            ("provider", &self.provider.options),
+            ("polish", &self.polish.options),
+        ] {
+            for (service, options) in options {
+                options.check(&format!("{role}.options.{}", service.as_str()))?;
+            }
+        }
         // 0 would panic `chunks(0)` in the send path; keep the upper bound sane.
         if self.audio.chunk_ms == 0 || self.audio.chunk_ms > 1000 {
             bail!("audio.chunk_ms must be in 1..=1000");

@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::Connection;
-use crate::config::{Config, Format, PolishConfig, Service};
+use crate::backend::{Connection, Shape};
+use crate::config::{Config, Format, PolishConfig, ProviderOptions, Service};
 
 /// The transcription route under an OpenAI-compatible API root.
 pub(crate) const TRANSCRIPTIONS: &str = "/audio/transcriptions";
@@ -13,10 +13,11 @@ pub(crate) const TRANSCRIPTIONS: &str = "/audio/transcriptions";
 pub(crate) const CHAT_COMPLETIONS: &str = "/chat/completions";
 
 /// How takes are transcribed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum AsrRoute {
-    /// Uploaded to exactly this URL, such as the whisper.cpp `/inference`.
-    Upload(String),
+    /// Uploaded to exactly this URL, such as the whisper.cpp `/inference`,
+    /// with the headers and fields its shape adds.
+    Upload(String, Shape),
     /// Sent through the backend.
     Api(Connection),
 }
@@ -64,16 +65,33 @@ pub(crate) fn custom_root(url: &str, format: Format, route: &str) -> Option<Stri
     }
 }
 
+/// How the provider `options` set up shapes its requests.
+fn shape(options: Option<&ProviderOptions>) -> Result<Shape> {
+    let options = options.cloned().unwrap_or_default();
+    Ok(Shape {
+        body: options.body_fields()?,
+        path: options.path,
+        key_header: options.key_header,
+        headers: options.headers.into_iter().collect(),
+    })
+}
+
 /// The route of the configured ASR service.
 pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
     let provider = &config.provider;
+    let shape = shape(provider.options.get(&provider.service()))?;
     match (provider.service(), provider.format()) {
-        (Service::Custom, Format::WhisperCpp) => Ok(AsrRoute::Upload(provider.url.clone())),
-        (Service::Custom, format) => {
-            custom(format, &provider.url, TRANSCRIPTIONS, config.api_key()).map(AsrRoute::Api)
-        }
+        (Service::Custom, Format::WhisperCpp) => Ok(AsrRoute::Upload(provider.url.clone(), shape)),
+        (Service::Custom, format) => custom(
+            format,
+            &provider.url,
+            TRANSCRIPTIONS,
+            config.api_key(),
+            shape,
+        )
+        .map(AsrRoute::Api),
         (vendor, _) => {
-            vendor_endpoint(vendor, config.api_key(), provider.key_env()).map(AsrRoute::Api)
+            vendor_endpoint(vendor, config.api_key(), provider.key_env(), shape).map(AsrRoute::Api)
         }
     }
 }
@@ -81,15 +99,28 @@ pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
 /// The connection of the configured polishing service, which sends
 /// `api_key`.
 pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<Connection> {
+    let shape = shape(config.options.get(&config.service()))?;
     match config.service() {
-        Service::Custom => custom(config.format(), &config.url, CHAT_COMPLETIONS, api_key),
-        vendor => vendor_endpoint(vendor, api_key, config.key_env()),
+        Service::Custom => custom(
+            config.format(),
+            &config.url,
+            CHAT_COMPLETIONS,
+            api_key,
+            shape,
+        ),
+        vendor => vendor_endpoint(vendor, api_key, config.key_env(), shape),
     }
 }
 
 /// The connection to a custom server speaking `format` at `url`, which
 /// may need no key.
-fn custom(format: Format, url: &str, route: &str, api_key: Option<String>) -> Result<Connection> {
+fn custom(
+    format: Format,
+    url: &str,
+    route: &str,
+    api_key: Option<String>,
+    shape: Shape,
+) -> Result<Connection> {
     let api = format
         .api()
         .with_context(|| format!("a {} server cannot do this", format.as_str()))?;
@@ -99,6 +130,7 @@ fn custom(format: Format, url: &str, route: &str, api_key: Option<String>) -> Re
         api,
         base_url: Some(base_url),
         api_key,
+        shape,
     })
 }
 
@@ -107,6 +139,7 @@ fn vendor_endpoint(
     service: Service,
     api_key: Option<String>,
     key_env: Option<&str>,
+    shape: Shape,
 ) -> Result<Connection> {
     let api = service
         .vendor_api()
@@ -116,6 +149,7 @@ fn vendor_endpoint(
             api,
             base_url: None,
             api_key: Some(api_key),
+            shape,
         }),
         None => bail!(
             "{} needs an API key: save one on its Models page{}",
@@ -196,10 +230,15 @@ mod routes {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: None,
+                    shape: Default::default(),
                 }),
-                AsrRoute::Upload("http://127.0.0.1:8080/inference".to_string()),
                 AsrRoute::Upload(
-                    "https://asr.example/v1/audio/transcriptions?api-version=1".to_string()
+                    "http://127.0.0.1:8080/inference".to_string(),
+                    Default::default()
+                ),
+                AsrRoute::Upload(
+                    "https://asr.example/v1/audio/transcriptions?api-version=1".to_string(),
+                    Default::default()
                 ),
             ]
         );
@@ -221,6 +260,7 @@ mod routes {
                 api: Api::Groq,
                 base_url: None,
                 api_key: Some("sk-groq".to_string()),
+                shape: Default::default(),
             })
         );
     }
@@ -245,11 +285,13 @@ mod routes {
                     api: Api::Anthropic,
                     base_url: None,
                     api_key: Some("sk-ant".to_string()),
+                    shape: Default::default(),
                 },
                 Connection {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                     api_key: None,
+                    shape: Default::default(),
                 },
             ]
         );
@@ -274,13 +316,48 @@ mod routes {
                     api: Api::Anthropic,
                     base_url: Some("http://127.0.0.1:4000".to_string()),
                     api_key: None,
+                    shape: Default::default(),
                 },
                 AsrRoute::Api(Connection {
                     api: Api::Gemini,
                     base_url: Some("http://10.0.0.2:9000/v1beta".to_string()),
                     api_key: Some("sk-gemini".to_string()),
+                    shape: Default::default(),
                 })
             )
+        );
+    }
+
+    #[test]
+    fn a_provider_s_options_shape_its_connection() {
+        let config: PolishConfig = toml::from_str(
+            r#"
+            service = "custom"
+            url = "http://127.0.0.1:8080/v1"
+
+            [options.custom]
+            path = "/v2/chat"
+            key_header = "api-key"
+            body = '{"top_p": 0.9}'
+            headers = { X-Org = "limen" }
+
+            [options.openai]
+            path = "/elsewhere"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            polish(&config, None).unwrap().shape,
+            crate::backend::Shape {
+                path: Some("/v2/chat".to_string()),
+                key_header: Some("api-key".to_string()),
+                headers: vec![("X-Org".to_string(), "limen".to_string())],
+                body: serde_json::json!({"top_p": 0.9})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            }
         );
     }
 }

@@ -88,7 +88,12 @@ address or key stops changing, the dialog asks the provider for its models: a
 server that offers exactly one fills it in, and otherwise the list offers them
 and also takes a typed name; Detect asks at once. The whisper.cpp server lists
 none. Test asks the model to do its job once with the fields as typed, without
-saving them. Saving writes `config.toml` and applies the change to a running
+saving them. Each dialog's Advanced settings belong to that provider alone:
+a route under the base URL in place of the API's own, the header the key is
+sent in, extra request headers, extra JSON body fields, and a timeout and
+retries for each request. They are saved under `[provider.options.<service>]`
+or `[polish.options.<service>]`; the config file is not private, so a key
+belongs in the API key field, sent in the key header, never in the headers. Saving writes `config.toml` and applies the change to a running
 daemon from its next take. API keys never go into
 `config.toml`: they are saved in `keys.toml` beside it with mode 0600, and a
 saved key comes before the variable named by `api_key_env`, which defaults to

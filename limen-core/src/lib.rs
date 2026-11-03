@@ -3,6 +3,7 @@
 //! Implementation modules stay private; frontends depend only on the
 //! documented re-exports in this module.
 
+mod attempts;
 mod audio;
 mod backend;
 mod config;
@@ -22,9 +23,12 @@ mod task;
 
 pub use audio::Level;
 pub use backend::{
-    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
+    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Take,
+    Transcriber,
 };
-pub use config::{ApiKey, Config, Format, KeyChange, Paths, Service, ShortcutConfig};
+pub use config::{
+    ApiKey, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,
+};
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,

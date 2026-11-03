@@ -5,6 +5,9 @@
 //! Limen's types. Replacing the framework means replacing this crate; the
 //! core and the GUI only see [`limen_core::ModelBackend`].
 
+use std::collections::BTreeSet;
+use std::sync::Mutex;
+
 use anyhow::{Context, Result, bail};
 use limen_core::{
     Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take, Transcriber,
@@ -23,6 +26,9 @@ use rig_core::providers::openai::wire::{
 use rig_core::transcription::TranscriptionRequestBuilder;
 use rig_reqwest::ReqwestClient;
 
+/// Fields a request body also carries.
+type JsonMap = serde_json::Map<String, serde_json::Value>;
+
 /// A server Limen knows only by its OpenAI-compatible routes. Its default
 /// base URL is never used: Limen always names the server.
 const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "http://127.0.0.1/v1", "");
@@ -36,42 +42,92 @@ const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "http://127.0.
 /// request, not stop the daemon or the GUI from starting.
 pub struct Rig;
 
+/// `path` as the `'static` route rig's quirks take. Each distinct route is
+/// kept once for the life of the process, and a user sets few.
+fn route(path: &str) -> &'static str {
+    static ROUTES: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+    let mut routes = ROUTES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match routes.get(path) {
+        Some(route) => route,
+        None => {
+            let route: &'static str = Box::leak(path.to_string().into_boxed_str());
+            routes.insert(route);
+            route
+        }
+    }
+}
+
 impl Rig {
-    fn client(&self, connection: Connection) -> Result<Client> {
-        let http = ReqwestClient::from(
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .context("failed to build the model HTTP client")?,
-        );
+    /// The rig client for `connection`, and the fields every request body
+    /// also carries.
+    fn client(&self, connection: Connection) -> Result<(Client, JsonMap)> {
         let Connection {
             api,
             base_url,
             api_key,
+            shape,
         } = connection;
         let key = api_key.unwrap_or_default();
+        // A key in a header of the user's naming goes with the other headers,
+        // and rig, given none, sends none of its own.
+        let (key, key_header) = match shape.key_header {
+            Some(header) if !key.is_empty() => (String::new(), Some((header, key))),
+            Some(_) | None => (key, None),
+        };
+        if let (Api::Gemini, Some(_)) = (api, &key_header) {
+            bail!("Gemini sends its key in the URL, not in a header");
+        }
+        let headers = shape
+            .headers
+            .iter()
+            .chain(key_header.iter())
+            .map(|(name, value)| {
+                Ok((
+                    reqwest::header::HeaderName::try_from(name.as_str())
+                        .with_context(|| format!("{name:?} is not a header name"))?,
+                    reqwest::header::HeaderValue::try_from(value.as_str())
+                        .with_context(|| format!("the {name} header's value is not valid"))?,
+                ))
+            })
+            .collect::<Result<reqwest::header::HeaderMap>>()?;
+        let http = ReqwestClient::from(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .default_headers(headers)
+                .build()
+                .context("failed to build the model HTTP client")?,
+        );
+        let path = shape.path.as_deref().map(route);
         let openai = |dialect: &Dialect| {
-            let config = OpenAIConfig::with_key(dialect, key.clone());
-            let config = match &base_url {
+            let mut config = OpenAIConfig::with_key(dialect, key.clone());
+            if let Some(base_url) = &base_url {
+                config = config.with_base_url(base_url);
                 // A custom server speaking a vendor's API may run without a
                 // key, and then gets no `Authorization` header.
-                Some(base_url) => OpenAIConfig {
-                    auth: Auth::OptionalBearer,
-                    ..config.with_base_url(base_url)
-                },
-                None => config,
-            };
+                config.auth = Auth::OptionalBearer;
+            }
+            // A key moved to its own header leaves no `Authorization` either.
+            if key.is_empty() {
+                config.auth = Auth::OptionalBearer;
+            }
+            if let Some(path) = path {
+                config.dialect.quirks.completion_path = path;
+                config.dialect.quirks.responses.path = path;
+                config.dialect.quirks.transcription_path = path;
+            }
             Client::OpenAi(Box::new(config.connect(http.clone())))
         };
-        Ok(match api {
-            Api::Compatible => {
-                let base_url = base_url.context("an OpenAI-compatible server needs its URL")?;
-                let mut config = OpenAIConfig::with_key(&COMPATIBLE, key).with_base_url(base_url);
-                // A local server started without a key rejects any
-                // `Authorization` header, so send one only with a key.
-                config.auth = Auth::OptionalBearer;
-                Client::OpenAi(Box::new(config.connect(http.clone())))
-            }
+        let fixed_routes = |name: &str| match path {
+            Some(_) => bail!("{name}'s route cannot be changed; set it in the base URL"),
+            None => Ok(()),
+        };
+        let client = match api {
+            Api::Compatible => match &base_url {
+                Some(_) => openai(&COMPATIBLE),
+                None => bail!("an OpenAI-compatible server needs its URL"),
+            },
             Api::OpenAi => openai(&OPENAI),
             Api::DeepSeek => openai(&DEEPSEEK),
             Api::Mistral => openai(&MISTRAL),
@@ -79,9 +135,10 @@ impl Rig {
             Api::OpenRouter => openai(&OPENROUTER),
             Api::XAi => openai(&rig_core::providers::xai::DIALECT),
             Api::Anthropic => {
+                fixed_routes("Anthropic")?;
                 let mut config = AnthropicConfig::new(key.clone());
-                // A keyless custom server gets no credential header at all,
-                // rather than an empty `x-api-key`.
+                // A keyless server, or a key in its own header, gets no
+                // credential header from rig, rather than an empty one.
                 if key.is_empty() {
                     config.dialect.quirks.auth = AnthropicAuth::OptionalBearer;
                 }
@@ -92,19 +149,21 @@ impl Rig {
                 Client::Anthropic(config.connect(http.clone()))
             }
             Api::Gemini => {
+                fixed_routes("Gemini")?;
                 // Gemini always sends its key in the URL; without one it
                 // would ask with an empty key.
                 if key.is_empty() {
                     bail!("a Gemini server needs an API key");
                 }
-                let config = GeminiConfig::new(key);
+                let config = GeminiConfig::new(key.clone());
                 let config = match &base_url {
                     Some(base_url) => config.with_base_url(base_url),
                     None => config,
                 };
                 Client::Gemini(config.connect(http.clone()))
             }
-        })
+        };
+        Ok((client, shape.body))
     }
 }
 
@@ -118,26 +177,28 @@ enum Client {
 impl ModelBackend for Rig {
     fn transcriber(&self, connection: Connection, model: String) -> Result<Box<dyn Transcriber>> {
         let api = connection.api;
-        let model = match (api, self.client(connection)?) {
+        let (client, body) = self.client(connection)?;
+        let model = match (api, client) {
             (Api::DeepSeek | Api::Anthropic, _) => bail!("{api:?} does not transcribe audio"),
             (_, Client::OpenAi(client)) => client.transcription(model).erase(),
             (_, Client::Gemini(client)) => client.transcription(model).erase(),
             (_, Client::Anthropic(_)) => bail!("{api:?} does not transcribe audio"),
         };
-        Ok(Box::new(RigTranscriber(model)))
+        Ok(Box::new(RigTranscriber(model, body)))
     }
 
     fn chat(&self, connection: Connection, model: String) -> Result<Box<dyn ChatModel>> {
-        let model = match self.client(connection)? {
+        let (client, body) = self.client(connection)?;
+        let model = match client {
             Client::OpenAi(client) => client.completion(model).erase(),
             Client::Anthropic(client) => client.completion(model).erase(),
             Client::Gemini(client) => client.completion(model).erase(),
         };
-        Ok(Box::new(RigChat(model)))
+        Ok(Box::new(RigChat(model, body)))
     }
 
     fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
-        let client = self.client(connection);
+        let client = self.client(connection).map(|(client, _)| client);
         Box::pin(async move {
             let listed = match client? {
                 Client::OpenAi(client) => client.list_models().await,
@@ -187,7 +248,8 @@ fn sanitized(error: ProviderError) -> anyhow::Error {
     }
 }
 
-struct RigTranscriber(DynModel<Transcription>);
+/// A transcription model, and the fields every request also carries.
+struct RigTranscriber(DynModel<Transcription>, JsonMap);
 
 impl Transcriber for RigTranscriber {
     fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>> {
@@ -196,12 +258,17 @@ impl Transcriber for RigTranscriber {
             Some(language) => request.language(language),
             None => request,
         };
+        let request = match self.1.is_empty() {
+            true => request,
+            false => request.additional_params(serde_json::Value::Object(self.1.clone())),
+        };
         let reply = self.0.call(request.build());
         Box::pin(async move { Ok(reply.await.map_err(sanitized)?.text) })
     }
 }
 
-struct RigChat(DynModel<Completion>);
+/// A chat model, and the fields every request also carries.
+struct RigChat(DynModel<Completion>, JsonMap);
 
 impl ChatModel for RigChat {
     fn reply<'a>(&'a self, exchange: Exchange<'a>) -> BoxFuture<'a, Result<Reply>> {
@@ -213,6 +280,10 @@ impl ChatModel for RigChat {
             // A model that cannot turn reasoning off, or takes no
             // temperature, still polishes with its own default.
             .on_unsupported(OnUnsupported::Ignore);
+        let request = match self.1.is_empty() {
+            true => request,
+            false => request.additional_params(serde_json::Value::Object(self.1.clone())),
+        };
         let reply = self.0.call(request);
         Box::pin(async move {
             let response = reply.await.map_err(sanitized)?;

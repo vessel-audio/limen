@@ -3,7 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-use limen_core::{Api, Connection, Exchange, Finish, ModelBackend, Reply, Take};
+use limen_core::{Api, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Take};
 
 use super::Rig;
 
@@ -85,6 +85,7 @@ fn connection(api: Api, base_url: String, api_key: Option<&str>) -> Connection {
         api,
         base_url: Some(base_url),
         api_key: api_key.map(str::to_string),
+        shape: Shape::default(),
     }
 }
 
@@ -296,6 +297,7 @@ fn chat_only_vendors_refuse_to_transcribe() {
             api,
             base_url: None,
             api_key: Some("sk".to_string()),
+            shape: Shape::default(),
         };
         assert!(
             rig.transcriber(connection, "m".to_string()).is_err(),
@@ -310,6 +312,7 @@ fn a_compatible_server_needs_its_url() {
         api: Api::Compatible,
         base_url: None,
         api_key: None,
+        shape: Shape::default(),
     };
     assert!(Rig.chat(connection, "m".to_string()).is_err());
 }
@@ -464,4 +467,76 @@ fn a_keyless_gemini_server_is_refused() {
         .map(|error| error.to_string());
 
     assert_eq!(error, Some("a Gemini server needs an API key".to_string()));
+}
+
+#[tokio::test]
+async fn the_shape_moves_the_route_key_and_body_and_adds_headers() {
+    let (base, server) = mock_server(chat_reply("stop")).await;
+    let shaped = Connection {
+        shape: Shape {
+            path: Some("/v2/chat".to_string()),
+            key_header: Some("api-key".to_string()),
+            headers: vec![("X-Org".to_string(), "limen".to_string())],
+            body: json!({"top_p": 0.9}).as_object().unwrap().clone(),
+        },
+        ..connection(Api::Compatible, format!("{base}/v1"), Some("sk-polish"))
+    };
+    let model = Rig.chat(shaped, "corrector".to_string()).unwrap();
+
+    model.reply(EXCHANGE).await.unwrap();
+
+    let request = server.await.unwrap();
+    assert_eq!(
+        (
+            request.head.lines().next(),
+            request.header("authorization"),
+            request.header("api-key"),
+            request.header("x-org"),
+            request.json()["top_p"].clone()
+        ),
+        (
+            Some("POST /v1/v2/chat HTTP/1.1"),
+            None,
+            Some("sk-polish".to_string()),
+            Some("limen".to_string()),
+            json!(0.9)
+        )
+    );
+}
+
+#[test]
+fn a_route_or_key_header_the_api_cannot_take_is_refused() {
+    let shaped = |api, shape| Connection {
+        shape,
+        ..connection(api, "http://127.0.0.1:9".to_string(), Some("sk"))
+    };
+    let refused = [
+        shaped(
+            Api::Anthropic,
+            Shape {
+                path: Some("/v2".to_string()),
+                ..Shape::default()
+            },
+        ),
+        shaped(
+            Api::Gemini,
+            Shape {
+                key_header: Some("api-key".to_string()),
+                ..Shape::default()
+            },
+        ),
+    ]
+    .map(|connection| {
+        Rig.chat(connection, "m".to_string())
+            .err()
+            .map(|error| error.to_string())
+    });
+
+    assert_eq!(
+        refused,
+        [
+            Some("Anthropic's route cannot be changed; set it in the base URL".to_string()),
+            Some("Gemini sends its key in the URL, not in a header".to_string()),
+        ]
+    );
 }

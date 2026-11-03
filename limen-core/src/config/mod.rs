@@ -7,6 +7,7 @@
 //! | logs       | `$XDG_STATE_HOME/limen/daemon.log`   |
 //! | cache      | `$XDG_CACHE_HOME/limen/`             |
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use crate::shortcut::{Backend, Shortcut};
 
 mod endpoint;
 mod keys;
+mod options;
 mod service;
 mod transaction;
 mod validate;
@@ -28,6 +30,7 @@ mod write;
 pub(crate) use endpoint::{check_polish_root, check_polish_url, check_url_parameters, display_url};
 pub use keys::KeyChange;
 pub(crate) use keys::saved_keys;
+pub use options::ProviderOptions;
 pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
@@ -116,6 +119,14 @@ model = ""
 # such as OPENAI_API_KEY, is read when unset
 # api_key_env = "MY_POLISH_KEY"
 timeout_ms = 5000
+# Settings of one provider, here the custom server; [provider] takes the same
+# [polish.options.custom]
+# path = "/v2/chat"              # route under `url`, in place of the API's own
+# key_header = "api-key"         # the header the key is sent in
+# timeout_ms = 8000              # one try; overrides timeout_ms above
+# retries = 1                    # tries again after a failure
+# body = '{"top_p": 0.9}'        # fields every request body also carries
+# headers = { X-Org = "limen" }  # never a key: this file is not private
 
 [shortcut]
 # How global shortcuts are bound; set up with `limen shortcut setup <backend>`:
@@ -194,6 +205,9 @@ pub struct ProviderConfig {
     #[serde(default = "default_language")]
     pub language: String,
     pub api_key_env: Option<String>,
+    /// Each provider's settings beyond its key and model.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<Service, ProviderOptions>,
     /// The key saved from the GUI, which comes before `api_key_env`.
     #[serde(skip)]
     pub saved_key: Option<ApiKey>,
@@ -241,6 +255,9 @@ pub struct PolishConfig {
     pub model: String,
     pub api_key_env: Option<String>,
     pub timeout_ms: u64,
+    /// Each provider's settings beyond its key and model.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<Service, ProviderOptions>,
     /// The key saved from the GUI, which comes before `api_key_env`.
     #[serde(skip)]
     pub saved_key: Option<ApiKey>,
@@ -256,6 +273,7 @@ impl Default for PolishConfig {
             model: String::new(),
             api_key_env: None,
             timeout_ms: 5000,
+            options: BTreeMap::new(),
             saved_key: None,
         }
     }
@@ -540,6 +558,83 @@ mod tests {
         );
         config.provider.format = Some(Format::WhisperCpp);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn each_provider_keeps_its_own_options() {
+        let config: Config = toml::from_str(
+            r#"
+            [provider]
+            url = ""
+
+            [polish.options.custom]
+            path = "/v2/chat"
+            key_header = "api-key"
+            body = '{"top_p": 0.9}'
+
+            [polish.options.custom.headers]
+            X-Org = "limen"
+
+            [polish.options.anthropic]
+            timeout_ms = 8000
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+
+        assert_eq!(
+            config.polish.options,
+            [
+                (
+                    Service::Custom,
+                    super::ProviderOptions {
+                        path: Some("/v2/chat".to_string()),
+                        key_header: Some("api-key".to_string()),
+                        body: Some(r#"{"top_p": 0.9}"#.to_string()),
+                        headers: [("X-Org".to_string(), "limen".to_string())].into(),
+                        ..Default::default()
+                    }
+                ),
+                (
+                    Service::Anthropic,
+                    super::ProviderOptions {
+                        timeout_ms: Some(8000),
+                        ..Default::default()
+                    }
+                ),
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn provider_options_are_checked() {
+        let refused = |options: &str| {
+            let config: Config = toml::from_str(&format!(
+                "[provider]\nurl = \"\"\n\n[polish.options.custom]\n{options}\n"
+            ))
+            .unwrap();
+            config.validate().unwrap_err().to_string()
+        };
+        assert_eq!(
+            [
+                "path = \"v2/chat\"",
+                "key_header = \"bad header\"",
+                "timeout_ms = 50",
+                "retries = 9",
+                "body = '[1, 2]'",
+                "headers = { \"X-Org\" = \"a\\nb\" }",
+            ]
+            .map(refused),
+            [
+                "polish.options.custom.path must start with / and carry no query",
+                "polish.options.custom.key_header is not a header name",
+                "polish.options.custom.timeout_ms must be in 100..=120000",
+                "polish.options.custom.retries must be at most 5",
+                "invalid polish.options.custom.body",
+                "polish.options.custom.headers.X-Org is not a header value",
+            ]
+        );
     }
 
     #[test]

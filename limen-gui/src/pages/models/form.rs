@@ -10,7 +10,8 @@ use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::select::{SelectEvent, SelectState};
 use gpui_kit::*;
 use limen_core::{
-    ConfigChange, Format, KeySource, KeyState, ModelRole, Polishing, Provider, Service,
+    ConfigChange, Format, KeySource, KeyState, ModelRole, Polishing, Provider, ProviderOptions,
+    Service,
 };
 
 use super::choices::{FormatChoice, ModelChoices, url_example};
@@ -32,6 +33,9 @@ pub struct ProviderForm {
     pub url: Entity<InputState>,
     pub key: Entity<InputState>,
     pub model: Entity<SelectState<ModelChoices>>,
+    pub advanced: AdvancedFields,
+    /// The advanced settings are showing.
+    pub show_advanced: bool,
     /// The model select's focus while closed; it moves into the list while
     /// open, when changing the items would clear what the user types.
     closed_focus: FocusHandle,
@@ -119,6 +123,29 @@ impl ModelForms {
             });
             let url = cx.new(|cx| InputState::new(window, cx));
             let key = cx.new(|cx| InputState::new(window, cx).masked(true));
+            let mut input = |placeholder: &str| {
+                let placeholder = placeholder.to_string();
+                cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+            };
+            let advanced = AdvancedFields {
+                path: input("/chat/completions"),
+                key_header: input("Authorization"),
+                headers: input("X-Org: limen; X-Team: dictation"),
+                body: input(r#"{"top_p": 0.9}"#),
+                timeout: input("10000"),
+                retries: input("0"),
+            };
+            for input in advanced.all() {
+                subscriptions.push(cx.subscribe_in(
+                    input,
+                    window,
+                    move |this, _, event: &InputEvent, _, cx| match event {
+                        InputEvent::Change => this.models.form(role).edited(EditedField::Advanced),
+                        InputEvent::PressEnter { .. } => save(this, role, cx),
+                        _ => {}
+                    },
+                ));
+            }
             let model = cx.new(|cx| {
                 SelectState::new(ModelChoices::new(Vec::new()), None, window, cx).searchable(true)
             });
@@ -178,6 +205,8 @@ impl ModelForms {
                 url,
                 key,
                 model,
+                advanced,
+                show_advanced: false,
                 loaded: None,
                 arrived: None,
                 polishing: Polishing::Off,
@@ -305,7 +334,8 @@ impl ProviderForm {
             form.detecting = false;
         };
         match field {
-            EditedField::Format | EditedField::Address => restart(self),
+            // A route or header can change what the server lists.
+            EditedField::Format | EditedField::Address | EditedField::Advanced => restart(self),
             EditedField::Key => {
                 self.key_edits += 1;
                 restart(self);
@@ -391,21 +421,64 @@ pub fn fill(
     let Some((provider, key)) = form.loaded.clone() else {
         return;
     };
-    let (saved, format, url, model) = match &provider {
+    let (saved, format, url, model, options) = match &provider {
         Provider::Asr {
             service,
             format,
             url,
             model,
+            options,
         }
         | Provider::Polish {
             service,
             format,
             url,
             model,
+            options,
             ..
-        } => (*service, *format, url.clone(), model.clone()),
+        } => (
+            *service,
+            *format,
+            url.clone(),
+            model.clone(),
+            options.clone(),
+        ),
     };
+    // Each provider keeps its own settings; another's start empty.
+    let options = options.get(&service).cloned().unwrap_or_default();
+    // Settings already made show; none stay folded away.
+    form.show_advanced = options != ProviderOptions::default();
+    let headers = options
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    for (input, value) in [
+        (&form.advanced.path, options.path.unwrap_or_default()),
+        (
+            &form.advanced.key_header,
+            options.key_header.unwrap_or_default(),
+        ),
+        (&form.advanced.headers, headers),
+        (&form.advanced.body, options.body.unwrap_or_default()),
+        (
+            &form.advanced.timeout,
+            options
+                .timeout_ms
+                .map(|ms| ms.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            &form.advanced.retries,
+            options
+                .retries
+                .map(|retries| retries.to_string())
+                .unwrap_or_default(),
+        ),
+    ] {
+        input.update(cx, |input, cx| input.set_value(value, window, cx));
+    }
     form.chosen_service = service;
     form.chosen_format = format;
     form.format.update(cx, |select, cx| {
@@ -451,5 +524,5 @@ mod fields;
 mod save;
 
 pub use discovery::{check, detect};
-pub use fields::EditedField;
+pub use fields::{AdvancedFields, EditedField};
 pub use save::{save, set_polishing};

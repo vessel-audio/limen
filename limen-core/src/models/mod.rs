@@ -105,7 +105,9 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             format,
             url,
             model,
+            options,
         } => {
+            config.provider.options = options.clone();
             config.provider.saved_key = stored(keys.asr, same);
             config.provider.model = model.trim().to_string();
             match same {
@@ -123,8 +125,10 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             format,
             url,
             model,
+            options,
             ..
         } => {
+            config.polish.options = options.clone();
             config.polish.saved_key = stored(keys.polish, same);
             config.polish.model = model.trim().to_string();
             match same {
@@ -180,7 +184,7 @@ pub async fn list_models(
             Provider::Asr { .. } => match connection::asr(&config)? {
                 AsrRoute::Api(connection) => connection,
                 // Limen's own upload has no models route to ask.
-                AsrRoute::Upload(_) => anyhow::bail!("{shown} lists no models"),
+                AsrRoute::Upload(..) => anyhow::bail!("{shown} lists no models"),
             },
             Provider::Polish { .. } => connection::polish(&config.polish, config.polish.api_key())?,
         };
@@ -230,6 +234,7 @@ mod tests {
             format,
             url: url.to_string(),
             model: String::new(),
+            options: Default::default(),
         }
     }
 
@@ -269,6 +274,7 @@ mod tests {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: Some("sk-saved".to_string()),
+                    shape: Default::default(),
                 })]
             )
         );
@@ -292,6 +298,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: url.to_string(),
             model: String::new(),
+            options: Default::default(),
         };
 
         for provider in [
@@ -306,6 +313,7 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some(base_url.to_string()),
                 api_key: None,
+                shape: Default::default(),
             })
         };
         assert_eq!(
@@ -348,6 +356,7 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some("https://asr.example/v1".to_string()),
                 api_key: Some("sk-saved".to_string()),
+                shape: Default::default(),
             })]
         );
     }
@@ -367,6 +376,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: " http://127.0.0.1:8080/v1/chat/completions ".to_string(),
             model: String::new(),
+            options: Default::default(),
         };
 
         for key in [
@@ -381,6 +391,7 @@ mod tests {
                 api: Api::Compatible,
                 base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                 api_key: api_key.map(str::to_string),
+                shape: Default::default(),
             })
         };
         assert_eq!(
@@ -417,6 +428,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "http://192.0.2.1/v1/chat/completions".to_string(),
             model: String::new(),
+            options: Default::default(),
         };
 
         let error = list_models(

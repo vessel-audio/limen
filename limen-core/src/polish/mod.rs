@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use crate::attempts::Attempts;
 use crate::backend::{ChatModel, Exchange, Finish, ModelBackend};
 use crate::config::PolishConfig;
 use crate::connection;
@@ -22,7 +23,7 @@ pub enum Polisher {
     UnreachableUrl,
     Enabled {
         model: Box<dyn ChatModel>,
-        timeout: Duration,
+        attempts: Attempts,
     },
 }
 
@@ -52,9 +53,17 @@ impl Polisher {
                 return Ok(Self::UnreachableUrl);
             }
         };
+        let options = config.options.get(&config.service());
         Ok(Self::Enabled {
             model: backend.chat(connection, config.model.clone())?,
-            timeout: Duration::from_millis(config.timeout_ms),
+            attempts: Attempts {
+                timeout: Duration::from_millis(
+                    options
+                        .and_then(|options| options.timeout_ms)
+                        .unwrap_or(config.timeout_ms),
+                ),
+                retries: options.and_then(|options| options.retries).unwrap_or(0),
+            },
         })
     }
 
@@ -72,15 +81,15 @@ impl Polisher {
         }
         match self {
             Self::Disabled | Self::MissingKey | Self::UnreachableUrl => original,
-            Self::Enabled { model, timeout } => correct(&**model, *timeout, original).await,
+            Self::Enabled { model, attempts } => correct(&**model, *attempts, original).await,
         }
     }
 }
 
 /// The model's correction of `original`, or `original` itself when the
-/// model fails, takes longer than `timeout`, or answers with anything but a
+/// model fails, outlasts its attempts, or answers with anything but a
 /// complete single-line text.
-async fn correct(model: &dyn ChatModel, timeout: Duration, original: String) -> String {
+async fn correct(model: &dyn ChatModel, attempts: Attempts, original: String) -> String {
     let started = Instant::now();
     let exchange = Exchange {
         instructions: CONSERVATIVE_PROMPT,
@@ -89,9 +98,9 @@ async fn correct(model: &dyn ChatModel, timeout: Duration, original: String) -> 
     };
     let outcome =
         async {
-            let reply = tokio::time::timeout(timeout, model.reply(exchange))
+            let reply = attempts
+                .run("polishing", || model.reply(exchange))
                 .await
-                .map_err(|_| anyhow::anyhow!("polishing timed out after {timeout:?}"))?
                 .context("polishing request failed")?;
             match reply.finish {
                 Some(Finish::Stop) => {}
@@ -136,6 +145,7 @@ mod tests {
     use anyhow::{Result, bail};
 
     use super::{CONSERVATIVE_PROMPT, MAX_TOKENS, Polisher};
+    use crate::attempts::Attempts;
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, BoxFuture, ChatModel, Connection, Exchange, Finish, Reply};
     use crate::config::{ApiKey, PolishConfig, Service};
@@ -176,7 +186,10 @@ mod tests {
                 delay,
                 asked: asked.clone(),
             }),
-            timeout: Duration::from_millis(100),
+            attempts: Attempts {
+                timeout: Duration::from_millis(100),
+                retries: 0,
+            },
         };
         (polisher, asked)
     }
@@ -323,6 +336,7 @@ mod tests {
                         api: Api::Compatible,
                         base_url: Some("https://ai.example/v1".to_string()),
                         api_key: Some("sk-polish".to_string()),
+                        shape: Default::default(),
                     },
                     "corrector".to_string()
                 ),
@@ -331,6 +345,7 @@ mod tests {
                         api: Api::Compatible,
                         base_url: Some("http://127.0.0.1:8080/v1".to_string()),
                         api_key: None,
+                        shape: Default::default(),
                     },
                     "corrector".to_string()
                 ),
