@@ -97,17 +97,19 @@ pub fn save(view: &mut AppView, role: ModelRole, cx: &mut Context<AppView>) {
 }
 
 /// Turn polishing on or off with the saved provider, as the page's switch
-/// asks; the switch shows the new state until the save says otherwise.
+/// asks; the switch shows the new state until the save says otherwise. With
+/// no provider set up yet, turning it on saves nothing and only shows the
+/// providers to choose from.
 pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
     let commands = view.commands.clone();
     let form = &mut view.models.polish;
     let Some((
         Provider::Polish {
+            polishing: saved,
             service,
             format,
             url,
             model,
-            ..
         },
         _,
     )) = form.loaded.clone()
@@ -118,6 +120,18 @@ pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
         return;
     }
     form.polishing = polishing;
+    form.error = None;
+    // Polishing needs a provider to polish with; until one is saved, the
+    // switch only shows the cards, and the dialog's save turns it on.
+    let ready = !model.trim().is_empty() && (!service.uses_url() || !url.trim().is_empty());
+    form.unsaved_on = match (polishing, ready, saved) {
+        (Polishing::On, false, _) => true,
+        (Polishing::On, true, _) | (Polishing::Off, _, _) => false,
+    };
+    match (polishing, ready, saved) {
+        (Polishing::On, false, _) | (Polishing::Off, _, Polishing::Off) => return,
+        (Polishing::On, true, _) | (Polishing::Off, _, Polishing::On) => {}
+    }
     let provider = Provider::Polish {
         polishing,
         service,

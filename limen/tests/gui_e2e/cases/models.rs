@@ -106,6 +106,16 @@ fn open_card(session: &Session, card: &str, prefix: &str) -> Result<()> {
 /// The page's polishing switch.
 const POLISHING: Target = Target::Named(Role::ToggleButton, "Polishing");
 
+/// Turn the polishing switch on, which shows the providers to polish with.
+fn show_polish_providers(session: &Session) -> Result<()> {
+    session.until("the polishing providers to show", || {
+        session.click(POLISHING)?;
+        session.wait("the page", |nodes| {
+            Some(nodes.iter().any(|node| node.id == "polish-provider-custom"))
+        })
+    })
+}
+
 /// Pick the type at `index` from a custom server's list; its items have no
 /// accessible names. Both lists start with OpenAI-compatible; the ASR list
 /// offers whisper.cpp next, the polishing list OpenAI.
@@ -253,12 +263,14 @@ pub fn an_invalid_asr_server_is_reported() -> Result<()> {
     Ok(())
 }
 
-/// A local polishing server is set up in its dialog, asking for its models
-/// with the typed key, and the page's switch then turns polishing on.
+/// With the switch on, a local polishing server is set up in its dialog,
+/// asking for its models with the typed key, and saving it turns polishing
+/// on.
 pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
+    show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(&session, "polish-url", &format!("{server}/v1"))?;
     session.click("polish-key")?;
@@ -277,10 +289,6 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     session.click("polish-save")?;
     session.named("toast", "Polish settings applied")?;
     session.absent("polish-key")?;
-    session.click(POLISHING)?;
-    session.until("polishing to be saved on", || {
-        Ok(Config::load(&session.paths().config_file).is_ok_and(|config| config.polish.enabled))
-    })?;
     let config = Config::load(&session.paths().config_file)?;
     ensure!(
         (
@@ -300,8 +308,8 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
         config.polish
     );
     ensure!(
-        reloads(&session, &v1::Request::PolishReload)? == 2,
-        "the daemon was not asked to reload polishing for the dialog and the switch"
+        config.polish.enabled && reloads(&session, &v1::Request::PolishReload)? == 1,
+        "polishing was not turned on with one save"
     );
     let asked = requests.lock().unwrap().clone();
     ensure!(
@@ -316,19 +324,17 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     Ok(())
 }
 
-/// The switch cannot turn polishing on before a server is set up: it says
-/// so and shows polishing off again.
-pub fn polishing_needs_a_server_first() -> Result<()> {
+/// With polishing off the page offers no providers; the switch shows them
+/// and saves nothing until one is set up.
+pub fn the_switch_shows_the_providers() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
-    session.until("the switch to answer", || {
-        session.click(POLISHING)?;
-        Ok(session.node("polish-error").is_ok())
-    })?;
-    session.named("polish-error", "enter the server's URL")?;
+    session.node(POLISHING)?;
+    session.absent("polish-provider-custom")?;
+    show_polish_providers(&session)?;
     ensure!(
         !session.paths().config_file.exists(),
-        "a refused switch was written"
+        "turning the switch on with no provider saved something"
     );
     Ok(())
 }
@@ -339,6 +345,10 @@ pub fn a_saved_key_is_removed() -> Result<()> {
     let keys = session.paths().config_file.with_file_name("keys.toml");
     std::fs::create_dir_all(keys.parent().unwrap())?;
     std::fs::write(&keys, "asr = \"sk-asr\"\npolish = \"sk-polish\"\n")?;
+    std::fs::write(
+        &session.paths().config_file,
+        "[provider]\nurl = \"\"\n\n[polish]\nenabled = true\nservice = \"custom\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"m\"\n",
+    )?;
     session.click("polish-page")?;
     open_card(&session, "polish-provider-custom", "polish")?;
     session.click("polish-key-remove")?;
@@ -354,6 +364,7 @@ pub fn a_saved_key_is_removed() -> Result<()> {
 pub fn a_url_credential_is_rejected() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
+    show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(
         &session,
@@ -411,6 +422,7 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
 pub fn only_a_custom_server_has_a_url() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("polish-page")?;
+    show_polish_providers(&session)?;
     open_card(&session, "polish-provider-anthropic", "polish")?;
     session.absent("polish-url")?;
     session.chord(&[Key::ESCAPE])?;
@@ -499,6 +511,7 @@ pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
     session.chord(&[Key::ESCAPE])?;
     session.absent("asr-key")?;
     session.click("polish-page")?;
+    show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(&session, "polish-url", &format!("{server}/v1"))?;
     session.state("polish-test", State::Focusable, true)?;

@@ -81,7 +81,13 @@ pub fn models(view: &AppView, role: ModelRole, cx: &mut Context<AppView>) -> Div
         .p_8()
         .child(super::title(title))
         .children(switch)
-        .child(cards::grid(view, role, cx))
+        // Polishing off needs no provider.
+        .children(match (role, form.polishing) {
+            (ModelRole::Asr, _) | (ModelRole::Polish, Polishing::On) => {
+                Some(cards::grid(view, role, cx))
+            }
+            (ModelRole::Polish, Polishing::Off) => None,
+        })
         .children(error.map(|error| {
             a11y::alert(error_id, error.clone())
                 .text_sm()
