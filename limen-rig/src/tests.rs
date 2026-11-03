@@ -392,3 +392,76 @@ async fn a_redirect_is_never_followed_with_the_key() {
         "the redirect was followed"
     );
 }
+
+#[tokio::test]
+async fn an_unreachable_service_never_quotes_the_key_in_its_url() {
+    // Nothing listens on the discard port; Gemini sends its key in the URL.
+    let model = Rig
+        .chat(
+            connection(
+                Api::Gemini,
+                "http://127.0.0.1:9".to_string(),
+                Some("sk-secret-123"),
+            ),
+            "gemini-model".to_string(),
+        )
+        .unwrap();
+
+    let error = format!("{:#}", model.reply(EXCHANGE).await.unwrap_err());
+
+    assert!(!error.contains("sk-secret-123"), "{error}");
+}
+
+#[tokio::test]
+async fn a_keyless_anthropic_server_gets_no_credential_header() {
+    let (base, server) = mock_server(json!({
+        "id": "reply",
+        "type": "message",
+        "role": "assistant",
+        "model": "corrector",
+        "content": [{"type": "text", "text": "你好，世界。"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    }))
+    .await;
+    let model = Rig
+        .chat(
+            connection(Api::Anthropic, base, None),
+            "corrector".to_string(),
+        )
+        .unwrap();
+
+    let reply = model.reply(EXCHANGE).await.unwrap();
+
+    let request = server.await.unwrap();
+    assert_eq!(
+        (
+            reply,
+            request.head.lines().next(),
+            request.header("x-api-key"),
+            request.header("authorization")
+        ),
+        (
+            Reply {
+                text: "你好，世界。".to_string(),
+                finish: Some(Finish::Stop),
+            },
+            Some("POST /v1/messages HTTP/1.1"),
+            None,
+            None
+        )
+    );
+}
+
+#[test]
+fn a_keyless_gemini_server_is_refused() {
+    let error = Rig
+        .chat(
+            connection(Api::Gemini, "http://127.0.0.1:9".to_string(), None),
+            "gemini-model".to_string(),
+        )
+        .err()
+        .map(|error| error.to_string());
+
+    assert_eq!(error, Some("a Gemini server needs an API key".to_string()));
+}
