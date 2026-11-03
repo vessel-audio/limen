@@ -50,8 +50,17 @@ impl Config {
             for (service, options) in options {
                 let field = format!("{role}.options.{}", service.as_str());
                 options.check(&field)?;
-                if let (Service::Custom, Some(_)) = (service, &options.url) {
-                    bail!("{field}.url is not used: a custom server's URL is {role}.url");
+                match (service, &options.url) {
+                    (Service::Custom, Some(_)) => {
+                        bail!("{field}.url is not used: a custom server's URL is {role}.url")
+                    }
+                    (_, Some(_)) if service.subscription().is_some() => {
+                        bail!("{field}.url is not used: the sign-in names the server")
+                    }
+                    (_, Some(_) | None) => {}
+                }
+                if let (Some(_), Some(_)) = (service.subscription(), &options.key_header) {
+                    bail!("{field}.key_header is not used: a subscription takes no key");
                 }
                 match (role, options.chat_api) {
                     ("provider", Some(_)) => {

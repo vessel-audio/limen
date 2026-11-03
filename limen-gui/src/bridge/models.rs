@@ -1,10 +1,12 @@
 //! The model provider pages' requests: reading and saving a provider,
-//! listing the models its server offers, and trying one.
+//! listing the models its server offers, trying one, and signing in to a
+//! subscription.
 
 use std::time::Duration;
 
 use limen_core::{
-    KeyChange, ModelRole, Provider, check_model, list_models, load_provider, save_provider,
+    KeyChange, ModelRole, Provider, Subscription, check_model, list_models, load_provider,
+    save_provider,
 };
 use tokio::sync::mpsc;
 
@@ -38,6 +40,15 @@ pub enum ModelRequest {
         provider: Provider,
         key: KeyChange,
     },
+    /// Ask whether a sign-in to `subscription` is kept.
+    SignedIn { subscription: Subscription },
+    /// Sign in to `subscription`, abandoning any sign-in under way; its
+    /// steps and end carry `id` back.
+    SignIn { subscription: Subscription, id: u64 },
+    /// Abandon the sign-in under way.
+    CancelSignIn,
+    /// Forget the sign-in to `subscription`; whether one is kept follows.
+    SignOut { subscription: Subscription },
 }
 
 /// Start `request` off the bridge loop, so snapshots and levels keep flowing
@@ -112,6 +123,83 @@ pub(super) fn handle(env: &Env, events: &mpsc::Sender<BridgeEvent>, request: Mod
                     .map_err(|error| format!("{error:#}"));
                 let _ = events
                     .send(BridgeEvent::ModelChecked { role, id, result })
+                    .await;
+            });
+        }
+        ModelRequest::SignedIn { subscription } => {
+            let signed_in = env.models.signed_in(subscription);
+            let events = events.clone();
+            tokio::spawn(async move {
+                let _ = events
+                    .send(BridgeEvent::SignedIn {
+                        subscription,
+                        signed_in,
+                    })
+                    .await;
+            });
+        }
+        ModelRequest::SignIn { subscription, id } => {
+            let (backend, events) = (env.models.clone(), events.clone());
+            let steps = events.clone();
+            let task = tokio::spawn(async move {
+                // The prompt runs inside the backend's sign-in, which must
+                // not wait on a full channel.
+                let prompt = Box::new(move |step| {
+                    let _ = steps.try_send(BridgeEvent::SignInStep { id, step });
+                });
+                let result = backend
+                    .sign_in(subscription, prompt)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let signed_in = backend.signed_in(subscription);
+                let _ = events.send(BridgeEvent::SignInEnded { id, result }).await;
+                let _ = events
+                    .send(BridgeEvent::SignedIn {
+                        subscription,
+                        signed_in,
+                    })
+                    .await;
+            });
+            let abandoned = env
+                .signing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .replace(task.abort_handle());
+            if let Some(abandoned) = abandoned {
+                abandoned.abort();
+            }
+        }
+        ModelRequest::CancelSignIn => {
+            if let Some(signing) = env
+                .signing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                signing.abort();
+            }
+        }
+        ModelRequest::SignOut { subscription } => {
+            let (backend, events) = (env.models.clone(), events.clone());
+            let paths = paths.clone();
+            tokio::spawn(async move {
+                let result = backend.sign_out(subscription).await;
+                // A running daemon builds its polisher again, so it drops the
+                // credential it may still hold; one not running has none.
+                let _ = limen_core::request(&paths, &limen_core::v1::Request::PolishReload).await;
+                let signed_in = backend.signed_in(subscription);
+                if let Err(error) = result {
+                    let _ = events
+                        .send(BridgeEvent::Msg(crate::model::Msg::CommandError {
+                            message: format!("{error:#}"),
+                        }))
+                        .await;
+                }
+                let _ = events
+                    .send(BridgeEvent::SignedIn {
+                        subscription,
+                        signed_in,
+                    })
                     .await;
             });
         }

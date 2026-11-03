@@ -5,10 +5,13 @@
 //! Limen's types. Replacing the framework means replacing this crate; the
 //! core and the GUI only see [`limen_core::ModelBackend`].
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::{Context, Result, bail};
 use limen_core::{
-    Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Take,
-    Transcriber, Transient,
+    Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply,
+    SignInPrompt, Subscription, Take, Transcriber, Transient,
 };
 use rig_core::DynModel;
 use rig_core::completion::{CompletionRequest, FinishReason, OnUnsupported, Reasoning};
@@ -38,9 +41,30 @@ const COMPATIBLE: Dialect = Dialect::gateway("openai-compatible", "http://127.0.
 /// It is built with the model client rather than with the backend: a
 /// system without CA certificates cannot build one, and that must fail the
 /// request, not stop the daemon or the GUI from starting.
-pub struct Rig;
+///
+/// Subscriptions' sign-ins are kept in files under its sign-in directory.
+pub struct Rig {
+    sign_ins: PathBuf,
+}
+
+/// An HTTP client that never follows redirects and sends `headers` with
+/// every request.
+fn http(headers: reqwest::header::HeaderMap) -> Result<ReqwestClient> {
+    Ok(ReqwestClient::from(
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .default_headers(headers)
+            .build()
+            .context("failed to build the model HTTP client")?,
+    ))
+}
 
 impl Rig {
+    /// The backend keeping subscriptions' sign-ins under `sign_ins`.
+    pub fn new(sign_ins: PathBuf) -> Self {
+        Self { sign_ins }
+    }
+
     /// The rig client for `connection`, and the fields every request body
     /// also carries.
     fn client(&self, connection: Connection) -> Result<(Client, JsonMap)> {
@@ -73,13 +97,7 @@ impl Rig {
                 ))
             })
             .collect::<Result<reqwest::header::HeaderMap>>()?;
-        let http = ReqwestClient::from(
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .default_headers(headers)
-                .build()
-                .context("failed to build the model HTTP client")?,
-        );
+        let http = http(headers)?;
         let openai = |dialect: &Dialect| {
             let mut config = OpenAIConfig::with_key(dialect, key.clone());
             if let Some(base_url) = &base_url {
@@ -142,16 +160,31 @@ impl Rig {
                 };
                 Client::Gemini(config.connect(http.clone()))
             }
+            // A subscription's sign-in, not a key, authorizes its requests.
+            Api::ChatGpt => Client::SignedIn(signed_in::Account::new(
+                Subscription::ChatGpt,
+                &self.sign_ins,
+                http,
+                None,
+            )),
+            Api::Copilot => Client::SignedIn(signed_in::Account::new(
+                Subscription::Copilot,
+                &self.sign_ins,
+                http,
+                None,
+            )),
         };
         Ok((client, shape.body))
     }
 }
 
-/// A rig client of one of its client families.
+/// A rig client of one of its client families, or a subscription's sign-in,
+/// which makes one for each request.
 enum Client {
     OpenAi(Box<OpenAI>),
     Anthropic(Anthropic),
     Gemini(Gemini),
+    SignedIn(signed_in::Account),
 }
 
 impl ModelBackend for Rig {
@@ -162,7 +195,9 @@ impl ModelBackend for Rig {
             (Api::DeepSeek | Api::Anthropic, _) => bail!("{api:?} does not transcribe audio"),
             (_, Client::OpenAi(client)) => client.transcription(model).erase(),
             (_, Client::Gemini(client)) => client.transcription(model).erase(),
-            (_, Client::Anthropic(_)) => bail!("{api:?} does not transcribe audio"),
+            (_, Client::Anthropic(_) | Client::SignedIn(_)) => {
+                bail!("{api:?} does not transcribe audio")
+            }
         };
         Ok(Box::new(RigTranscriber(model, body)))
     }
@@ -170,9 +205,10 @@ impl ModelBackend for Rig {
     fn chat(&self, connection: Connection, model: String) -> Result<Box<dyn ChatModel>> {
         let (client, body) = self.client(connection)?;
         let model = match client {
-            Client::OpenAi(client) => client.completion(model).erase(),
-            Client::Anthropic(client) => client.completion(model).erase(),
-            Client::Gemini(client) => client.completion(model).erase(),
+            Client::OpenAi(client) => Chat::Ready(client.completion(model).erase()),
+            Client::Anthropic(client) => Chat::Ready(client.completion(model).erase()),
+            Client::Gemini(client) => Chat::Ready(client.completion(model).erase()),
+            Client::SignedIn(account) => Chat::SignedIn(account, model),
         };
         Ok(Box::new(RigChat(model, body)))
     }
@@ -184,10 +220,34 @@ impl ModelBackend for Rig {
                 Client::OpenAi(client) => client.list_models().await,
                 Client::Anthropic(client) => client.list_models().await,
                 Client::Gemini(client) => client.list_models().await,
+                // A subscription serves what its plan offers, as rig knows it.
+                Client::SignedIn(account) => return Ok(account.models()),
             }
             .map_err(sanitized)?;
             Ok(listed.data.into_iter().map(|model| model.id).collect())
         })
+    }
+
+    fn sign_in(
+        &self,
+        subscription: Subscription,
+        prompt: SignInPrompt,
+    ) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let http = http(Default::default())?;
+            signed_in::sign_in(&self.sign_ins, subscription, http, Arc::from(prompt)).await
+        })
+    }
+
+    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let http = http(Default::default())?;
+            signed_in::sign_out(&self.sign_ins, subscription, http).await
+        })
+    }
+
+    fn signed_in(&self, subscription: Subscription) -> bool {
+        signed_in::kept(&self.sign_ins, subscription)
     }
 }
 
@@ -253,8 +313,14 @@ impl Transcriber for RigTranscriber {
     }
 }
 
+/// A chat model, or the sign-in that connects one for each request.
+enum Chat {
+    Ready(DynModel<Completion>),
+    SignedIn(signed_in::Account, String),
+}
+
 /// A chat model, and the fields every request also carries.
-struct RigChat(DynModel<Completion>, JsonMap);
+struct RigChat(Chat, JsonMap);
 
 impl ChatModel for RigChat {
     fn reply<'a>(&'a self, exchange: Exchange<'a>) -> BoxFuture<'a, Result<Reply>> {
@@ -270,9 +336,12 @@ impl ChatModel for RigChat {
             true => request,
             false => request.additional_params(serde_json::Value::Object(self.1.clone())),
         };
-        let reply = self.0.call(request);
         Box::pin(async move {
-            let response = reply.await.map_err(sanitized)?;
+            let model = match &self.0 {
+                Chat::Ready(model) => model.clone(),
+                Chat::SignedIn(account, model) => account.completion(model).await?,
+            };
+            let response = model.call(request).await.map_err(sanitized)?;
             Ok(Reply {
                 text: response.text(),
                 finish: response.finish_reason().map(|reason| match reason {
@@ -287,6 +356,8 @@ impl ChatModel for RigChat {
         })
     }
 }
+
+mod signed_in;
 
 #[cfg(test)]
 mod tests;

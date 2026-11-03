@@ -86,7 +86,13 @@ and needs an API key and a model; Custom names your own server by its URL and
 the API it speaks, OpenAI-compatible, whisper.cpp for ASR, or any vendor's.
 Polishing over OpenAI's API or a compatible one also chooses its chat API,
 Chat Completions or Responses; OpenAI and xAI default to Responses, the others
-to Chat Completions. No server or model is set until you choose one. Once the server
+to Chat Completions. Polishing can also use a ChatGPT or GitHub Copilot plan
+you already pay for, under Subscriptions: its dialog has no key, only Sign in,
+which opens ChatGPT's sign-in page in the browser (or shows a code to enter
+when the browser cannot return to Limen), or shows the code to enter on
+GitHub's page for Copilot. The sign-in is kept under `sign-ins/` beside the
+config file, readable by you alone, refreshed as it expires, and used by the
+daemon from its next correction; Sign out forgets it. No server or model is set until you choose one. Once the server
 address or key stops changing, the dialog asks the provider for its models: a
 server that offers exactly one fills it in, and otherwise the list offers them
 and also takes a typed name; Detect asks at once. The whisper.cpp server lists

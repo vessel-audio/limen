@@ -245,6 +245,21 @@ impl AppView {
                 Vec::new()
             }
             BridgeEvent::ModelChecked { role, id, result } => self.models.checked(role, id, result),
+            BridgeEvent::SignedIn {
+                subscription,
+                signed_in,
+            } => {
+                self.models.signed_in(subscription, signed_in);
+                Vec::new()
+            }
+            BridgeEvent::SignInStep { id, step } => {
+                self.models.sign_in_step(id, step);
+                Vec::new()
+            }
+            BridgeEvent::SignInEnded { id, result } => {
+                self.models.sign_in_ended(id, result);
+                Vec::new()
+            }
             BridgeEvent::Toast(_) => Vec::new(),
         }
     }

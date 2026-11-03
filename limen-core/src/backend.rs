@@ -84,6 +84,10 @@ pub enum Api {
     Groq,
     OpenRouter,
     XAi,
+    /// The ChatGPT plan's backend, with the stored sign-in's credential.
+    ChatGpt,
+    /// GitHub Copilot, with the stored sign-in's session.
+    Copilot,
 }
 
 impl Api {
@@ -96,10 +100,31 @@ impl Api {
             Self::Compatible | Self::DeepSeek | Self::Mistral | Self::Groq | Self::OpenRouter => {
                 Some(ChatApi::ChatCompletions)
             }
-            Self::Anthropic | Self::Gemini => None,
+            // A subscription's backend picks its own: ChatGPT's takes only
+            // Responses, Copilot's routes each model.
+            Self::Anthropic | Self::Gemini | Self::ChatGpt | Self::Copilot => None,
         }
     }
 }
+
+/// A plan the user signs in to, in place of paying for an API key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Subscription {
+    ChatGpt,
+    Copilot,
+}
+
+/// What a sign-in asks the user to do while it waits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignInStep {
+    /// Finish signing in on `url`, which the browser was asked to open.
+    Browser { url: String },
+    /// Enter `code` on `url`, on any device.
+    DeviceCode { url: String, code: String },
+}
+
+/// Told each [`SignInStep`] as a sign-in reaches it.
+pub type SignInPrompt = Box<dyn Fn(SignInStep) + Send + Sync>;
 
 /// A failure worth sending the same request again for: the service could
 /// not be reached, or said it is busy or failing for now. A backend returns
@@ -191,6 +216,23 @@ pub trait ModelBackend: Send + Sync {
     /// The models `connection` offers, in its order. The caller bounds the
     /// call with its own timeout.
     fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>>;
+
+    /// Sign in to `subscription` again, telling `prompt` what the user must
+    /// do, and keep the credential where later requests read it. Dropping
+    /// the future abandons the sign-in.
+    fn sign_in(
+        &self,
+        subscription: Subscription,
+        prompt: SignInPrompt,
+    ) -> BoxFuture<'_, Result<()>>;
+
+    /// Forget the sign-in to `subscription`, revoking it where its
+    /// provider can.
+    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>>;
+
+    /// Whether a sign-in to `subscription` is kept. It may still have
+    /// expired; a request then says so.
+    fn signed_in(&self, subscription: Subscription) -> bool;
 }
 
 /// A chat model that answers one exchange at a time.
@@ -212,7 +254,8 @@ pub(crate) mod testing {
     use anyhow::{Result, bail};
 
     use super::{
-        BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Reply, Take, Transcriber,
+        BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Reply, SignInPrompt,
+        Subscription, Take, Transcriber,
     };
 
     /// A backend that refuses every request.
@@ -229,6 +272,18 @@ pub(crate) mod testing {
 
         fn models(&self, _: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
             Box::pin(async { bail!("no models in this test") })
+        }
+
+        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { bail!("no sign-in in this test") })
+        }
+
+        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn signed_in(&self, _: Subscription) -> bool {
+            false
         }
     }
 
@@ -303,6 +358,18 @@ pub(crate) mod testing {
         fn models(&self, _: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
             Box::pin(async { Ok(Vec::new()) })
         }
+
+        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { bail!("no sign-in in this test") })
+        }
+
+        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn signed_in(&self, _: Subscription) -> bool {
+            false
+        }
     }
 
     impl ModelBackend for Recording {
@@ -330,6 +397,18 @@ pub(crate) mod testing {
             self.built.lock().unwrap().push(Built::Models(connection));
             let models = self.models.clone();
             Box::pin(async move { Ok(models) })
+        }
+
+        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { bail!("no sign-in in this test") })
+        }
+
+        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn signed_in(&self, _: Subscription) -> bool {
+            false
         }
     }
 }

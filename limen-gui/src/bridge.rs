@@ -11,8 +11,9 @@ use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
     Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeySource, Keys,
-    Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError, Shortcut, clear,
-    daemon_peer_pid, edit, set, setup, spawn_daemon, subscribe, terminate_daemon, v1,
+    Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError, Shortcut,
+    SignInStep, Subscription, clear, daemon_peer_pid, edit, set, setup, spawn_daemon, subscribe,
+    terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -87,6 +88,21 @@ pub enum BridgeEvent {
         id: u64,
         result: Result<(), String>,
     },
+    /// Whether a sign-in to `subscription` is kept.
+    SignedIn {
+        subscription: Subscription,
+        signed_in: bool,
+    },
+    /// What the sign-in `id` asks the user to do now.
+    SignInStep {
+        id: u64,
+        step: SignInStep,
+    },
+    /// How the sign-in `id` ended.
+    SignInEnded {
+        id: u64,
+        result: Result<(), String>,
+    },
     Toast(Toast),
 }
 
@@ -105,6 +121,8 @@ type ShortcutTasks = JoinSet<Result<Report, ShortcutFailure>>;
 pub(crate) struct Env {
     pub(crate) paths: Paths,
     pub(crate) models: Arc<dyn ModelBackend>,
+    /// The sign-in under way, which another sign-in or a cancel abandons.
+    pub(crate) signing: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 pub fn start(
@@ -124,7 +142,12 @@ pub fn start(
                 .enable_all()
                 .build()
                 .expect("bridge runtime");
-            runtime.block_on(run(Env { paths, models }, events, command_rx));
+            let env = Env {
+                paths,
+                models,
+                signing: Default::default(),
+            };
+            runtime.block_on(run(env, events, command_rx));
         })
         .expect("failed to spawn bridge thread");
     (commands, event_rx, thread)

@@ -3,15 +3,20 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::backend::Api;
+use crate::backend::{Api, Subscription};
 
-/// A model service a role can use: a server the user names, or a vendor's
-/// own API, which needs only a key.
+/// A model service a role can use: a server the user names, a vendor's own
+/// API, which needs only a key, or a subscription the user signs in to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Service {
     /// A server at the configured URL, speaking the configured [`Format`].
     Custom,
+    /// A ChatGPT plan, signed in to rather than paid per request.
+    #[serde(rename = "chatgpt")]
+    ChatGpt,
+    /// A GitHub Copilot plan, signed in to with GitHub.
+    Copilot,
     #[serde(rename = "openai")]
     OpenAi,
     Anthropic,
@@ -37,8 +42,10 @@ impl Service {
     ];
 
     /// The services that polish, in the order they are offered.
-    pub const POLISHING: [Self; 9] = [
+    pub const POLISHING: [Self; 11] = [
         Self::Custom,
+        Self::ChatGpt,
+        Self::Copilot,
         Self::OpenAi,
         Self::Anthropic,
         Self::Gemini,
@@ -53,6 +60,8 @@ impl Service {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Custom => "custom",
+            Self::ChatGpt => "chatgpt",
+            Self::Copilot => "copilot",
             Self::OpenAi => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
@@ -70,11 +79,36 @@ impl Service {
         self == Self::Custom
     }
 
+    /// The subscription a request with this service is signed in with;
+    /// `None` for a server or a vendor, which a key authorizes.
+    pub fn subscription(self) -> Option<Subscription> {
+        match self {
+            Self::ChatGpt => Some(Subscription::ChatGpt),
+            Self::Copilot => Some(Subscription::Copilot),
+            Self::Custom
+            | Self::OpenAi
+            | Self::Anthropic
+            | Self::Gemini
+            | Self::DeepSeek
+            | Self::Mistral
+            | Self::Groq
+            | Self::OpenRouter
+            | Self::XAi => None,
+        }
+    }
+
+    /// Whether a request needs an API key: a vendor's does; a custom
+    /// server may run without one, and a subscription is signed in to.
+    pub fn needs_key(self) -> bool {
+        self.key_env().is_some()
+    }
+
     /// The environment variable that holds the vendor's key when the config
-    /// names none. A custom server may need no key.
+    /// names none. A custom server may need no key, and a subscription
+    /// takes none.
     pub fn key_env(self) -> Option<&'static str> {
         match self {
-            Self::Custom => None,
+            Self::Custom | Self::ChatGpt | Self::Copilot => None,
             Self::OpenAi => Some("OPENAI_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
             Self::Gemini => Some("GEMINI_API_KEY"),
@@ -87,10 +121,11 @@ impl Service {
     }
 
     /// The base URL a vendor's API is reached at unless its settings name
-    /// another; `None` for a custom server, which has only its own.
+    /// another; `None` for a custom server, which has only its own, and a
+    /// subscription, which its sign-in names.
     pub fn default_url(self) -> Option<&'static str> {
         match self {
-            Self::Custom => None,
+            Self::Custom | Self::ChatGpt | Self::Copilot => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::Anthropic => Some("https://api.anthropic.com"),
             Self::Gemini => Some("https://generativelanguage.googleapis.com"),
@@ -118,6 +153,8 @@ impl Service {
     pub(crate) fn vendor_api(self) -> Option<Api> {
         match self {
             Self::Custom => None,
+            Self::ChatGpt => Some(Api::ChatGpt),
+            Self::Copilot => Some(Api::Copilot),
             Self::OpenAi => Some(Api::OpenAi),
             Self::Anthropic => Some(Api::Anthropic),
             Self::Gemini => Some(Api::Gemini),

@@ -77,6 +77,8 @@ pub struct ProviderForm {
     offered: Vec<SharedString>,
     /// The saved key is to be removed.
     pub clear_key: bool,
+    /// The sign-in to the dialog's subscription, for a subscription.
+    pub account: Account,
     /// When the format, address, or key was last edited.
     edited_at: Option<Instant>,
     /// The user asked for the models, so a failure to list them shows.
@@ -256,6 +258,7 @@ impl ModelForms {
                 chosen: None,
                 offered: Vec::new(),
                 clear_key: false,
+                account: Account::default(),
                 edited_at: None,
                 detecting: false,
                 checking: Check::Idle,
@@ -438,7 +441,11 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
                 form.open = false;
                 form.close_requested = false;
             }
-            (false, true) => form.open = false,
+            (false, true) => {
+                form.open = false;
+                // A sign-in for a dialog no longer showing is abandoned.
+                form.abandon_sign_in(&commands);
+            }
             (false, false) => {}
         }
         discovery::discover(form, role, visible && form.open, &commands, window, cx);
@@ -572,10 +579,12 @@ pub fn key_placeholder(key: &KeySource, service: Service) -> String {
     }
 }
 
+mod account;
 mod discovery;
 mod fields;
 mod save;
 
+pub use account::{Account, cancel_sign_in, sign_in, sign_out};
 pub use discovery::{check, detect};
 pub use fields::{AdvancedFields, EditedField};
 pub use save::{save, set_polishing};

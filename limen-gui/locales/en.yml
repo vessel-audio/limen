@@ -159,6 +159,16 @@ models.detect: Detect
 models.test: Test
 models.no_models: The server listed no models
 models.enter_server: Enter the server first
+models.subscriptions: Subscriptions
+models.apis: API
+models.account: Account
+models.signed_in: Signed in
+models.signed_out: Not signed in
+models.sign_in: Sign in
+models.sign_out: Sign out
+models.signing_in: Starting the sign-in…
+models.in_browser: Finish signing in in your browser
+models.open_page: Open page
 toast.asr_applied: ASR settings applied
 toast.asr_saved: ASR settings saved; the daemon uses them when it starts
 toast.polish_applied: Polish settings applied

@@ -34,8 +34,9 @@ impl Polisher {
             return Ok(Self::Disabled);
         }
         let api_key = config.api_key();
-        // A server Limen is pointed at may need no key; a vendor always does.
-        if api_key.is_none() && !config.service().uses_url() {
+        // A server Limen is pointed at may need no key, and a subscription
+        // is signed in to; a vendor always needs one.
+        if api_key.is_none() && config.service().needs_key() {
             tracing::warn!(
                 service = config.service().as_str(),
                 variable = ?config.key_env(),
@@ -301,6 +302,34 @@ mod tests {
         assert_eq!(
             (outputs, asked.lock().unwrap().clone()),
             (["原文".to_string(), "  ".to_string()], Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_subscription_polishes_with_its_sign_in_and_no_key() {
+        let config = PolishConfig {
+            enabled: true,
+            service: Some(Service::Copilot),
+            model: "gpt-5.5".to_string(),
+            saved_key: None,
+            ..PolishConfig::default()
+        };
+        let backend = Recording::default();
+
+        let polisher = Polisher::from_config(&config, &backend);
+
+        assert!(matches!(polisher, Ok(Polisher::Enabled { .. })));
+        assert_eq!(
+            backend.built.lock().unwrap().clone(),
+            [Built::Chat(
+                Connection {
+                    api: Api::Copilot,
+                    base_url: None,
+                    api_key: None,
+                    shape: Shape::default(),
+                },
+                "gpt-5.5".to_string()
+            )]
         );
     }
 

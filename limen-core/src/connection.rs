@@ -153,7 +153,8 @@ fn custom(
 }
 
 /// The connection to a vendor's endpoint, its own or the one its `options`
-/// name, which needs a key.
+/// name, which needs a key; or to a subscription, which its sign-in
+/// authorizes.
 fn vendor_endpoint(
     service: Service,
     options: Option<&ProviderOptions>,
@@ -164,14 +165,20 @@ fn vendor_endpoint(
     let api = service
         .vendor_api()
         .context("a custom server has no endpoint of its own")?;
-    match api_key {
-        Some(api_key) => Ok(Connection {
+    match (service.subscription(), api_key) {
+        (Some(_), _) => Ok(Connection {
+            api,
+            base_url: None,
+            api_key: None,
+            shape,
+        }),
+        (None, Some(api_key)) => Ok(Connection {
             api,
             base_url: options.and_then(|options| options.url.clone()),
             api_key: Some(api_key),
             shape,
         }),
-        None => bail!(
+        (None, None) => bail!(
             "{} needs an API key: save one on its Models page{}",
             service.as_str(),
             key_env
