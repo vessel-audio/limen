@@ -128,10 +128,11 @@ pub fn url_example(role: ModelRole, format: Format) -> &'static str {
             "https://generativelanguage.googleapis.com"
         }
         (ModelRole::Asr | ModelRole::Polish, Format::DeepSeek) => "https://api.deepseek.com",
-        (ModelRole::Asr | ModelRole::Polish, Format::Mistral) => "https://api.mistral.ai/v1",
+        // Mistral's and xAI's routes start with `/v1` themselves.
+        (ModelRole::Asr | ModelRole::Polish, Format::Mistral) => "https://api.mistral.ai",
         (ModelRole::Asr | ModelRole::Polish, Format::Groq) => "https://api.groq.com/openai/v1",
         (ModelRole::Asr | ModelRole::Polish, Format::OpenRouter) => "https://openrouter.ai/api/v1",
-        (ModelRole::Asr | ModelRole::Polish, Format::XAi) => "https://api.x.ai/v1",
+        (ModelRole::Asr | ModelRole::Polish, Format::XAi) => "https://api.x.ai",
     }
 }
 
