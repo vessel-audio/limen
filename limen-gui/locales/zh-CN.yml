@@ -148,6 +148,13 @@ models.remove_key: 删除
 models.model: 模型
 models.search: 搜索或输入模型
 models.save: 保存
+models.advanced: 高级
+models.route: 路径
+models.key_header: 密钥请求头
+models.headers: 请求头
+models.body: 额外请求体
+models.timeout: 超时（毫秒）
+models.retries: 重试次数
 models.detect: 检测
 models.test: 测试
 models.no_models: 服务器未列出任何模型

@@ -1,11 +1,12 @@
 //! The dialog a provider card opens: a custom server's format and URL, the
 //! key, and the model, which can be detected and tested before saving.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::dialog::{Dialog, DialogEntrance};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::select::Select;
-use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, StyledExt, WindowExt as _};
 use gpui_kit::*;
 use limen_core::{KeyState, ModelRole, Service};
 
@@ -145,6 +146,59 @@ fn body(
             model.into_any_element(),
         ),
     ]);
+    let fields = &form.advanced;
+    let advanced = form.show_advanced.then(|| {
+        [
+            ("models.route", "route", &fields.path),
+            ("models.key_header", "key-header", &fields.key_header),
+            ("models.headers", "headers", &fields.headers),
+            ("models.body", "body", &fields.body),
+            ("models.timeout", "timeout", &fields.timeout),
+            ("models.retries", "retries", &fields.retries),
+        ]
+        .map(|(label, id, input)| {
+            (
+                rust_i18n::t!(label).to_string(),
+                Input::new(input)
+                    .accessibility_id(format!("{prefix}-{id}"))
+                    .aria_label(rust_i18n::t!(label).to_string())
+                    .into_any_element(),
+            )
+        })
+    });
+    let row = |(label, control): (String, AnyElement)| {
+        div()
+            .h_flex()
+            .items_center()
+            .gap_4()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(88.))
+                    .text_sm()
+                    .font_medium()
+                    .child(label),
+            )
+            .child(div().flex_1().min_w_0().child(control))
+    };
+    let toggle = {
+        let entity = entity.clone();
+        a11y::button(format!("{prefix}-advanced"))
+            .ghost()
+            .small()
+            .icon(match form.show_advanced {
+                true => IconName::ChevronDown,
+                false => IconName::ChevronRight,
+            })
+            .label(rust_i18n::t!("models.advanced").to_string())
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| {
+                    let form = this.models.form(role);
+                    form.show_advanced = !form.show_advanced;
+                    cx.notify();
+                })
+            })
+    };
     dialog
         .title(service_label(service))
         .w(px(600.))
@@ -154,24 +208,25 @@ fn body(
                 .v_flex()
                 .gap_4()
                 .child(
+                    // Taller than the window allows once the advanced
+                    // settings show, so the fields scroll.
                     div()
+                        .id(SharedString::from(format!("{prefix}-fields")))
                         .v_flex()
                         .gap_3()
-                        .children(rows.map(|(label, control)| {
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_4()
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .w(px(88.))
-                                        .text_sm()
-                                        .font_medium()
-                                        .child(label),
+                        .max_h(px(340.))
+                        .overflow_y_scroll()
+                        .children(rows.map(row))
+                        .child(div().h_flex().child(toggle))
+                        .children(advanced.into_iter().flatten().enumerate().map(
+                            |(index, field)| {
+                                row(field).with_animation(
+                                    SharedString::from(format!("{prefix}-advanced-{index}")),
+                                    crate::motion::stagger(index),
+                                    |row, t| row.opacity(t),
                                 )
-                                .child(div().flex_1().min_w_0().child(control))
-                        })),
+                            },
+                        )),
                 )
                 .child(
                     div()

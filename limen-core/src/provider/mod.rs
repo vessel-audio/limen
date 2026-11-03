@@ -2,10 +2,12 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
 
+use crate::attempts::Attempts;
 use crate::backend::{BoxFuture, ModelBackend, Transcriber};
 use crate::config::Config;
 use crate::connection::{self, AsrRoute};
@@ -76,10 +78,19 @@ pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn A
     }
     let model = cfg.provider.model.clone();
     let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg)? {
-        AsrRoute::Upload(url) => Arc::new(multipart::Server::new(url, model, cfg.api_key())?),
+        AsrRoute::Upload(url, shape) => {
+            Arc::new(multipart::Server::new(url, model, cfg.api_key(), shape)?)
+        }
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
-    Ok(Box::new(buffered::Provider::new(transcriber)))
+    let options = cfg.provider.options.get(&cfg.provider.service());
+    let attempts = Attempts {
+        timeout: options
+            .and_then(|options| options.timeout_ms)
+            .map_or(buffered::REQUEST_TIMEOUT, Duration::from_millis),
+        retries: options.and_then(|options| options.retries).unwrap_or(0),
+    };
+    Ok(Box::new(buffered::Provider::new(transcriber, attempts)))
 }
 
 /// `limen probe <wav>`: transcribe a file and print the final event flow.
@@ -190,6 +201,7 @@ mod tests {
                     api: Api::Compatible,
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: None,
+                    shape: Default::default(),
                 },
                 "asr".to_string()
             )]

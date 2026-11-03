@@ -49,6 +49,7 @@ pub const ALL: &[Case] = cases![
     models::the_model_is_detected_from_the_typed_server,
     models::the_models_are_detected_on_request,
     models::a_model_is_tested_before_it_is_saved,
+    models::advanced_settings_belong_to_their_provider,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,

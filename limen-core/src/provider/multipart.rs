@@ -4,19 +4,24 @@
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::{BoxFuture, Take, Transcriber};
+use crate::backend::{BoxFuture, Shape, Take, Transcriber};
 
 pub struct Server {
     http: reqwest::Client,
     url: String,
     model: String,
     api_key: Option<String>,
+    shape: Shape,
 }
 
 impl Server {
-    /// The server at exactly `url`. Fails where no HTTP client can be built,
-    /// such as on a system without CA certificates.
-    pub fn new(url: String, model: String, api_key: Option<String>) -> Result<Self> {
+    /// The server at exactly `url`, its requests shaped as `shape` says.
+    /// Fails where no HTTP client can be built, such as on a system without
+    /// CA certificates, and for a route, which `url` already names.
+    pub fn new(url: String, model: String, api_key: Option<String>, shape: Shape) -> Result<Self> {
+        if shape.path.is_some() {
+            bail!("the whisper.cpp upload goes to exactly its URL; put the route in the URL");
+        }
         let http = reqwest::Client::builder()
             .build()
             .context("failed to build the transcription HTTP client")?;
@@ -25,6 +30,7 @@ impl Server {
             url,
             model,
             api_key,
+            shape,
         })
     }
 }
@@ -44,10 +50,23 @@ impl Transcriber for Server {
                 Some(language) => form.text("language", language),
                 None => form,
             };
-            let request = self.http.post(&self.url).multipart(form);
-            let request = match &self.api_key {
-                Some(key) => request.bearer_auth(key),
-                None => request,
+            // The extra body's fields go as form fields, strings as they are.
+            let form = self
+                .shape
+                .body
+                .iter()
+                .fold(form, |form, (name, value)| match value {
+                    serde_json::Value::String(text) => form.text(name.clone(), text.clone()),
+                    value => form.text(name.clone(), value.to_string()),
+                });
+            let request = self.shape.headers.iter().fold(
+                self.http.post(&self.url).multipart(form),
+                |request, (name, value)| request.header(name, value),
+            );
+            let request = match (&self.api_key, &self.shape.key_header) {
+                (Some(key), Some(header)) => request.header(header, key),
+                (Some(key), None) => request.bearer_auth(key),
+                (None, _) => request,
             };
             let response = request.send().await.context("transcription request")?;
             // The body is never quoted: it can echo the request or the key.
@@ -76,7 +95,7 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::Server;
-    use crate::backend::{Take, Transcriber};
+    use crate::backend::{Shape, Take, Transcriber};
 
     /// A server that answers one request with `status` and `body`, and
     /// returns the request it read.
@@ -134,8 +153,13 @@ mod tests {
     #[tokio::test]
     async fn the_take_is_uploaded_to_exactly_the_configured_url() {
         let (url, server) = mock_server("200 OK", json!({"text": "完整文本"}).to_string()).await;
-        let transcriber =
-            Server::new(url, "test-model".to_string(), Some("sk-asr".to_string())).unwrap();
+        let transcriber = Server::new(
+            url,
+            "test-model".to_string(),
+            Some("sk-asr".to_string()),
+            Default::default(),
+        )
+        .unwrap();
 
         let text = transcriber.transcribe(take(Some("zh"))).await.unwrap();
 
@@ -159,7 +183,8 @@ mod tests {
     #[tokio::test]
     async fn no_key_and_automatic_language_send_neither() {
         let (url, server) = mock_server("200 OK", json!({"text": ""}).to_string()).await;
-        let transcriber = Server::new(url, "test-model".to_string(), None).unwrap();
+        let transcriber =
+            Server::new(url, "test-model".to_string(), None, Default::default()).unwrap();
 
         transcriber.transcribe(take(None)).await.unwrap();
 
@@ -169,13 +194,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_shape_adds_headers_fields_and_the_key_header() {
+        let (url, server) = mock_server("200 OK", json!({"text": ""}).to_string()).await;
+        let shape = Shape {
+            key_header: Some("api-key".to_string()),
+            headers: vec![("X-Org".to_string(), "limen".to_string())],
+            body: json!({"temperature": 0, "prompt": "names"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            ..Shape::default()
+        };
+        let transcriber = Server::new(
+            url,
+            "test-model".to_string(),
+            Some("sk-asr".to_string()),
+            shape,
+        )
+        .unwrap();
+
+        transcriber.transcribe(take(None)).await.unwrap();
+
+        let request = String::from_utf8_lossy(&server.await.unwrap()).into_owned();
+        let lower = request.to_ascii_lowercase();
+        assert!(!lower.contains("authorization:"), "{request}");
+        for part in [
+            "api-key: sk-asr",
+            "x-org: limen",
+            "name=\"temperature\"\r\n\r\n0",
+            "name=\"prompt\"\r\n\r\nnames",
+        ] {
+            assert!(lower.contains(part), "missing {part:?} in {request}");
+        }
+    }
+
+    #[test]
+    fn a_route_is_refused_for_an_exact_upload_url() {
+        let shape = Shape {
+            path: Some("/v2".to_string()),
+            ..Shape::default()
+        };
+        assert!(
+            Server::new(
+                "http://127.0.0.1:9/inference".to_string(),
+                "m".to_string(),
+                None,
+                shape
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn http_and_json_errors_fail_the_take() {
         for (status, body) in [
             ("500 Internal Server Error", "not-json"),
             ("200 OK", "not-json"),
         ] {
             let (url, server) = mock_server(status, body.to_string()).await;
-            let transcriber = Server::new(url, "test-model".to_string(), None).unwrap();
+            let transcriber =
+                Server::new(url, "test-model".to_string(), None, Default::default()).unwrap();
 
             assert!(
                 transcriber.transcribe(take(None)).await.is_err(),

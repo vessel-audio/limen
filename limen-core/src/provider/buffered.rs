@@ -9,23 +9,26 @@ use anyhow::{Context, Result, anyhow, bail};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::attempts::Attempts;
 use crate::backend::{BoxFuture, Take, Transcriber};
 use crate::provider::{
     AsrProvider, AsrSession, AudioSink, EventSource, SessionConfig, TranscriptEvent,
 };
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one transcription try may take when the provider sets none.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Provider {
     transcriber: Arc<dyn Transcriber>,
-    request_timeout: Duration,
+    attempts: Attempts,
 }
 
 impl Provider {
-    pub fn new(transcriber: Arc<dyn Transcriber>) -> Self {
+    /// Buffered takes sent to `transcriber`, each tried as `attempts` says.
+    pub fn new(transcriber: Arc<dyn Transcriber>, attempts: Attempts) -> Self {
         Self {
             transcriber,
-            request_timeout: REQUEST_TIMEOUT,
+            attempts,
         }
     }
 }
@@ -41,7 +44,7 @@ impl AsrProvider for Provider {
             let worker = tokio::spawn(transcription_worker(
                 finish_rx,
                 self.transcriber.clone(),
-                self.request_timeout,
+                self.attempts,
                 events,
             ));
             let session: Box<dyn AsrSession> = Box::new(Session {
@@ -133,13 +136,13 @@ impl Drop for Source {
 async fn transcription_worker(
     finish: oneshot::Receiver<Recording>,
     transcriber: Arc<dyn Transcriber>,
-    request_timeout: Duration,
+    attempts: Attempts,
     events: mpsc::Sender<TranscriptEvent>,
 ) {
     let Ok(recording) = finish.await else {
         return;
     };
-    let outcome = match transcribe(recording, &*transcriber, request_timeout).await {
+    let outcome = match transcribe(recording, &*transcriber, attempts).await {
         Ok(text) => TranscriptEvent::Stable(text),
         Err(error) => TranscriptEvent::Failed(error),
     };
@@ -155,7 +158,7 @@ async fn transcription_worker(
 async fn transcribe(
     recording: Recording,
     transcriber: &dyn Transcriber,
-    request_timeout: Duration,
+    attempts: Attempts,
 ) -> Result<String> {
     let take = Take {
         wav: encode_wav(&recording.pcm, recording.cfg.sample_rate)?,
@@ -164,9 +167,9 @@ async fn transcribe(
             language => Some(language.to_string()),
         },
     };
-    tokio::time::timeout(request_timeout, transcriber.transcribe(take))
+    attempts
+        .run("transcription", || transcriber.transcribe(take.clone()))
         .await
-        .map_err(|_| anyhow!("transcription timed out after {request_timeout:?}"))?
 }
 
 /// Wrap raw s16le samples in a minimal WAV container.
@@ -199,10 +202,17 @@ mod tests {
     use tokio::sync::{Notify, oneshot};
 
     use super::{Provider, Source};
+    use crate::attempts::Attempts;
     use crate::backend::{BoxFuture, Take, Transcriber};
     use crate::provider::{AsrProvider, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// One try with the default timeout.
+    const ONCE: Attempts = Attempts {
+        timeout: super::REQUEST_TIMEOUT,
+        retries: 0,
+    };
 
     /// Records each take and answers it once `release` is notified.
     struct Scripted {
@@ -248,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_returns_before_transcribing_and_emits_one_complete_transcript() {
         let transcriber = Scripted::new(|| Ok("完整文本".to_string()));
-        let provider = Provider::new(transcriber.clone());
+        let provider = Provider::new(transcriber.clone(), ONCE);
         let (mut sink, mut events) = start_session(&provider, "zh").await;
         sink.send_audio(&[1, 2]).await.unwrap();
         sink.send_audio(&[3, 4]).await.unwrap();
@@ -302,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn automatic_language_leaves_detection_to_the_model() {
         let transcriber = Scripted::new(|| Ok(String::new()));
-        let provider = Provider::new(transcriber.clone());
+        let provider = Provider::new(transcriber.clone(), ONCE);
         let (mut sink, _events) = start_session(&provider, "auto").await;
         sink.finalize().await.unwrap();
         tokio::time::timeout(TEST_TIMEOUT, transcriber.asked.notified())
@@ -315,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_transcription_emits_failure_without_a_transcript() {
         let transcriber = Scripted::new(|| bail!("HTTP 500"));
-        let provider = Provider::new(transcriber.clone());
+        let provider = Provider::new(transcriber.clone(), ONCE);
         let (mut sink, mut events) = start_session(&provider, "auto").await;
         sink.send_audio(&[1]).await.unwrap();
         sink.finalize().await.unwrap();
@@ -333,8 +343,8 @@ mod tests {
     #[tokio::test]
     async fn request_timeout_emits_failure_without_a_transcript() {
         let transcriber = Scripted::new(|| Ok("too late".to_string()));
-        let mut provider = Provider::new(transcriber.clone());
-        provider.request_timeout = Duration::from_millis(50);
+        let mut provider = Provider::new(transcriber.clone(), ONCE);
+        provider.attempts.timeout = Duration::from_millis(50);
         let (mut sink, mut events) = start_session(&provider, "auto").await;
         sink.send_audio(&[1]).await.unwrap();
         sink.finalize().await.unwrap();

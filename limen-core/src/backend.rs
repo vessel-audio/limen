@@ -87,7 +87,7 @@ pub enum Api {
 }
 
 /// Where a backend sends one role's requests, and with which key.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct Connection {
     pub api: Api,
     /// The API root that routes such as `/chat/completions` hang off, for
@@ -96,6 +96,7 @@ pub struct Connection {
     pub base_url: Option<String>,
     /// `None` sends no credential, which a local server may not need.
     pub api_key: Option<String>,
+    pub shape: Shape,
 }
 
 impl std::fmt::Debug for Connection {
@@ -105,6 +106,42 @@ impl std::fmt::Debug for Connection {
             .field("api", &self.api)
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "…"))
+            .field("shape", &self.shape)
+            .finish()
+    }
+}
+
+/// How a connection's requests differ from its API's own, as the user set
+/// the provider up. A backend that cannot send a request so shaped, such as
+/// a route on an API whose routes it cannot move, refuses the connection.
+#[derive(Clone, Default, PartialEq)]
+pub struct Shape {
+    /// The route requests go to under the base URL, in place of the API's.
+    pub path: Option<String>,
+    /// The header the key is sent in, alone, in place of the API's own.
+    pub key_header: Option<String>,
+    /// Headers every request carries.
+    pub headers: Vec<(String, String)>,
+    /// Fields every request body also carries.
+    pub body: serde_json::Map<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for Shape {
+    /// Header values can be private, so only their names show.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Shape")
+            .field("path", &self.path)
+            .field("key_header", &self.key_header)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("body", &self.body.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -171,7 +208,7 @@ pub(crate) mod testing {
     }
 
     /// One request a [`Recording`] backend was asked to build.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     pub(crate) enum Built {
         Transcriber(Connection, String),
         Chat(Connection, String),

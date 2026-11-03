@@ -505,6 +505,7 @@ fn provider_reload_applies_only_a_valid_config() {
             model: "big".to_string(),
             language: "auto".to_string(),
             api_key_env: None,
+            options: Default::default(),
             saved_key: None,
         }))
     );

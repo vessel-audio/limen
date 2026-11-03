@@ -10,10 +10,10 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use toml_edit::{DocumentMut, ImDocument, Item};
 
-use super::Config;
 use super::keys::{self, KeyChange};
 use super::transaction::{Backup, Transaction, recover};
 use super::write::{check_writable, lock_dir, read_text, replace};
+use super::{Config, ProviderOptions, Service};
 use crate::models::ModelRole;
 
 /// A value of the config that the GUI edits.
@@ -30,6 +30,9 @@ pub(crate) enum Key {
     PolishKeyEnv,
     PolishUrl,
     PolishModel,
+    /// The settings of one provider, a table of their own.
+    ProviderOptions(Service),
+    PolishOptions(Service),
 }
 
 /// A value to write: text or a switch, or no value, which removes the key.
@@ -38,6 +41,8 @@ pub(crate) enum Value {
     Text(String),
     Switch(bool),
     Unset,
+    /// A provider's settings; the defaults remove its table.
+    Options(ProviderOptions),
 }
 
 impl Key {
@@ -53,6 +58,8 @@ impl Key {
             Self::PolishFormat => ("polish", "format"),
             Self::ProviderKeyEnv => ("provider", "api_key_env"),
             Self::PolishKeyEnv => ("polish", "api_key_env"),
+            Self::ProviderOptions(_) => ("provider", "options"),
+            Self::PolishOptions(_) => ("polish", "options"),
             Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
         }
@@ -81,6 +88,22 @@ impl Key {
                 .api_key_env
                 .clone()
                 .map_or(Value::Unset, Value::Text),
+            Self::ProviderOptions(service) => Value::Options(
+                config
+                    .provider
+                    .options
+                    .get(&service)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            Self::PolishOptions(service) => Value::Options(
+                config
+                    .polish
+                    .options
+                    .get(&service)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
         }
     }
 }
@@ -111,6 +134,22 @@ fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
         Ok(document.to_string())
     };
     match (span, value) {
+        (_, Value::Options(options)) => match key {
+            Key::ProviderOptions(service) | Key::PolishOptions(service) => {
+                with_options(text, section, service, options)
+            }
+            Key::ProviderService
+            | Key::ProviderFormat
+            | Key::ProviderUrl
+            | Key::ProviderModel
+            | Key::PolishEnabled
+            | Key::PolishService
+            | Key::PolishFormat
+            | Key::PolishUrl
+            | Key::PolishModel
+            | Key::ProviderKeyEnv
+            | Key::PolishKeyEnv => bail!("{section}.{name} holds no provider settings"),
+        },
         (Some(span), Value::Text(text)) => Ok(replace(span, toml::Value::String(text.clone()))),
         (Some(span), Value::Switch(on)) => Ok(replace(span, toml::Value::Boolean(*on))),
         (Some(_), Value::Unset) => {
@@ -124,6 +163,48 @@ fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
         (None, Value::Switch(on)) => insert(toml_edit::value(*on)),
         (None, Value::Unset) => Ok(text.to_string()),
     }
+}
+
+/// `text` with the table of `service`'s settings under `[section.options]`
+/// set to `options`, or removed for the defaults, as is an options table
+/// left empty.
+fn with_options(
+    text: &str,
+    section: &str,
+    service: Service,
+    options: &ProviderOptions,
+) -> Result<String> {
+    let mut document: DocumentMut = text.parse().context("the config is not valid TOML")?;
+    let table = document
+        .entry(section)
+        .or_insert(toml_edit::table())
+        .as_table_like_mut()
+        .with_context(|| format!("`{section}` in the config must be a [{section}] section"))?;
+    match *options == ProviderOptions::default() {
+        true => {
+            if let Some(all) = table.get_mut("options").and_then(Item::as_table_like_mut) {
+                all.remove(service.as_str());
+                if all.is_empty() {
+                    table.remove("options");
+                }
+            }
+        }
+        false => {
+            let written: DocumentMut = toml::to_string(options)
+                .context("the provider settings cannot be written")?
+                .parse()
+                .context("the provider settings cannot be written")?;
+            let mut all = toml_edit::Table::new();
+            all.set_implicit(true);
+            table
+                .entry("options")
+                .or_insert(Item::Table(all))
+                .as_table_like_mut()
+                .with_context(|| format!("`{section}.options` in the config must be a table"))?
+                .insert(service.as_str(), Item::Table(written.as_table().clone()));
+        }
+    }
+    Ok(document.to_string())
 }
 
 /// Save a provider: set each key to its value in the config file at `path`

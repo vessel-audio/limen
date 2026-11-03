@@ -7,7 +7,7 @@ use crate::backend::Api;
 
 /// A model service a role can use: a server the user names, or a vendor's
 /// own API, which needs only a key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Service {
     /// A server at the configured URL, speaking the configured [`Format`].

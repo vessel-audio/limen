@@ -121,6 +121,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "http://127.0.0.1:8080/v1/chat/completions".to_string(),
             model: model.to_string(),
+            options: Default::default(),
         }
     }
 
@@ -158,6 +159,7 @@ mod tests {
             format: Format::OpenAiCompatible,
             url: "http://127.0.0.1:8000/v1/audio/transcriptions".to_string(),
             model: "asr".to_string(),
+            options: Default::default(),
         };
 
         check_model(&paths, &asr, &KeyChange::Keep, &answering(Finish::Stop))

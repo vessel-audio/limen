@@ -1,9 +1,10 @@
 //! Turning a provider dialog's fields into a save request, or into the
 //! server its models are listed from; and saving the polishing switch.
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
+use gpui_kit::component::input::InputState;
 use gpui_kit::*;
-use limen_core::{ApiKey, KeyChange, ModelRole, Polishing, Provider};
+use limen_core::{ApiKey, KeyChange, ModelRole, Polishing, Provider, ProviderOptions};
 use tokio::sync::mpsc;
 
 use super::ProviderForm;
@@ -29,12 +30,21 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
             (*format, url.clone())
         }
     };
+    // The chosen provider's settings as typed; the others' as saved.
+    let mut options = match loaded {
+        Provider::Asr { options, .. } | Provider::Polish { options, .. } => options.clone(),
+    };
+    match advanced(form, cx)? {
+        typed if typed == ProviderOptions::default() => options.remove(&service),
+        typed => options.insert(service, typed),
+    };
     let provider = match loaded {
         Provider::Asr { .. } => Provider::Asr {
             service,
             format,
             url,
             model,
+            options,
         },
         Provider::Polish { .. } => Provider::Polish {
             polishing: form.polishing,
@@ -42,6 +52,7 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
             format,
             url,
             model,
+            options,
         },
     };
     let typed = form.key.read(cx).value().trim().to_string();
@@ -51,6 +62,40 @@ pub(super) fn fields(form: &ProviderForm, cx: &App) -> Result<(Provider, KeyChan
         (true, false) => KeyChange::Keep,
     };
     Ok((provider, key))
+}
+
+/// The advanced settings as typed. Headers are written as `Name: value`
+/// pairs separated by `;`; the core checks what they hold.
+fn advanced(form: &ProviderForm, cx: &App) -> Result<ProviderOptions> {
+    let text = |input: &Entity<InputState>| {
+        Some(input.read(cx).value().trim().to_string()).filter(|text| !text.is_empty())
+    };
+    let fields = &form.advanced;
+    let headers = text(&fields.headers)
+        .unwrap_or_default()
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| match pair.split_once(':') {
+            Some((name, value)) => Ok((name.trim().to_string(), value.trim().to_string())),
+            None => bail!("write headers as Name: value, separated by ;"),
+        })
+        .collect::<Result<_>>()?;
+    Ok(ProviderOptions {
+        path: text(&fields.path),
+        key_header: text(&fields.key_header),
+        timeout_ms: text(&fields.timeout)
+            .map(|ms| {
+                ms.parse()
+                    .context("the timeout must be a number of milliseconds")
+            })
+            .transpose()?,
+        retries: text(&fields.retries)
+            .map(|retries| retries.parse().context("the retries must be a number"))
+            .transpose()?,
+        body: text(&fields.body),
+        headers,
+    })
 }
 
 /// Send `provider` and `key` to be saved for `form`.
@@ -110,6 +155,7 @@ pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
             format,
             url,
             model,
+            options,
         },
         _,
     )) = form.loaded.clone()
@@ -138,6 +184,7 @@ pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
         format,
         url,
         model,
+        options,
     };
     // A dialog's edits stay unsaved: the switch saves only polishing.
     let touched = form.touched;

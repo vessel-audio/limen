@@ -3,13 +3,13 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use atspi::{Role, State};
-use limen_core::{Config, Format, Service, v1};
+use limen_core::{Config, Format, ProviderOptions, Service, v1};
 
 use super::retype;
 use crate::daemon::Scenario;
-use crate::desktop::{Key, Node};
+use crate::desktop::{Button, Key, Node};
 use crate::session::{Session, Target};
 
 /// An OpenAI-compatible server that lists `models`, transcribes every
@@ -535,5 +535,51 @@ pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
         !session.paths().config_file.exists(),
         "testing a model saved it"
     );
+    Ok(())
+}
+
+/// A provider's advanced settings are saved as its own: they reach the
+/// config under its table, and another provider's dialog starts without
+/// them.
+pub fn advanced_settings_belong_to_their_provider() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("asr-page")?;
+    open_card(&session, "asr-provider-custom", "asr")?;
+    retype(&session, "asr-url", "http://10.0.0.2:9000/v1")?;
+    session.click("asr-advanced")?;
+    retype(&session, "asr-route", "/v2/transcribe")?;
+    retype(&session, "asr-key-header", "api-key")?;
+    retype(&session, "asr-headers", "X-Org: limen")?;
+    // The advanced settings run past the dialog's height: scroll to the
+    // rest, as a user does.
+    let (x, y) = session
+        .settled("asr-route")?
+        .bounds
+        .context("the route field has no bounds")?
+        .center();
+    session.x11().scroll(x, y, Button::WheelDown, 10)?;
+    retype(&session, "asr-timeout", "8000")?;
+    type_model(&session, "typed-model")?;
+    session.click("asr-save")?;
+    session.named("toast", "ASR settings applied")?;
+    session.absent("asr-key")?;
+    let options = Config::load(&session.paths().config_file)?.provider.options;
+    ensure!(
+        options
+            == [(
+                Service::Custom,
+                ProviderOptions {
+                    path: Some("/v2/transcribe".to_string()),
+                    key_header: Some("api-key".to_string()),
+                    timeout_ms: Some(8000),
+                    headers: [("X-Org".to_string(), "limen".to_string())].into(),
+                    ..ProviderOptions::default()
+                }
+            )]
+            .into(),
+        "saved {options:?}"
+    );
+    open_card(&session, "asr-provider-groq", "asr")?;
+    session.absent("asr-route")?;
     Ok(())
 }
