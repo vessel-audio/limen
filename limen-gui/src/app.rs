@@ -45,8 +45,8 @@ pub struct AppView {
     /// The expanded sidebar's width, as its edge was last dragged.
     pub sidebar_width: Pixels,
     /// Where the sidebar's edge was last pressed, and how wide the sidebar
-    /// was then.
-    pub sidebar_press: Option<(Pixels, Pixels)>,
+    /// was drawn when the drag from it started.
+    pub sidebar_press: Option<(Pixels, Option<Pixels>)>,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_scale: FontScale,

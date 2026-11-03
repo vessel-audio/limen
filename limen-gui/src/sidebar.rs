@@ -155,17 +155,19 @@ impl AppView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, _| {
-                    this.sidebar_press = Some((
-                        event.position.x,
-                        this.sidebar_mode.width(this.sidebar_width),
-                    ));
+                    this.sidebar_press = Some((event.position.x, None));
                 }),
             )
             .on_drag(Resizing, |drag, _, _, cx| cx.new(|_| drag.clone()))
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<Resizing>, _, cx| {
-                let Some((pressed, width)) = this.sidebar_press else {
-                    return;
+                // The width the drag starts from is the one drawn when it
+                // starts, which the toggle's spring may not have reached yet.
+                let (pressed, width) = match this.sidebar_press {
+                    Some((pressed, Some(width))) => (pressed, width),
+                    Some((pressed, None)) => (pressed, event.bounds.right()),
+                    None => return,
                 };
+                this.sidebar_press = Some((pressed, Some(width)));
                 let wanted = f32::from(width + event.event.position.x - pressed);
                 match wanted < COLLAPSE_BELOW {
                     true => this.sidebar_mode = SidebarMode::Collapsed,
