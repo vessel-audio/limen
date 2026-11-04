@@ -197,13 +197,11 @@ network.proxy_hint: 访问模型服务的方式
 network.direct: 不使用
 network.manual: 手动
 network.server: 代理服务器
-network.server_hint: http://、https:// 或 socks5:// 地址
+network.login: 登录信息
 network.username: 用户名
-network.username_hint: 无需登录的代理请留空
 network.password: 密码
-network.password_hint: 与 API 密钥一同私密保存
+network.password_saved: 已保存
 network.bypass: 不使用代理的地址
-network.bypass_hint: 直接访问的主机和域名，用逗号分隔
 toast.network_applied: 已应用网络设置
 toast.network_saved: 已保存网络设置，后台服务启动时生效
 transcript.empty: 下一段录音的转写文本将显示在这里

@@ -197,13 +197,11 @@ network.proxy_hint: How requests to model services reach them
 network.direct: None
 network.manual: Manual
 network.server: Proxy server
-network.server_hint: An http://, https://, or socks5:// address
+network.login: Login
 network.username: Username
-network.username_hint: Leave empty for a proxy without a login
 network.password: Password
-network.password_hint: Kept privately beside the API keys
+network.password_saved: Saved
 network.bypass: No proxy for
-network.bypass_hint: Hosts and domains reached directly, separated by commas
 toast.network_applied: Network settings applied
 toast.network_saved: Network settings saved; the daemon uses them when it starts
 transcript.empty: The transcript of your next take appears here

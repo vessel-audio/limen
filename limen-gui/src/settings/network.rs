@@ -40,8 +40,14 @@ impl NetworkForm {
     /// The page's fields, and the subscriptions that track the user's edits.
     pub fn new(window: &mut Window, cx: &mut Context<AppView>) -> (Self, Vec<Subscription>) {
         let url = cx.new(|cx| InputState::new(window, cx).placeholder("http://127.0.0.1:7890"));
-        let username = cx.new(|cx| InputState::new(window, cx));
-        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let username = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(rust_i18n::t!("network.username").to_string())
+        });
+        let password = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(rust_i18n::t!("network.password").to_string())
+        });
         let bypass = cx.new(|cx| InputState::new(window, cx));
         let subscriptions = [&url, &username, &password, &bypass]
             .into_iter()
@@ -50,7 +56,11 @@ impl NetworkForm {
                     input,
                     window,
                     |this, _, event: &InputEvent, _, cx| match event {
-                        InputEvent::Change => this.network.touched = true,
+                        // The password field follows whether a username is typed.
+                        InputEvent::Change => {
+                            this.network.touched = true;
+                            cx.notify();
+                        }
                         InputEvent::PressEnter { .. } => save(this, cx),
                         _ => {}
                     },
@@ -141,8 +151,8 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
     form.mode = network.mode;
     form.touched = false;
     let placeholder = match password {
-        ProxyPassword::Saved => rust_i18n::t!("models.key_saved").to_string(),
-        ProxyPassword::Missing => String::new(),
+        ProxyPassword::Saved => rust_i18n::t!("network.password_saved").to_string(),
+        ProxyPassword::Missing => rust_i18n::t!("network.password").to_string(),
     };
     for (input, value) in [
         (&form.url, network.url),
@@ -227,28 +237,66 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
         },
         cx,
     );
-    let field = |key: &'static str, id: &'static str, input: &Entity<InputState>| {
-        (
-            key,
-            Input::new(input)
-                .accessibility_id(id)
-                .aria_label(rust_i18n::t!(key).to_string()),
-        )
+    let input = |input: &Entity<InputState>, id: &'static str, key: &str| {
+        Input::new(input)
+            .accessibility_id(id)
+            .aria_label(rust_i18n::t!(key).to_string())
     };
+    // A manual proxy's fields belong to the Manual choice, so they sit
+    // under it, indented along a guide, rather than beside it as settings
+    // of their own.
     let manual = match form.mode {
         ProxyMode::Manual => {
-            let (key, password) = field("network.password", "proxy-password", &form.password);
-            [
-                field("network.server", "proxy-url", &form.url),
-                field("network.username", "proxy-username", &form.username),
-                (key, password.mask_toggle()),
-                field("network.bypass", "proxy-bypass", &form.bypass),
+            // The core keeps no password for a proxy without a username.
+            let anonymous = form.username.read(cx).value().trim().is_empty();
+            let login = div()
+                .h_flex()
+                .gap_2()
+                .child(div().flex_1().child(input(
+                    &form.username,
+                    "proxy-username",
+                    "network.username",
+                )))
+                .child(
+                    div().flex_1().child(
+                        input(&form.password, "proxy-password", "network.password")
+                            .mask_toggle()
+                            .disabled(anonymous),
+                    ),
+                );
+            let fields = [
+                (
+                    "network.server",
+                    input(&form.url, "proxy-url", "network.server").into_any_element(),
+                ),
+                ("network.login", login.into_any_element()),
+                (
+                    "network.bypass",
+                    input(&form.bypass, "proxy-bypass", "network.bypass").into_any_element(),
+                ),
             ]
-            .into_iter()
-            .map(|(key, input)| setting(key, div().w(px(260.)).child(input), cx))
-            .collect()
+            .map(|(key, control)| {
+                div()
+                    .h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_6()
+                    .py_1p5()
+                    .child(div().text_sm().child(rust_i18n::t!(key).to_string()))
+                    .child(div().w(px(300.)).flex_shrink_0().child(control))
+            });
+            Some(
+                div()
+                    .v_flex()
+                    .mx_5()
+                    .mb_4()
+                    .pl_4()
+                    .border_l_2()
+                    .border_color(cx.theme().border)
+                    .children(fields),
+            )
         }
-        ProxyMode::System | ProxyMode::None => Vec::new(),
+        ProxyMode::System | ProxyMode::None => None,
     };
     let error = form.error.clone().map(|error| {
         a11y::alert("network-error", error.clone())
@@ -263,7 +311,10 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .on_scroll(view.network_scroll.on_scroll())
         .child(header(view, cx))
         .child(card(
-            std::iter::once(setting("network.proxy", mode, cx)).chain(manual),
+            [div()
+                .v_flex()
+                .child(setting("network.proxy", mode, cx))
+                .children(manual)],
             cx,
         ))
         .children(error)
