@@ -352,7 +352,8 @@ pub fn the_switch_shows_the_providers() -> Result<()> {
     Ok(())
 }
 
-/// The configured provider leads the page; the others fold under a toggle.
+/// The configured provider leads the page; the others fold under a toggle,
+/// and fold again once the page is left and shown again.
 pub fn the_configured_provider_leads() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     std::fs::create_dir_all(session.paths().config_file.parent().unwrap())?;
@@ -366,6 +367,10 @@ pub fn the_configured_provider_leads() -> Result<()> {
     session.absent("polish-provider-custom")?;
     session.click("polish-others")?;
     session.node("polish-provider-custom")?;
+    session.click("dictation-page")?;
+    session.click("providers-page")?;
+    session.node("polish-provider-groq")?;
+    session.absent("polish-provider-custom")?;
     Ok(())
 }
 

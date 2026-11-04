@@ -427,8 +427,11 @@ pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>
         let visible = view.page == Page::Providers;
         let commands = view.commands.clone();
         let form = view.models.form(role);
+        // Coming back to the page loads the settings again and folds the
+        // other providers away, so it opens on the configured one.
         if visible && !form.visible && !form.open {
             form.stale = true;
+            form.show_others = false;
         }
         form.visible = visible;
         if visible && form.stale && form.saving.is_none() && form.loading.is_none() {
