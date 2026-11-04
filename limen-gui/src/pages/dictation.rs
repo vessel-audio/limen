@@ -1,5 +1,6 @@
 //! The dictation page: a control strip with a live waveform and a way to the
-//! model settings, above the daemon's recent transcription requests.
+//! model settings, the newest transcript, and the daemon's recent
+//! transcription requests.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, StyledExt, button::ButtonVariants};
@@ -14,7 +15,7 @@ use crate::motion;
 
 const WAVEFORM_HEIGHT: f32 = 28.;
 
-pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
+pub fn dictation(view: &AppView, window: &mut Window, cx: &mut Context<AppView>) -> Div {
     let state = view
         .model
         .snapshot
@@ -229,5 +230,6 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .gap_6()
         .p_8()
         .child(strip)
+        .child(super::transcript::transcript(view, window, cx))
         .child(super::requests::requests(view, cx))
 }

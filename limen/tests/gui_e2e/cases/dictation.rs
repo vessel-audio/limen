@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use limen_core::{Delivery, v1};
 
-use super::failed_request;
+use super::{failed_request, kept};
 use crate::daemon::Scenario;
 use crate::desktop::Button;
 use crate::session::Session;
@@ -30,6 +30,24 @@ pub fn start_and_stop_copy_the_transcript() -> Result<()> {
             ],
         "unexpected requests"
     );
+    Ok(())
+}
+
+/// The newest transcript shows below the strip, the one the window opens
+/// on at once, and copies whole; a new take's replaces it.
+pub fn the_newest_transcript_shows_and_copies() -> Result<()> {
+    let session = Session::fake(Scenario {
+        history: vec![kept(1, "an earlier take")],
+        ..Scenario::default()
+    })?;
+    session.named("transcript", "an earlier take")?;
+    session.click("copy-transcript")?;
+    session.clipboard("an earlier take")?;
+    session.named("toast", "Copied to clipboard")?;
+    session.click("dictation-primary")?;
+    session.named("dictation-status", "Recording")?;
+    session.click("dictation-primary")?;
+    session.named("transcript", "e2e transcript 2")?;
     Ok(())
 }
 

@@ -206,3 +206,4 @@ network.bypass: 不使用代理的地址
 network.bypass_hint: 直接访问的主机和域名，用逗号分隔
 toast.network_applied: 已应用网络设置
 toast.network_saved: 已保存网络设置，后台服务启动时生效
+transcript.empty: 下一段录音的转写文本将显示在这里

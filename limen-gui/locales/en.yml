@@ -206,3 +206,4 @@ network.bypass: No proxy for
 network.bypass_hint: Hosts and domains reached directly, separated by commas
 toast.network_applied: Network settings applied
 toast.network_saved: Network settings saved; the daemon uses them when it starts
+transcript.empty: The transcript of your next take appears here

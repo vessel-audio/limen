@@ -37,6 +37,7 @@ pub const ALL: &[Case] = cases![
     window::closing_the_window_keeps_the_daemon_running,
     window::a_second_launch_keeps_the_open_window,
     dictation::start_and_stop_copy_the_transcript,
+    dictation::the_newest_transcript_shows_and_copies,
     dictation::failed_requests_expand_to_the_full_error,
     dictation::the_request_list_scrolls_with_the_wheel,
     dictation::recording_another_take_queues_it,

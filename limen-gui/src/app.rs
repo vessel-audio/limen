@@ -71,6 +71,8 @@ pub struct AppView {
     pub usage_scroll: SmoothScroll,
     pub network_scroll: SmoothScroll,
     pub usage: crate::pages::UsageState,
+    /// The newest transcript on the dictation page, and its reveal.
+    pub transcript: crate::pages::TranscriptState,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
 }
@@ -192,6 +194,7 @@ impl AppView {
             usage_scroll: SmoothScroll::default(),
             network_scroll: SmoothScroll::default(),
             usage: crate::pages::UsageState::default(),
+            transcript: crate::pages::TranscriptState::default(),
             shortcuts_scroll: SmoothScroll::default(),
             history_scroll: SmoothScroll::default(),
             requests_scroll: SmoothScroll::default(),
@@ -462,13 +465,14 @@ impl Render for AppView {
         }
         pages::follow_models(self, window, cx);
         pages::follow_usage(self);
+        pages::follow_transcript(self, cx);
         crate::settings::follow_network(self, window, cx);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(pages::dictation(self, cx)),
+                .child(pages::dictation(self, window, cx)),
             Page::History => pages::history(self, cx),
             Page::Shortcuts => div()
                 .v_flex()
