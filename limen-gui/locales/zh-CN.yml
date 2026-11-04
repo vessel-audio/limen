@@ -131,8 +131,7 @@ action.apply: 应用
 settings.off: 关闭
 settings.on: 开启
 nav.models: 模型
-nav.asr: 语音识别
-nav.polish: 润色
+nav.providers: 提供商
 models.asr_title: ASR 模型
 models.polish_title: 润色模型
 models.custom: 自定义

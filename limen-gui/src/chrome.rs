@@ -5,7 +5,6 @@ use gpui_kit::component::{
     ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, button::ButtonVariants,
 };
 use gpui_kit::*;
-use limen_core::ModelRole;
 
 use crate::a11y;
 use crate::app::{AppView, Page, ShutdownAction};
@@ -43,8 +42,7 @@ impl AppView {
             Page::Shortcuts => ("nav.section", "nav.shortcuts"),
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
             Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
-            Page::Models(ModelRole::Asr) => ("nav.models", "nav.asr"),
-            Page::Models(ModelRole::Polish) => ("nav.models", "nav.polish"),
+            Page::Providers => ("nav.models", "nav.providers"),
         };
         let page = rust_i18n::t!(page_key).to_string();
         // The brand mark shares the sidebar's centre line and its label starts

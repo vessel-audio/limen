@@ -109,7 +109,7 @@ mod models;
 mod requests;
 mod shortcuts;
 pub use dictation::dictation;
-pub use models::{ModelForms, follow as follow_models, models};
+pub use models::{ModelForms, follow as follow_models, providers};
 pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
 

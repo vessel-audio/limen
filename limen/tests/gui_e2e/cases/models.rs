@@ -161,12 +161,12 @@ fn reloads(session: &Session, request: &v1::Request) -> Result<usize> {
         .count())
 }
 
-/// The Models button on the dictation page opens the ASR page.
-pub fn the_dictation_button_opens_the_asr_page() -> Result<()> {
+/// The Models button on the dictation page opens the Providers page.
+pub fn the_dictation_button_opens_the_providers_page() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("open-models")?;
-    session.state("asr-page", State::Selected, true)?;
-    session.named("current-page", "ASR")?;
+    session.state("providers-page", State::Selected, true)?;
+    session.named("current-page", "Providers")?;
     Ok(())
 }
 
@@ -176,7 +176,7 @@ pub fn the_dictation_button_opens_the_asr_page() -> Result<()> {
 /// provider once, and the dialog closes.
 pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     choose(&session, "Type", 1)?;
     retype(&session, "asr-url", "http://10.0.0.2:9000/inference")?;
@@ -224,7 +224,7 @@ pub fn an_asr_provider_is_saved_and_applied() -> Result<()> {
 /// gateway; saving it names the vendor and keeps that URL in its table.
 pub fn a_vendor_is_chosen_from_its_card() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-groq", "asr")?;
     retype(&session, "asr-url", "https://gateway.example/groq/v1")?;
     session.click("asr-key")?;
@@ -262,7 +262,7 @@ pub fn a_vendor_is_chosen_from_its_card() -> Result<()> {
 /// neither written nor sent to the daemon.
 pub fn an_invalid_asr_server_is_reported() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", "ftp://10.0.0.2")?;
     type_model(&session, "typed-model")?;
@@ -290,7 +290,7 @@ pub fn an_invalid_asr_server_is_reported() -> Result<()> {
 pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
     let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(&session, "polish-url", &format!("{server}/v1"))?;
@@ -349,7 +349,7 @@ pub fn polishing_is_set_up_with_a_local_server() -> Result<()> {
 /// and saves nothing until one is set up.
 pub fn the_switch_shows_the_providers() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     session.node(POLISHING)?;
     session.absent("polish-provider-custom")?;
     show_polish_providers(&session)?;
@@ -368,7 +368,7 @@ pub fn the_configured_provider_leads() -> Result<()> {
         &session.paths().config_file,
         "[provider]\nurl = \"\"\n\n[polish]\nenabled = true\nservice = \"groq\"\nmodel = \"m\"\n",
     )?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     session.node("polish-others")?;
     session.node("polish-provider-groq")?;
     session.absent("polish-provider-custom")?;
@@ -387,7 +387,7 @@ pub fn a_saved_key_is_removed() -> Result<()> {
         &session.paths().config_file,
         "[provider]\nurl = \"\"\n\n[polish]\nenabled = true\nservice = \"custom\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"m\"\n",
     )?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     open_card(&session, "polish-provider-custom", "polish")?;
     session.click("polish-key-remove")?;
     session.click("polish-save")?;
@@ -401,7 +401,7 @@ pub fn a_saved_key_is_removed() -> Result<()> {
 /// the URL writes neither the config nor the key file.
 pub fn a_url_credential_is_rejected() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(
@@ -439,7 +439,7 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
         provider_reload_ms: 1000,
         ..Scenario::default()
     })?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", "http://a/v1")?;
     type_model(&session, "typed-model")?;
@@ -460,7 +460,7 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
 /// page, above the footer, rather than running under it.
 pub fn a_page_error_below_the_providers_scrolls_into_view() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(&session, "polish-url", "ftp://10.0.0.2")?;
@@ -475,7 +475,7 @@ pub fn a_page_error_below_the_providers_scrolls_into_view() -> Result<()> {
         .bounds
         .context("the error has no bounds")?;
     let page = session
-        .settled("polish-scroll")?
+        .settled("providers-scroll")?
         .bounds
         .context("the page has no bounds")?;
     ensure!(
@@ -489,7 +489,7 @@ pub fn a_page_error_below_the_providers_scrolls_into_view() -> Result<()> {
 /// for no key or URL, says it is not signed in yet, and saves without one.
 pub fn a_subscription_is_signed_in_to_not_given_a_key() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-chatgpt", "polish")?;
     session.named("polish-account", "Not signed in")?;
@@ -516,7 +516,7 @@ pub fn a_subscription_is_signed_in_to_not_given_a_key() -> Result<()> {
 /// than the provider's own is saved under its table.
 pub fn openai_polishing_chooses_its_chat_api() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-anthropic", "polish")?;
     session.absent("polish-chat-api")?;
@@ -550,7 +550,7 @@ pub fn openai_polishing_chooses_its_chat_api() -> Result<()> {
 pub fn the_model_is_detected_from_the_typed_server() -> Result<()> {
     let (server, requests) = serve_models(&["only-asr"])?;
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     ensure!(
         requests.lock().unwrap().is_empty(),
@@ -585,7 +585,7 @@ pub fn the_model_is_detected_from_the_typed_server() -> Result<()> {
 pub fn the_models_are_detected_on_request() -> Result<()> {
     let (server, requests) = serve_models(&["listed-a", "listed-b"])?;
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     session.click("asr-detect")?;
     session.named("asr-error", "Enter the server first")?;
@@ -614,7 +614,7 @@ pub fn the_models_are_detected_on_request() -> Result<()> {
 pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
     let (server, requests) = serve_models(&["only-model"])?;
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", &format!("{server}/v1"))?;
     // Test turns on once the server's only model fills the field.
@@ -623,7 +623,7 @@ pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
     session.named("toast", "The ASR model answered")?;
     session.chord(&[Key::ESCAPE])?;
     session.absent("asr-key")?;
-    session.click("polish-page")?;
+    session.click("providers-page")?;
     show_polish_providers(&session)?;
     open_card(&session, "polish-provider-custom", "polish")?;
     retype(&session, "polish-url", &format!("{server}/v1"))?;
@@ -655,7 +655,7 @@ pub fn a_model_is_tested_before_it_is_saved() -> Result<()> {
 /// dialog, are saved under its own table.
 pub fn advanced_settings_belong_to_their_provider() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("asr-page")?;
+    session.click("providers-page")?;
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", "http://10.0.0.2:9000/v1")?;
     session.click("asr-advanced")?;

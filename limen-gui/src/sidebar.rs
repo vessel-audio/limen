@@ -10,8 +10,6 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
 use gpui_kit::*;
 
-use limen_core::ModelRole;
-
 use crate::app::{AppView, Page};
 use crate::motion;
 
@@ -94,20 +92,12 @@ impl AppView {
                 page: Page::Shortcuts,
             },
         ];
-        let models = [
-            Destination {
-                id: "asr-page",
-                icon: IconName::AudioWaveform,
-                label: rust_i18n::t!("nav.asr").into(),
-                page: Page::Models(ModelRole::Asr),
-            },
-            Destination {
-                id: "polish-page",
-                icon: IconName::WandSparkles,
-                label: rust_i18n::t!("nav.polish").into(),
-                page: Page::Models(ModelRole::Polish),
-            },
-        ];
+        let models = [Destination {
+            id: "providers-page",
+            icon: IconName::Boxes,
+            label: rust_i18n::t!("nav.providers").into(),
+            page: Page::Providers,
+        }];
         div()
             .v_flex()
             .h_full()
