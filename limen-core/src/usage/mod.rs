@@ -16,11 +16,15 @@ use crate::models::ModelRole;
 mod balance;
 mod ledger;
 mod metered;
+mod order;
 mod prices;
+mod providers;
 
 pub use balance::{Balance, Money, balance};
 pub use ledger::{Ledger, Tally, UsageRow};
 pub(crate) use metered::{MeteredChat, MeteredTranscriber};
+pub use order::{read_card_order, save_card_order};
+pub use providers::ProviderUsage;
 
 /// How many days of usage the ledger keeps.
 const KEPT_DAYS: i64 = 90;

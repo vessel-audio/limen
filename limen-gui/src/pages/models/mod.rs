@@ -15,6 +15,7 @@ mod choices;
 mod dialog;
 mod form;
 
+pub(super) use choices::{logo, service_label};
 pub use form::{ModelForms, follow};
 
 use form::set_polishing;

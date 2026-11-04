@@ -7,6 +7,7 @@ mod models;
 mod navigation;
 mod settings;
 mod shortcuts;
+mod usage;
 mod window;
 
 use anyhow::Result;
@@ -54,6 +55,8 @@ pub const ALL: &[Case] = cases![
     models::the_models_are_detected_on_request,
     models::a_model_is_tested_before_it_is_saved,
     models::advanced_settings_belong_to_their_provider,
+    usage::each_provider_has_its_own_dashboard,
+    usage::cards_are_dragged_into_order,
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,

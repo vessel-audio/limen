@@ -132,6 +132,22 @@ settings.off: "Off"
 settings.on: "On"
 nav.models: Models
 nav.providers: Providers
+nav.usage: Usage
+usage.week: 7 days
+usage.month: 30 days
+usage.quarter: 90 days
+usage.cost: Cost
+usage.per_day: Per day
+usage.request_count: Requests
+usage.lasts: "about %{days} days at this rate"
+usage.asr: ASR
+usage.polish: Polish
+usage.requests: "%{count} requests"
+usage.failed: "%{count} failed"
+usage.tokens: "%{input} in · %{output} out"
+usage.empty: No requests in this period
+usage.left: "%{amount} left"
+usage.spent: "%{amount} spent"
 models.asr_title: ASR model
 models.polish_title: Polish model
 models.custom: Custom

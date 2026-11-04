@@ -92,12 +92,20 @@ impl AppView {
                 page: Page::Shortcuts,
             },
         ];
-        let models = [Destination {
-            id: "providers-page",
-            icon: IconName::Boxes,
-            label: rust_i18n::t!("nav.providers").into(),
-            page: Page::Providers,
-        }];
+        let models = [
+            Destination {
+                id: "providers-page",
+                icon: IconName::Boxes,
+                label: rust_i18n::t!("nav.providers").into(),
+                page: Page::Providers,
+            },
+            Destination {
+                id: "usage-page",
+                icon: IconName::ChartColumn,
+                label: rust_i18n::t!("nav.usage").into(),
+                page: Page::Usage,
+            },
+        ];
         div()
             .v_flex()
             .h_full()

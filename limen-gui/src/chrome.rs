@@ -43,6 +43,7 @@ impl AppView {
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
             Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
             Page::Providers => ("nav.models", "nav.providers"),
+            Page::Usage => ("nav.models", "nav.usage"),
         };
         let page = rust_i18n::t!(page_key).to_string();
         // The brand mark shares the sidebar's centre line and its label starts

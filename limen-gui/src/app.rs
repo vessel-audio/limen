@@ -64,8 +64,10 @@ pub struct AppView {
     pub shortcuts_scroll: SmoothScroll,
     pub history_scroll: SmoothScroll,
     pub requests_scroll: SmoothScroll,
-    /// The Providers page, scrolled on its own.
+    /// The Providers and Usage pages, each scrolled on its own.
     pub providers_scroll: SmoothScroll,
+    pub usage_scroll: SmoothScroll,
+    pub usage: crate::pages::UsageState,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
 }
@@ -78,6 +80,8 @@ pub enum Page {
     Shortcuts,
     /// The ASR and polishing providers, under Models in the sidebar.
     Providers,
+    /// What the providers served, under Models in the sidebar.
+    Usage,
     Settings(SettingsPage),
 }
 
@@ -179,6 +183,8 @@ impl AppView {
             expanded_request: None,
             settings_scroll: SmoothScroll::default(),
             providers_scroll: SmoothScroll::default(),
+            usage_scroll: SmoothScroll::default(),
+            usage: crate::pages::UsageState::default(),
             shortcuts_scroll: SmoothScroll::default(),
             history_scroll: SmoothScroll::default(),
             requests_scroll: SmoothScroll::default(),
@@ -257,6 +263,14 @@ impl AppView {
                 signed_in,
             } => {
                 self.models.signed_in(subscription, signed_in);
+                Vec::new()
+            }
+            BridgeEvent::UsageRead(ledger) => {
+                self.usage.read(ledger);
+                Vec::new()
+            }
+            BridgeEvent::Balances(balances) => {
+                self.usage.balances(balances);
                 Vec::new()
             }
             BridgeEvent::SignInStep { id, step } => {
@@ -427,10 +441,12 @@ impl Render for AppView {
             &self.history_scroll,
             &self.requests_scroll,
             &self.providers_scroll,
+            &self.usage_scroll,
         ] {
             scroll.step(window);
         }
         pages::follow_models(self, window, cx);
+        pages::follow_usage(self);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()
@@ -448,6 +464,11 @@ impl Render for AppView {
                 .flex_1()
                 .min_h_0()
                 .child(pages::providers(self, window, cx)),
+            Page::Usage => div()
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(pages::usage(self, window, cx)),
             Page::Settings(page) => match page {
                 SettingsPage::General => div()
                     .v_flex()

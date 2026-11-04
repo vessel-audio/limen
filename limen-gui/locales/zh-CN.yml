@@ -132,6 +132,22 @@ settings.off: 关闭
 settings.on: 开启
 nav.models: 模型
 nav.providers: 提供商
+nav.usage: 用量
+usage.week: 7 天
+usage.month: 30 天
+usage.quarter: 90 天
+usage.cost: 费用
+usage.per_day: 每天
+usage.request_count: 请求
+usage.lasts: "按此速度约可用 %{days} 天"
+usage.asr: 语音识别
+usage.polish: 润色
+usage.requests: "%{count} 次请求"
+usage.failed: "%{count} 次失败"
+usage.tokens: "输入 %{input} · 输出 %{output}"
+usage.empty: 这段时间没有请求
+usage.left: "剩余 %{amount}"
+usage.spent: "已用 %{amount}"
 models.asr_title: ASR 模型
 models.polish_title: 润色模型
 models.custom: 自定义
