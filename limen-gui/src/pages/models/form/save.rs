@@ -187,7 +187,7 @@ pub fn set_polishing(view: &mut AppView, polishing: Polishing) {
     form.error = None;
     // Polishing needs a provider to polish with; until one is saved, the
     // switch only shows the cards, and the dialog's save turns it on.
-    let ready = !model.trim().is_empty() && (!service.uses_url() || !url.trim().is_empty());
+    let ready = form.configured().is_some();
     form.unsaved_on = match (polishing, ready, saved) {
         (Polishing::On, false, _) => true,
         (Polishing::On, true, _) | (Polishing::Off, _, _) => false,
