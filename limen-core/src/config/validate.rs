@@ -8,6 +8,7 @@ use super::{Config, Format, Service, check_polish_root, check_polish_url, check_
 
 impl Config {
     pub(super) fn validate(&self) -> Result<()> {
+        self.network.check()?;
         let (service, format) = (self.provider.service(), self.provider.format());
         if !Service::TRANSCRIBING.contains(&service) {
             bail!(

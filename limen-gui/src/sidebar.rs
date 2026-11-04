@@ -249,6 +249,12 @@ impl AppView {
                 page: Page::Settings(SettingsPage::General),
             },
             Destination {
+                id: "settings-tab-network",
+                lead: Lead::Indent,
+                label: rust_i18n::t!("settings.network").into(),
+                page: Page::Settings(SettingsPage::Network),
+            },
+            Destination {
                 id: "settings-tab-about",
                 lead: Lead::Indent,
                 label: rust_i18n::t!("about.menu").into(),

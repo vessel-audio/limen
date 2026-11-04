@@ -123,6 +123,7 @@ fn edited(paths: &Paths, provider: &Provider, key: &KeyChange) -> Result<Config>
             config::saved_keys(&paths.config_file)?,
         )
     };
+    config.route(keys.proxy.clone());
     let stored = |saved: Option<String>, same: bool| match (key, same) {
         (KeyChange::Set(key), _) => Some(key.clone()),
         (KeyChange::Keep, true) => saved.map(ApiKey::new),
@@ -315,6 +316,7 @@ mod tests {
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: Some("sk-saved".to_string()),
                     shape: Default::default(),
+                    proxy: Default::default(),
                 })]
             )
         );
@@ -357,6 +359,7 @@ mod tests {
                     chat_api: Some(ChatApi::ChatCompletions),
                     ..Shape::default()
                 },
+                proxy: Default::default(),
             })
         };
         assert_eq!(
@@ -400,6 +403,7 @@ mod tests {
                 base_url: Some("https://asr.example/v1".to_string()),
                 api_key: Some("sk-saved".to_string()),
                 shape: Default::default(),
+                proxy: Default::default(),
             })]
         );
     }
@@ -438,6 +442,7 @@ mod tests {
                     chat_api: Some(ChatApi::ChatCompletions),
                     ..Shape::default()
                 },
+                proxy: Default::default(),
             })
         };
         assert_eq!(

@@ -94,6 +94,7 @@ fn connection(api: Api, base_url: String, api_key: Option<&str>) -> Connection {
         base_url: Some(base_url),
         api_key: api_key.map(str::to_string),
         shape: Shape::default(),
+        proxy: Default::default(),
     }
 }
 
@@ -321,6 +322,7 @@ fn chat_only_vendors_refuse_to_transcribe() {
             base_url: None,
             api_key: Some("sk".to_string()),
             shape: Shape::default(),
+            proxy: Default::default(),
         };
         assert!(
             rig.transcriber(connection, "m".to_string()).is_err(),
@@ -336,6 +338,7 @@ fn a_compatible_server_needs_its_url() {
         base_url: None,
         api_key: None,
         shape: Shape::default(),
+        proxy: Default::default(),
     };
     assert!(rig().chat(connection, "m".to_string()).is_err());
 }
@@ -657,6 +660,7 @@ async fn a_subscription_never_signed_in_to_is_refused_without_asking() {
         base_url: None,
         api_key: None,
         shape: Shape::default(),
+        proxy: Default::default(),
     };
 
     let error = backend

@@ -20,6 +20,7 @@ use crate::shortcut::{Backend, Shortcut};
 
 mod endpoint;
 mod keys;
+mod network;
 mod options;
 mod service;
 mod transaction;
@@ -31,11 +32,12 @@ pub(crate) use endpoint::{
     check_key_url, check_polish_root, check_polish_url, check_url_parameters, display_url,
 };
 pub use keys::KeyChange;
-pub(crate) use keys::saved_keys;
+pub(crate) use keys::{Secret, saved_keys};
+pub use network::{NetworkConfig, Proxy, ProxyLogin, ProxyMode};
 pub use options::{ChatApi, ProviderOptions};
 pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
-pub(crate) use value::{Key, Value, update_provider};
+pub(crate) use value::{Key, Value, update};
 pub(crate) use write::{check_writable, lock_dir, replace, snippet, update_shortcut};
 
 /// An API key saved from the GUI. Its `Debug` output never shows the key,
@@ -146,6 +148,20 @@ backend = "none"
 toggle = "Super+Z"
 # Hold to talk; portal only
 hold = "Super+X"
+
+[network]
+# How requests to model services reach them:
+#   "system": through the proxy HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY names,
+#             except to the hosts NO_PROXY lists
+#   "none":   directly, whatever the environment names
+#   "manual": through `proxy_url`, except to the hosts `no_proxy` lists
+proxy = "system"
+# An http://, https://, socks5://, or socks5h:// URL, such as
+# "http://127.0.0.1:7890"; never with a login in it
+proxy_url = ""
+# Who signs in to the proxy; its password is saved from the GUI
+# proxy_username = "me"
+no_proxy = "localhost, 127.0.0.1, ::1"
 "#;
 
 /// All resolved XDG paths.
@@ -199,6 +215,8 @@ pub struct Config {
     pub polish: PolishConfig,
     #[serde(default)]
     pub shortcut: ShortcutConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +241,10 @@ pub struct ProviderConfig {
     /// The key saved from the GUI, which comes before `api_key_env`.
     #[serde(skip)]
     pub saved_key: Option<ApiKey>,
+    /// How its requests go, as `[network]` and the proxy's saved password
+    /// say.
+    #[serde(skip)]
+    pub proxy: Proxy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +295,10 @@ pub struct PolishConfig {
     /// The key saved from the GUI, which comes before `api_key_env`.
     #[serde(skip)]
     pub saved_key: Option<ApiKey>,
+    /// How its requests go, as `[network]` and the proxy's saved password
+    /// say.
+    #[serde(skip)]
+    pub proxy: Proxy,
 }
 
 impl Default for PolishConfig {
@@ -287,6 +313,7 @@ impl Default for PolishConfig {
             timeout_ms: 5000,
             options: BTreeMap::new(),
             saved_key: None,
+            proxy: Proxy::System,
         }
     }
 }
@@ -337,9 +364,10 @@ impl Config {
         Self::load(path)
     }
 
-    /// Read, parse, and validate the config file, with the API keys saved
-    /// beside it; never creates either. The directory lock keeps the config
-    /// and keys on opposite sides of a save from being read together.
+    /// Read, parse, and validate the config file, with the API keys and
+    /// proxy password saved beside it; never creates either. The directory
+    /// lock keeps the config and keys on opposite sides of a save from being
+    /// read together.
     pub fn load(path: &Path) -> Result<Self> {
         let _lock = write::lock_dir(path)?;
         transaction::recover(path)?;
@@ -350,6 +378,7 @@ impl Config {
         let keys = saved_keys(path)?;
         config.provider.saved_key = keys.asr.map(ApiKey::new);
         config.polish.saved_key = keys.polish.map(ApiKey::new);
+        config.route(keys.proxy);
         Ok(config)
     }
 
@@ -366,6 +395,14 @@ impl Config {
         let cfg: Config = toml::from_str(text)?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Send both roles' requests as `[network]` says, signing in to a
+    /// manual proxy with `password`, the one saved from the GUI.
+    pub(crate) fn route(&mut self, password: Option<String>) {
+        let proxy = self.network.proxy(password.map(ApiKey::new));
+        self.provider.proxy = proxy.clone();
+        self.polish.proxy = proxy;
     }
 
     /// The ASR key: the one saved from the GUI, else the one in

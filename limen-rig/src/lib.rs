@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use limen_core::{
-    Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply,
+    Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Proxy, Reply,
     SignInPrompt, Subscription, Take, Transcriber, Transcript, Transient,
 };
 use rig_core::DynModel;
@@ -47,13 +47,16 @@ pub struct Rig {
     sign_ins: PathBuf,
 }
 
-/// An HTTP client that never follows redirects and sends `headers` with
-/// every request.
-fn http(headers: reqwest::header::HeaderMap) -> Result<ReqwestClient> {
+/// An HTTP client that never follows redirects, sends `headers` with
+/// every request, and goes through `proxy`.
+fn http(headers: reqwest::header::HeaderMap, proxy: &Proxy) -> Result<ReqwestClient> {
     Ok(ReqwestClient::from(
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .default_headers(headers)
+        proxy
+            .route(
+                reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .default_headers(headers),
+            )?
             .build()
             .context("failed to build the model HTTP client")?,
     ))
@@ -73,6 +76,7 @@ impl Rig {
             base_url,
             api_key,
             shape,
+            proxy,
         } = connection;
         let key = api_key.unwrap_or_default();
         // A key in a header of the user's naming goes with the other headers,
@@ -97,7 +101,7 @@ impl Rig {
                 ))
             })
             .collect::<Result<reqwest::header::HeaderMap>>()?;
-        let http = http(headers)?;
+        let http = http(headers, &proxy)?;
         let openai = |dialect: &Dialect| {
             let mut config = OpenAIConfig::with_key(dialect, key.clone());
             if let Some(base_url) = &base_url {
@@ -250,17 +254,18 @@ impl ModelBackend for Rig {
     fn sign_in(
         &self,
         subscription: Subscription,
+        proxy: Proxy,
         prompt: SignInPrompt,
     ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let http = http(Default::default())?;
+            let http = http(Default::default(), &proxy)?;
             signed_in::sign_in(&self.sign_ins, subscription, http, Arc::from(prompt)).await
         })
     }
 
-    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>> {
+    fn sign_out(&self, subscription: Subscription, proxy: Proxy) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move {
-            let http = http(Default::default())?;
+            let http = http(Default::default(), &proxy)?;
             signed_in::sign_out(&self.sign_ins, subscription, http).await
         })
     }

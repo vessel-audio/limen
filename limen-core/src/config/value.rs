@@ -1,5 +1,5 @@
 //! Writing values back from the GUI: the ASR and polishing providers'
-//! services, URLs, and models, and whether polishing is on.
+//! services, URLs, and models, whether polishing is on, and the proxy.
 //!
 //! Like the `[shortcut]` writer, only the values change: every other byte of
 //! the file, comments included, stays as it was, and a symlinked or
@@ -10,11 +10,10 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use toml_edit::{DocumentMut, ImDocument, Item};
 
-use super::keys::{self, KeyChange};
+use super::keys::{self, KeyChange, Secret};
 use super::transaction::{Backup, Transaction, recover};
 use super::write::{check_writable, lock_dir, read_text, replace};
 use super::{Config, ProviderOptions, Service};
-use crate::models::ModelRole;
 
 /// A value of the config that the GUI edits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +32,10 @@ pub(crate) enum Key {
     /// The settings of one provider, a table of their own.
     ProviderOptions(Service),
     PolishOptions(Service),
+    NetworkProxy,
+    NetworkProxyUrl,
+    NetworkProxyUsername,
+    NetworkNoProxy,
 }
 
 /// A value to write: text or a switch, or no value, which removes the key.
@@ -62,6 +65,10 @@ impl Key {
             Self::PolishOptions(_) => ("polish", "options"),
             Self::PolishUrl => ("polish", "url"),
             Self::PolishModel => ("polish", "model"),
+            Self::NetworkProxy => ("network", "proxy"),
+            Self::NetworkProxyUrl => ("network", "proxy_url"),
+            Self::NetworkProxyUsername => ("network", "proxy_username"),
+            Self::NetworkNoProxy => ("network", "no_proxy"),
         }
     }
 
@@ -104,6 +111,14 @@ impl Key {
                     .cloned()
                     .unwrap_or_default(),
             ),
+            Self::NetworkProxy => Value::Text(config.network.proxy.as_str().to_string()),
+            Self::NetworkProxyUrl => Value::Text(config.network.proxy_url.clone()),
+            Self::NetworkProxyUsername => config
+                .network
+                .proxy_username
+                .clone()
+                .map_or(Value::Unset, Value::Text),
+            Self::NetworkNoProxy => Value::Text(config.network.no_proxy.clone()),
         }
     }
 }
@@ -148,7 +163,11 @@ fn with_value(text: &str, key: Key, value: &Value) -> Result<String> {
             | Key::PolishUrl
             | Key::PolishModel
             | Key::ProviderKeyEnv
-            | Key::PolishKeyEnv => bail!("{section}.{name} holds no provider settings"),
+            | Key::PolishKeyEnv
+            | Key::NetworkProxy
+            | Key::NetworkProxyUrl
+            | Key::NetworkProxyUsername
+            | Key::NetworkNoProxy => bail!("{section}.{name} holds no provider settings"),
         },
         (Some(span), Value::Text(text)) => Ok(replace(span, toml::Value::String(text.clone()))),
         (Some(span), Value::Switch(on)) => Ok(replace(span, toml::Value::Boolean(*on))),
@@ -207,16 +226,16 @@ fn with_options(
     Ok(document.to_string())
 }
 
-/// Save a provider: set each key to its value in the config file at `path`
-/// and apply `change` to the key `role` sends, under the same lock as
+/// Save a provider or the proxy: set each key to its value in the config
+/// file at `path` and apply `change` to `secret`, under the same lock as
 /// shortcut writes. Both files are edited and checked before either is
 /// written, so a refused value or key leaves both as they were. A missing
 /// config is created from the annotated default; a config whose values stay
 /// the same is never written, so a managed one can still get a new key.
-pub(crate) fn update_provider(
+pub(crate) fn update(
     path: &Path,
     values: &[(Key, Value)],
-    role: ModelRole,
+    secret: Secret,
     change: &KeyChange,
 ) -> Result<()> {
     let _lock = lock_dir(path)?;
@@ -246,7 +265,7 @@ pub(crate) fn update_provider(
             Some(edited)
         }
     };
-    let key = keys::edit_key(path, role, change)?;
+    let key = keys::edit_key(path, secret, change)?;
     if config.is_none() && key.is_none() {
         return Ok(());
     }
@@ -289,8 +308,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{Key, Value, update_provider};
+    use super::{Key, Value, update};
     use crate::config::DEFAULT_CONFIG;
+    use crate::config::Secret;
     use crate::config::{ApiKey, KeyChange};
     use crate::models::ModelRole;
 
@@ -303,7 +323,7 @@ mod tests {
     }
 
     fn save(path: &std::path::Path, values: &[(Key, Value)]) -> anyhow::Result<()> {
-        update_provider(path, values, ModelRole::Asr, &KeyChange::Keep)
+        update(path, values, Secret::Key(ModelRole::Asr), &KeyChange::Keep)
     }
 
     fn set(path: &std::path::Path, key: Key, text: &str) -> anyhow::Result<()> {
@@ -385,10 +405,10 @@ mod tests {
         let path = scratch("provider-key-refused").join("config.toml");
         fs::write(&path, DEFAULT_CONFIG).unwrap();
 
-        let error = update_provider(
+        let error = update(
             &path,
             &[(Key::ProviderModel, Value::Text("new-model".to_string()))],
-            ModelRole::Asr,
+            Secret::Key(ModelRole::Asr),
             &KeyChange::Set(ApiKey::new("bad\r\nkey".to_string())),
         )
         .unwrap_err();

@@ -1,4 +1,5 @@
-//! API keys saved from the GUI, in `keys.toml` beside the config file.
+//! API keys and the proxy's password saved from the GUI, in `keys.toml`
+//! beside the config file.
 //!
 //! Keys never go into the config itself: it may be managed declaratively,
 //! readable by others or copied into the Nix store. This file is always
@@ -27,12 +28,34 @@ pub enum KeyChange {
     Clear,
 }
 
-/// The keys in the file, by the role that sends them.
+/// The keys in the file, by the role that sends them, and the proxy's
+/// password.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SavedKeys {
     pub(crate) asr: Option<String>,
     pub(crate) polish: Option<String>,
+    pub(crate) proxy: Option<String>,
+}
+
+/// One secret the key file keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Secret {
+    /// The API key the role sends.
+    Key(ModelRole),
+    /// The password the proxy is signed in to with.
+    ProxyPassword,
+}
+
+impl Secret {
+    /// Its name in the key file, and what the user calls it.
+    fn names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Key(ModelRole::Asr) => ("asr", "an API key"),
+            Self::Key(ModelRole::Polish) => ("polish", "an API key"),
+            Self::ProxyPassword => ("proxy", "a password"),
+        }
+    }
 }
 
 pub(super) fn path(config_file: &Path) -> PathBuf {
@@ -79,7 +102,7 @@ pub(super) struct KeyEdit {
     pub(super) backup: Backup,
 }
 
-/// The key file's contents after `change` to the key `role` sends, or
+/// The key file's contents after `change` to `secret`, or
 /// `None` when the file stays as it is. A regular file that others may read
 /// is rewritten even when its keys stay, so it ends up private; a symlinked
 /// one is left to whatever manages it, and refused when a key changes.
@@ -87,13 +110,10 @@ pub(super) struct KeyEdit {
 /// 0600 to [`path`].
 pub(super) fn edit_key(
     config_file: &Path,
-    role: ModelRole,
+    secret: Secret,
     change: &KeyChange,
 ) -> Result<Option<KeyEdit>> {
-    let name = match role {
-        ModelRole::Asr => "asr",
-        ModelRole::Polish => "polish",
-    };
+    let (name, called) = secret.names();
     let path = path(config_file);
     let read = OpenOptions::new()
         .read(true)
@@ -137,11 +157,11 @@ pub(super) fn edit_key(
         KeyChange::Set(key) => {
             let key = key.expose().trim();
             if key.is_empty() {
-                bail!("enter an API key");
+                bail!("enter {called}");
             }
             // It goes into an HTTP header, where these would split the request.
             if key.chars().any(char::is_control) {
-                bail!("an API key cannot contain control characters");
+                bail!("{called} cannot contain control characters");
             }
             document.insert(name, toml_edit::value(key));
         }
@@ -204,7 +224,7 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::PathBuf;
 
-    use super::{KeyChange, edit_key, path as key_path, saved_keys, write_key};
+    use super::{KeyChange, Secret, edit_key, path as key_path, saved_keys, write_key};
     use crate::config::ApiKey;
     use crate::models::ModelRole;
 
@@ -225,7 +245,7 @@ mod tests {
         role: ModelRole,
         change: &KeyChange,
     ) -> anyhow::Result<()> {
-        match edit_key(config, role, change)? {
+        match edit_key(config, Secret::Key(role), change)? {
             Some(edit) => write_key(&key_path(config), edit),
             None => Ok(()),
         }
@@ -282,7 +302,7 @@ mod tests {
         let path = config.with_file_name("keys.toml");
         let other = config.with_file_name("other-copy.toml");
         fs::write(&path, "asr = \"old\"\n").unwrap();
-        let edit = edit_key(&config, ModelRole::Asr, &set("new"))
+        let edit = edit_key(&config, Secret::Key(ModelRole::Asr), &set("new"))
             .unwrap()
             .unwrap();
         fs::hard_link(&path, &other).unwrap();
@@ -302,7 +322,7 @@ mod tests {
     fn a_key_file_created_after_reading_is_never_overwritten() {
         let config = scratch("keys-create-race");
         let path = config.with_file_name("keys.toml");
-        let edit = edit_key(&config, ModelRole::Asr, &set("new"))
+        let edit = edit_key(&config, Secret::Key(ModelRole::Asr), &set("new"))
             .unwrap()
             .unwrap();
         fs::write(&path, "polish = \"other\"\n").unwrap();

@@ -18,7 +18,8 @@ impl DictationActor {
                     model = %config.provider.model,
                     "provider reloaded"
                 );
-                self.session.tell(SessionCommand::Provider(config.provider));
+                self.session
+                    .tell(SessionCommand::Provider(Box::new(config.provider)));
                 ipc::v1::Reply::Ok
             }
             Err(error) => ipc::v1::Reply::Error {

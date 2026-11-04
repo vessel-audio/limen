@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use limen_core::{
-    BoxFuture, ChatModel, Connection, ModelBackend, SignInPrompt, Subscription, Transcriber,
+    BoxFuture, ChatModel, Connection, ModelBackend, Proxy, SignInPrompt, Subscription, Transcriber,
 };
 use limen_genai::Genai;
 use limen_rig::Rig;
@@ -50,13 +50,14 @@ impl ModelBackend for Backends {
     fn sign_in(
         &self,
         subscription: Subscription,
+        proxy: Proxy,
         prompt: SignInPrompt,
     ) -> BoxFuture<'_, Result<()>> {
-        self.rig.sign_in(subscription, prompt)
+        self.rig.sign_in(subscription, proxy, prompt)
     }
 
-    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>> {
-        self.rig.sign_out(subscription)
+    fn sign_out(&self, subscription: Subscription, proxy: Proxy) -> BoxFuture<'_, Result<()>> {
+        self.rig.sign_out(subscription, proxy)
     }
 
     fn signed_in(&self, subscription: Subscription) -> bool {

@@ -13,7 +13,8 @@ use crate::model::{Action, GuiState, Msg, Toast};
 use crate::pages::{self, ModelForms};
 use crate::recorder::RecorderState;
 use crate::settings::{
-    AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, SettingsPage,
+    AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, NetworkForm,
+    SettingsPage,
 };
 use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -40,6 +41,7 @@ pub struct AppView {
     pub toggle_focused: bool,
     pub hold_focused: bool,
     pub models: ModelForms,
+    pub network: NetworkForm,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     /// The expanded sidebar's width, as its edge was last dragged.
@@ -67,6 +69,7 @@ pub struct AppView {
     /// The Providers and Usage pages, each scrolled on its own.
     pub providers_scroll: SmoothScroll,
     pub usage_scroll: SmoothScroll,
+    pub network_scroll: SmoothScroll,
     pub usage: crate::pages::UsageState,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
@@ -110,6 +113,7 @@ impl AppView {
                 .default_value("Super+X")
         });
         let (models, model_subscriptions) = ModelForms::new(window, cx);
+        let (network, network_subscriptions) = NetworkForm::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -160,9 +164,11 @@ impl AppView {
             toggle_focused: false,
             hold_focused: false,
             models,
+            network,
             _subscriptions: subscriptions
                 .into_iter()
                 .chain(model_subscriptions)
+                .chain(network_subscriptions)
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             sidebar_width: crate::sidebar::DEFAULT_WIDTH,
@@ -184,6 +190,7 @@ impl AppView {
             settings_scroll: SmoothScroll::default(),
             providers_scroll: SmoothScroll::default(),
             usage_scroll: SmoothScroll::default(),
+            network_scroll: SmoothScroll::default(),
             usage: crate::pages::UsageState::default(),
             shortcuts_scroll: SmoothScroll::default(),
             history_scroll: SmoothScroll::default(),
@@ -281,6 +288,11 @@ impl AppView {
                 self.models.sign_in_ended(id, result);
                 Vec::new()
             }
+            BridgeEvent::NetworkLoaded { id, result } => {
+                self.network.loaded(id, result);
+                Vec::new()
+            }
+            BridgeEvent::NetworkSaved { id, result } => self.network.saved(id, result),
             BridgeEvent::Toast(_) => Vec::new(),
         }
     }
@@ -380,6 +392,8 @@ impl AppView {
             Toast::ProviderSaved(ModelRole::Polish) => "toast.polish_saved",
             Toast::ModelWorks(ModelRole::Asr) => "toast.asr_model_works",
             Toast::ModelWorks(ModelRole::Polish) => "toast.polish_model_works",
+            Toast::NetworkApplied => "toast.network_applied",
+            Toast::NetworkSaved => "toast.network_saved",
         };
         self.toast = Some((rust_i18n::t!(key).to_string(), Instant::now()));
     }
@@ -442,11 +456,13 @@ impl Render for AppView {
             &self.requests_scroll,
             &self.providers_scroll,
             &self.usage_scroll,
+            &self.network_scroll,
         ] {
             scroll.step(window);
         }
         pages::follow_models(self, window, cx);
         pages::follow_usage(self);
+        crate::settings::follow_network(self, window, cx);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()
@@ -475,6 +491,11 @@ impl Render for AppView {
                     .flex_1()
                     .min_h_0()
                     .child(crate::settings::general(self, cx)),
+                SettingsPage::Network => div()
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(crate::settings::network(self, cx)),
                 SettingsPage::About => div()
                     .v_flex()
                     .flex_1()

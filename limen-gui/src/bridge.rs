@@ -2,6 +2,7 @@
 
 mod lifecycle;
 mod models;
+mod network;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use lifecycle::{
     wait_for_termination,
 };
 pub use models::ModelRequest;
+pub use network::NetworkRequest;
 
 /// Commands sent from the GPUI thread to the bridge.
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ pub enum BridgeCommand {
     TerminateDaemon,
     Shortcut(ShortcutRequest),
     Model(ModelRequest),
+    Network(NetworkRequest),
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
@@ -108,6 +111,17 @@ pub enum BridgeEvent {
     SignInEnded {
         id: u64,
         result: Result<(), String>,
+    },
+    /// The proxy settings as read from the config file, and whether its
+    /// password is saved.
+    NetworkLoaded {
+        id: u64,
+        result: Result<(limen_core::Network, limen_core::ProxyPassword), String>,
+    },
+    /// How saving the proxy settings ended.
+    NetworkSaved {
+        id: u64,
+        result: Result<ConfigChange, String>,
     },
     Toast(Toast),
 }
@@ -536,6 +550,7 @@ async fn handle_command(
             shortcuts.spawn(async move { run_shortcut(&paths, request).await });
         }
         BridgeCommand::Model(request) => models::handle(env, events, request),
+        BridgeCommand::Network(request) => network::handle(env, events, request),
         BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),
     }
 }

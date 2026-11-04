@@ -347,6 +347,7 @@ mod tests {
                     base_url: None,
                     api_key: None,
                     shape: Shape::default(),
+                    proxy: Default::default(),
                 },
                 "gpt-5.5".to_string()
             )]
@@ -390,6 +391,7 @@ mod tests {
                             chat_api: Some(ChatApi::ChatCompletions),
                             ..Shape::default()
                         },
+                        proxy: Default::default(),
                     },
                     "corrector".to_string()
                 ),
@@ -402,6 +404,7 @@ mod tests {
                             chat_api: Some(ChatApi::ChatCompletions),
                             ..Shape::default()
                         },
+                        proxy: Default::default(),
                     },
                     "corrector".to_string()
                 ),

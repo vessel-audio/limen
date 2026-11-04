@@ -12,9 +12,11 @@ use crate::bridge::BridgeCommand;
 use crate::sidebar::SidebarMode;
 
 mod font_scale;
+mod network;
 mod segmented;
 
 pub use font_scale::FontScale;
+pub use network::{NetworkForm, follow as follow_network, network};
 pub(crate) use segmented::{Segment, segmented};
 
 /// Settings subpages, listed below Settings in the expanded sidebar and
@@ -22,6 +24,7 @@ pub(crate) use segmented::{Segment, segmented};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPage {
     General,
+    Network,
     About,
 }
 
@@ -192,71 +195,55 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .p_8()
         .on_scroll(scroll.on_scroll())
         .child(header(view, cx))
-        .child(
-            div()
-                .v_flex()
-                .rounded_xl()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted.opacity(0.18))
-                .children(
-                    [
-                        setting("settings.appearance", appearance, cx),
-                        setting("settings.language", language, cx),
-                        setting("settings.font_size", font_scale::picker(view, cx), cx),
-                        setting(
-                            "settings.interface_font",
-                            div().w(px(220.)).child(
-                                Select::new(&view.font_select)
-                                    .accessibility_label(
-                                        rust_i18n::t!("settings.interface_font").to_string(),
-                                    )
-                                    .menu_max_h(px(320.))
-                                    .search_placeholder(
-                                        rust_i18n::t!("settings.search_font").to_string(),
-                                    ),
-                            ),
-                            cx,
-                        ),
-                        setting("settings.lightweight", lightweight, cx),
-                        setting(
-                            "settings.service",
-                            div()
-                                .h_flex()
-                                .gap_2()
-                                .child(
-                                    a11y::button("restart-daemon")
-                                        .small()
-                                        .outline()
-                                        .label(rust_i18n::t!("action.restart_daemon").to_string())
-                                        .on_click({
-                                            let commands = view.commands.clone();
-                                            move |_, _, _| {
-                                                let _ =
-                                                    commands.try_send(BridgeCommand::RestartDaemon);
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    a11y::button("stop-daemon")
-                                        .small()
-                                        .outline()
-                                        .label(rust_i18n::t!("action.stop_daemon").to_string())
-                                        .on_click(cx.listener(|this, _, _, _| {
-                                            this.confirm_shutdown = Some(ShutdownAction::Stop);
-                                        })),
-                                ),
-                            cx,
-                        ),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, row)| match index {
-                        0 => row,
-                        _ => row.border_t_1(),
-                    }),
+        .child(card(
+            [
+                setting("settings.appearance", appearance, cx),
+                setting("settings.language", language, cx),
+                setting("settings.font_size", font_scale::picker(view, cx), cx),
+                setting(
+                    "settings.interface_font",
+                    div().w(px(220.)).child(
+                        Select::new(&view.font_select)
+                            .accessibility_label(
+                                rust_i18n::t!("settings.interface_font").to_string(),
+                            )
+                            .menu_max_h(px(320.))
+                            .search_placeholder(rust_i18n::t!("settings.search_font").to_string()),
+                    ),
+                    cx,
                 ),
-        );
+                setting("settings.lightweight", lightweight, cx),
+                setting(
+                    "settings.service",
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            a11y::button("restart-daemon")
+                                .small()
+                                .outline()
+                                .label(rust_i18n::t!("action.restart_daemon").to_string())
+                                .on_click({
+                                    let commands = view.commands.clone();
+                                    move |_, _, _| {
+                                        let _ = commands.try_send(BridgeCommand::RestartDaemon);
+                                    }
+                                }),
+                        )
+                        .child(
+                            a11y::button("stop-daemon")
+                                .small()
+                                .outline()
+                                .label(rust_i18n::t!("action.stop_daemon").to_string())
+                                .on_click(cx.listener(|this, _, _, _| {
+                                    this.confirm_shutdown = Some(ShutdownAction::Stop);
+                                })),
+                        ),
+                    cx,
+                ),
+            ],
+            cx,
+        ));
     scroll
         .container(
             div().id("settings-general").child(content),
@@ -340,6 +327,11 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                             SettingsPage::General,
                         ),
                         (
+                            "settings-tab-network",
+                            rust_i18n::t!("settings.network"),
+                            SettingsPage::Network,
+                        ),
+                        (
                             "settings-tab-about",
                             rust_i18n::t!("about.menu"),
                             SettingsPage::About,
@@ -379,6 +371,24 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .gap_4()
         .child(crate::pages::title(rust_i18n::t!("settings.title")))
         .children(tabs)
+}
+
+/// A card of settings `rows`, a hairline between each two.
+fn card(rows: impl IntoIterator<Item = Div>, cx: &App) -> Div {
+    div()
+        .v_flex()
+        .rounded_xl()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted.opacity(0.18))
+        .children(
+            rows.into_iter()
+                .enumerate()
+                .map(|(index, row)| match index {
+                    0 => row,
+                    _ => row.border_t_1(),
+                }),
+        )
 }
 
 /// One settings row: the title and description under `key` beside a control.

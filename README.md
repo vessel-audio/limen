@@ -260,6 +260,28 @@ attempt; failures are never retried with alternate text because a timeout could
 otherwise duplicate text. `finalizing` includes correction and text input drain,
 not just the transcription request.
 
+## Proxy
+
+Requests to model services, subscription sign-ins, and balance checks go
+through the proxy that Settings › Network chooses, saved under `[network]`:
+`system` (the default) follows `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and
+`NO_PROXY` in the daemon's environment; `none` always connects directly; and
+`manual` uses `proxy_url`, an `http://`, `https://`, `socks5://`, or
+`socks5h://` address, for every host but those `no_proxy` lists, which starts
+as `localhost, 127.0.0.1, ::1` so local servers are reached directly:
+
+```toml
+[network]
+proxy = "manual"
+proxy_url = "socks5h://127.0.0.1:1080"
+proxy_username = "me"
+no_proxy = "localhost, 127.0.0.1, ::1, .corp.example"
+```
+
+The proxy's password, like API keys, is saved in `keys.toml` with mode 0600,
+never in `config.toml`, which refuses a URL with a login in it. Saving applies
+the proxy to a running daemon from its next request.
+
 ## Config
 
 `$XDG_CONFIG_HOME/limen/config.toml` — see the annotated default written

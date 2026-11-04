@@ -84,9 +84,13 @@ pub(crate) fn from_config(
     }
     let model = cfg.provider.model.clone();
     let transcriber: Arc<dyn Transcriber> = match connection::asr(cfg)? {
-        AsrRoute::Upload(url, shape) => {
-            Arc::new(multipart::Server::new(url, model, cfg.api_key(), shape)?)
-        }
+        AsrRoute::Upload(url, shape) => Arc::new(multipart::Server::new(
+            url,
+            model,
+            cfg.api_key(),
+            shape,
+            &cfg.provider.proxy,
+        )?),
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
     let transcriber = Arc::new(MeteredTranscriber {
@@ -215,6 +219,7 @@ mod tests {
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: None,
                     shape: Default::default(),
+                    proxy: Default::default(),
                 },
                 "asr".to_string()
             )]

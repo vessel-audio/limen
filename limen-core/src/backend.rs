@@ -10,6 +10,8 @@ use std::pin::Pin;
 
 use anyhow::Result;
 
+use crate::config::Proxy;
+
 /// Object-safe, cancellable future used by the provider trait objects.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -183,7 +185,8 @@ pub type SignInPrompt = Box<dyn Fn(SignInStep) + Send + Sync>;
 #[error("{0}")]
 pub struct Transient(pub String);
 
-/// Where a backend sends one role's requests, and with which key.
+/// Where a backend sends one role's requests, with which key, and through
+/// which proxy.
 #[derive(Clone, PartialEq)]
 pub struct Connection {
     pub api: Api,
@@ -194,6 +197,8 @@ pub struct Connection {
     /// `None` sends no credential, which a local server may not need.
     pub api_key: Option<String>,
     pub shape: Shape,
+    /// The proxy every HTTP client built for the connection goes through.
+    pub proxy: Proxy,
 }
 
 impl std::fmt::Debug for Connection {
@@ -204,6 +209,7 @@ impl std::fmt::Debug for Connection {
             .field("base_url", &self.base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "…"))
             .field("shape", &self.shape)
+            .field("proxy", &self.proxy)
             .finish()
     }
 }
@@ -265,18 +271,19 @@ pub trait ModelBackend: Send + Sync {
     /// call with its own timeout.
     fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>>;
 
-    /// Sign in to `subscription` again, telling `prompt` what the user must
-    /// do, and keep the credential where later requests read it. Dropping
-    /// the future abandons the sign-in.
+    /// Sign in to `subscription` again through `proxy`, telling `prompt`
+    /// what the user must do, and keep the credential where later requests
+    /// read it. Dropping the future abandons the sign-in.
     fn sign_in(
         &self,
         subscription: Subscription,
+        proxy: Proxy,
         prompt: SignInPrompt,
     ) -> BoxFuture<'_, Result<()>>;
 
-    /// Forget the sign-in to `subscription`, revoking it where its
-    /// provider can.
-    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>>;
+    /// Forget the sign-in to `subscription`, revoking it through `proxy`
+    /// where its provider can.
+    fn sign_out(&self, subscription: Subscription, proxy: Proxy) -> BoxFuture<'_, Result<()>>;
 
     /// Whether a sign-in to `subscription` is kept. It may still have
     /// expired; a request then says so.
@@ -315,7 +322,7 @@ pub(crate) mod testing {
     use anyhow::{Result, bail};
 
     use super::{
-        BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Reply, SignInPrompt,
+        BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Proxy, Reply, SignInPrompt,
         Subscription, Take, Transcriber, Transcript, Usage,
     };
 
@@ -335,11 +342,11 @@ pub(crate) mod testing {
             Box::pin(async { bail!("no models in this test") })
         }
 
-        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+        fn sign_in(&self, _: Subscription, _: Proxy, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { bail!("no sign-in in this test") })
         }
 
-        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+        fn sign_out(&self, _: Subscription, _: Proxy) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { Ok(()) })
         }
 
@@ -425,11 +432,11 @@ pub(crate) mod testing {
             Box::pin(async { Ok(Vec::new()) })
         }
 
-        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+        fn sign_in(&self, _: Subscription, _: Proxy, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { bail!("no sign-in in this test") })
         }
 
-        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+        fn sign_out(&self, _: Subscription, _: Proxy) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { Ok(()) })
         }
 
@@ -465,11 +472,11 @@ pub(crate) mod testing {
             Box::pin(async move { Ok(models) })
         }
 
-        fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+        fn sign_in(&self, _: Subscription, _: Proxy, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { bail!("no sign-in in this test") })
         }
 
-        fn sign_out(&self, _: Subscription) -> BoxFuture<'_, Result<()>> {
+        fn sign_out(&self, _: Subscription, _: Proxy) -> BoxFuture<'_, Result<()>> {
             Box::pin(async { Ok(()) })
         }
 

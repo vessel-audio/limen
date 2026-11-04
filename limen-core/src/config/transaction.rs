@@ -221,7 +221,7 @@ mod tests {
         );
         let edit = keys::edit_key(
             &config,
-            ModelRole::Asr,
+            keys::Secret::Key(ModelRole::Asr),
             &KeyChange::Set(ApiKey::new("new".to_string())),
         )
         .unwrap()

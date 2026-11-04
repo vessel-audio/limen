@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use limen_core::{
-    KeyChange, ModelRole, Provider, Service, Subscription, balance, check_model, list_models,
-    load_provider, read_card_order, read_usage, save_card_order, save_provider,
+    KeyChange, ModelRole, Provider, Service, Subscription, balance, check_model, configured_proxy,
+    list_models, load_provider, read_card_order, read_usage, save_card_order, save_provider,
 };
 use tokio::sync::mpsc;
 
@@ -56,6 +56,13 @@ pub enum ModelRequest {
     SaveCardOrder(Vec<Service>),
     /// Ask each role's saved provider what is left to spend.
     AskBalances,
+}
+
+/// The proxy the config names, read on a blocking thread: the config lock
+/// may wait on a save.
+async fn proxy(paths: &limen_core::Paths) -> anyhow::Result<limen_core::Proxy> {
+    let paths = paths.clone();
+    tokio::task::spawn_blocking(move || configured_proxy(&paths)).await?
 }
 
 /// Start `request` off the bridge loop, so snapshots and levels keep flowing
@@ -190,7 +197,7 @@ pub(super) fn handle(env: &Env, events: &mpsc::Sender<BridgeEvent>, request: Mod
             });
         }
         ModelRequest::SignIn { subscription, id } => {
-            let (backend, events) = (env.models.clone(), events.clone());
+            let (backend, events, paths) = (env.models.clone(), events.clone(), paths.clone());
             let steps = events.clone();
             let task = tokio::spawn(async move {
                 // The prompt runs inside the backend's sign-in, which must
@@ -198,10 +205,11 @@ pub(super) fn handle(env: &Env, events: &mpsc::Sender<BridgeEvent>, request: Mod
                 let prompt = Box::new(move |step| {
                     let _ = steps.try_send(BridgeEvent::SignInStep { id, step });
                 });
-                let result = backend
-                    .sign_in(subscription, prompt)
-                    .await
-                    .map_err(|error| format!("{error:#}"));
+                let result = match proxy(&paths).await {
+                    Ok(proxy) => backend.sign_in(subscription, proxy, prompt).await,
+                    Err(error) => Err(error),
+                }
+                .map_err(|error| format!("{error:#}"));
                 let signed_in = backend.signed_in(subscription);
                 let _ = events.send(BridgeEvent::SignInEnded { id, result }).await;
                 let _ = events
@@ -234,7 +242,10 @@ pub(super) fn handle(env: &Env, events: &mpsc::Sender<BridgeEvent>, request: Mod
             let (backend, events) = (env.models.clone(), events.clone());
             let paths = paths.clone();
             tokio::spawn(async move {
-                let result = backend.sign_out(subscription).await;
+                let result = match proxy(&paths).await {
+                    Ok(proxy) => backend.sign_out(subscription, proxy).await,
+                    Err(error) => Err(error),
+                };
                 // A running daemon builds its polisher again, so it drops the
                 // credential it may still hold; one not running has none.
                 let _ = limen_core::request(&paths, &limen_core::v1::Request::PolishReload).await;

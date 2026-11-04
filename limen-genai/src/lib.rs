@@ -14,7 +14,7 @@ use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponse, StopReaso
 use genai::resolver::{AuthData, Endpoint, ProviderConfig};
 use genai::{Client, ModelIden, ServiceTarget};
 use limen_core::{
-    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, PriceList, Reply,
+    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, PriceList, Proxy, Reply,
     SignInPrompt, Subscription, Transcriber, Transient, Usage,
 };
 
@@ -89,6 +89,7 @@ fn target(connection: Connection) -> Result<Target> {
         base_url,
         api_key,
         shape,
+        proxy,
     } = connection;
     let Some((kind, endpoint)) = adapter(api) else {
         bail!("{api:?} is not reached through genai");
@@ -107,8 +108,8 @@ fn target(connection: Connection) -> Result<Target> {
         Some(url) => Endpoint::from_owned(format!("{}/", url.trim_end_matches('/'))),
         None => Endpoint::from_static(endpoint),
     };
-    let http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let http = proxy
+        .route(reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()))?
         .build()
         .context("failed to build the chat HTTP client")?;
     let options = ChatOptions::default()
@@ -169,11 +170,16 @@ impl ModelBackend for Genai {
         })
     }
 
-    fn sign_in(&self, subscription: Subscription, _: SignInPrompt) -> BoxFuture<'_, Result<()>> {
+    fn sign_in(
+        &self,
+        subscription: Subscription,
+        _: Proxy,
+        _: SignInPrompt,
+    ) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move { bail!("{subscription:?} is not signed in to through genai") })
     }
 
-    fn sign_out(&self, subscription: Subscription) -> BoxFuture<'_, Result<()>> {
+    fn sign_out(&self, subscription: Subscription, _: Proxy) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move { bail!("{subscription:?} is not signed in to through genai") })
     }
 

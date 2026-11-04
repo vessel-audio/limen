@@ -41,6 +41,7 @@ impl AppView {
             Page::History => ("nav.section", "nav.history"),
             Page::Shortcuts => ("nav.section", "nav.shortcuts"),
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
+            Page::Settings(SettingsPage::Network) => ("settings.title", "settings.network"),
             Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
             Page::Providers => ("nav.models", "nav.providers"),
             Page::Usage => ("nav.models", "nav.usage"),

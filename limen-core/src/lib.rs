@@ -13,6 +13,7 @@ mod dictation;
 mod input_method;
 mod ipc;
 mod models;
+mod network;
 mod notify;
 mod polish;
 mod provider;
@@ -28,7 +29,8 @@ pub use backend::{
     SignInPrompt, SignInStep, Subscription, Take, Transcriber, Transcript, Transient, Usage,
 };
 pub use config::{
-    ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,
+    ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Proxy, ProxyLogin,
+    ProxyMode, Service, ShortcutConfig,
 };
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
@@ -44,6 +46,7 @@ pub use models::{
     KeySource, KeyState, ModelRole, Polishing, Provider, check_model, list_models, load_provider,
     save_provider,
 };
+pub use network::{Network, ProxyPassword, configured_proxy, load_network, save_network};
 pub use provider::probe;
 pub use reload::ConfigChange;
 pub use shortcut::desktop_entry::{APP_ID, Launch};

@@ -152,12 +152,19 @@ pub fn lightweight_mode_skips_motion() -> Result<()> {
     session.state("lightweight-on", State::Checked, true)?;
     let expanded = session.settled("history-page")?.bounds.context("no tab")?;
     session.click("toggle-sidebar")?;
-    let first = session.node("history-page")?.bounds.context("no tab")?;
+    // The first width drawn once the click is handled is already the last.
+    let first = session.wait("the sidebar to change", |nodes| {
+        nodes
+            .iter()
+            .find(|node| node.id == "history-page")?
+            .bounds
+            .map(|bounds| bounds.width)
+            .filter(|width| *width != expanded.width)
+    })?;
     ensure!(
-        first.width * 3 < expanded.width,
-        "the sidebar animated: {} then {}",
-        expanded.width,
-        first.width
+        first * 3 < expanded.width,
+        "the sidebar animated: {} then {first}",
+        expanded.width
     );
     session.reveal("lightweight-off")?;
     session.click("lightweight-off")?;

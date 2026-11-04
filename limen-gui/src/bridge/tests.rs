@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use limen_core::{
-    BoxFuture, ChatModel, Connection, ModelBackend, SignInPrompt, Subscription, Transcriber,
+    BoxFuture, ChatModel, Connection, ModelBackend, Proxy, SignInPrompt, Subscription, Transcriber,
 };
 
 use super::{Backoff, is_outdated};
@@ -23,11 +23,16 @@ impl ModelBackend for NoModels {
         Box::pin(async { anyhow::bail!("bridge tests list no models") })
     }
 
-    fn sign_in(&self, _: Subscription, _: SignInPrompt) -> BoxFuture<'_, anyhow::Result<()>> {
+    fn sign_in(
+        &self,
+        _: Subscription,
+        _: Proxy,
+        _: SignInPrompt,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
         Box::pin(async { anyhow::bail!("bridge tests sign in to nothing") })
     }
 
-    fn sign_out(&self, _: Subscription) -> BoxFuture<'_, anyhow::Result<()>> {
+    fn sign_out(&self, _: Subscription, _: Proxy) -> BoxFuture<'_, anyhow::Result<()>> {
         Box::pin(async { Ok(()) })
     }
 

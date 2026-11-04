@@ -5,7 +5,7 @@
 use anyhow::{Context, Result, bail};
 
 use crate::backend::{Connection, Shape};
-use crate::config::{Config, Format, PolishConfig, ProviderOptions, Service};
+use crate::config::{Config, Format, PolishConfig, ProviderOptions, Proxy, Service};
 
 /// The transcription route under an OpenAI-compatible API root.
 pub(crate) const TRANSCRIPTIONS: &str = "/audio/transcriptions";
@@ -88,6 +88,7 @@ pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
             TRANSCRIPTIONS,
             config.api_key(),
             shape,
+            provider.proxy.clone(),
         )
         .map(AsrRoute::Api),
         (vendor, _) => vendor_endpoint(
@@ -96,6 +97,7 @@ pub(crate) fn asr(config: &Config) -> Result<AsrRoute> {
             config.api_key(),
             provider.key_env(),
             shape,
+            provider.proxy.clone(),
         )
         .map(AsrRoute::Api),
     }
@@ -119,6 +121,7 @@ pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<C
             CHAT_COMPLETIONS,
             api_key,
             shape,
+            config.proxy.clone(),
         ),
         vendor => vendor_endpoint(
             vendor,
@@ -126,18 +129,20 @@ pub(crate) fn polish(config: &PolishConfig, api_key: Option<String>) -> Result<C
             api_key,
             config.key_env(),
             shape,
+            config.proxy.clone(),
         ),
     }
 }
 
 /// The connection to a custom server speaking `format` at `url`, which
-/// may need no key.
+/// may need no key, through `proxy`.
 fn custom(
     format: Format,
     url: &str,
     route: &str,
     api_key: Option<String>,
     shape: Shape,
+    proxy: Proxy,
 ) -> Result<Connection> {
     let api = format
         .api()
@@ -149,18 +154,20 @@ fn custom(
         base_url: Some(base_url),
         api_key,
         shape,
+        proxy,
     })
 }
 
 /// The connection to a vendor's endpoint, its own or the one its `options`
 /// name, which needs a key; or to a subscription, which its sign-in
-/// authorizes.
+/// authorizes; through `proxy` either way.
 fn vendor_endpoint(
     service: Service,
     options: Option<&ProviderOptions>,
     api_key: Option<String>,
     key_env: Option<&str>,
     shape: Shape,
+    proxy: Proxy,
 ) -> Result<Connection> {
     let api = service
         .vendor_api()
@@ -171,12 +178,14 @@ fn vendor_endpoint(
             base_url: None,
             api_key: None,
             shape,
+            proxy,
         }),
         (None, Some(api_key)) => Ok(Connection {
             api,
             base_url: options.and_then(|options| options.url.clone()),
             api_key: Some(api_key),
             shape,
+            proxy,
         }),
         (None, None) => bail!(
             "{} needs an API key: save one on its Models page{}",
@@ -258,6 +267,7 @@ mod routes {
                     base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                     api_key: None,
                     shape: Default::default(),
+                    proxy: Default::default(),
                 }),
                 AsrRoute::Upload(
                     "http://127.0.0.1:8080/inference".to_string(),
@@ -288,6 +298,7 @@ mod routes {
                 base_url: None,
                 api_key: Some("sk-groq".to_string()),
                 shape: Default::default(),
+                proxy: Default::default(),
             })
         );
     }
@@ -313,6 +324,7 @@ mod routes {
                     base_url: None,
                     api_key: Some("sk-ant".to_string()),
                     shape: Default::default(),
+                    proxy: Default::default(),
                 },
                 Connection {
                     api: Api::Compatible,
@@ -322,6 +334,7 @@ mod routes {
                         chat_api: Some(ChatApi::ChatCompletions),
                         ..Shape::default()
                     },
+                    proxy: Default::default(),
                 },
             ]
         );
@@ -347,12 +360,14 @@ mod routes {
                     base_url: Some("http://127.0.0.1:4000".to_string()),
                     api_key: None,
                     shape: Default::default(),
+                    proxy: Default::default(),
                 },
                 AsrRoute::Api(Connection {
                     api: Api::Gemini,
                     base_url: Some("http://10.0.0.2:9000/v1beta".to_string()),
                     api_key: Some("sk-gemini".to_string()),
                     shape: Default::default(),
+                    proxy: Default::default(),
                 })
             )
         );

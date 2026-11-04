@@ -277,9 +277,11 @@ pub async fn save_provider(
     };
     let file = paths.config_file.clone();
     // The writes wait on a file lock; keep them off the caller's runtime thread.
-    tokio::task::spawn_blocking(move || config::update_provider(&file, &values, role, &key))
-        .await
-        .context("the config writer stopped")??;
+    tokio::task::spawn_blocking(move || {
+        config::update(&file, &values, config::Secret::Key(role), &key)
+    })
+    .await
+    .context("the config writer stopped")??;
     reload(paths, &request).await
 }
 

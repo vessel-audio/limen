@@ -80,8 +80,9 @@ pub async fn balance(paths: &Paths, role: ModelRole) -> Option<(Service, Result<
         ) => return None,
     };
     let asked = async {
-        let http = reqwest::Client::builder()
-            .timeout(TIMEOUT)
+        let http = connection
+            .proxy
+            .route(reqwest::Client::builder().timeout(TIMEOUT))?
             .build()
             .context("failed to build the balance HTTP client")?;
         match ask {

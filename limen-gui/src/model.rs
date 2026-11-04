@@ -50,6 +50,10 @@ pub enum Toast {
     ProviderSaved(ModelRole),
     /// The model answered a check.
     ModelWorks(ModelRole),
+    /// The running daemon uses the saved proxy from now on.
+    NetworkApplied,
+    /// The proxy is saved for when the daemon next starts.
+    NetworkSaved,
 }
 
 /// Side effects requested by a pure state transition.

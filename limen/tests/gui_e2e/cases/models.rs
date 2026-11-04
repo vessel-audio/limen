@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use atspi::{Role, State};
 use limen_core::{ChatApi, Config, Format, ProviderOptions, Service, v1};
 
-use super::retype;
+use super::{reloads, retype};
 use crate::daemon::Scenario;
 use crate::desktop::{Button, Key, Node};
 use crate::session::{Session, Target};
@@ -151,14 +151,6 @@ fn type_model(session: &Session, model: &str) -> Result<()> {
     })?;
     session.chord(&[Key::RETURN])?;
     closed(session)
-}
-
-fn reloads(session: &Session, request: &v1::Request) -> Result<usize> {
-    Ok(session
-        .requests()?
-        .iter()
-        .filter(|sent| *sent == request)
-        .count())
 }
 
 /// The Models button on the dictation page opens the Providers page.

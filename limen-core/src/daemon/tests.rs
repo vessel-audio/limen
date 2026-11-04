@@ -498,7 +498,7 @@ fn provider_reload_applies_only_a_valid_config() {
     assert_eq!(harness.actor.reload_provider(), Reply::Ok);
     assert_eq!(
         harness.session.try_recv(),
-        Ok(SessionCommand::Provider(ProviderConfig {
+        Ok(SessionCommand::Provider(Box::new(ProviderConfig {
             service: None,
             format: None,
             url: "https://asr.example/v1?api-version=1".to_string(),
@@ -507,7 +507,8 @@ fn provider_reload_applies_only_a_valid_config() {
             api_key_env: None,
             options: Default::default(),
             saved_key: None,
-        }))
+            proxy: Default::default(),
+        })))
     );
     assert_eq!(
         harness._snapshots.borrow_and_update().config,

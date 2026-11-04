@@ -81,6 +81,7 @@ fn together(base_url: String, shape: Shape) -> Connection {
         base_url: Some(base_url),
         api_key: Some("sk-together".to_string()),
         shape,
+        proxy: Default::default(),
     }
 }
 

@@ -5,6 +5,7 @@
 use anyhow::{Context, Result, bail};
 
 use crate::backend::{BoxFuture, Shape, Take, Transcriber, Transcript, Transient, Usage};
+use crate::config::Proxy;
 
 pub struct Server {
     http: reqwest::Client,
@@ -15,11 +16,18 @@ pub struct Server {
 }
 
 impl Server {
-    /// The server at exactly `url`, its requests shaped as `shape` says.
-    /// Fails where no HTTP client can be built, such as on a system without
-    /// CA certificates.
-    pub fn new(url: String, model: String, api_key: Option<String>, shape: Shape) -> Result<Self> {
-        let http = reqwest::Client::builder()
+    /// The server at exactly `url`, its requests shaped as `shape` says
+    /// and sent through `proxy`. Fails where no HTTP client can be built,
+    /// such as on a system without CA certificates.
+    pub fn new(
+        url: String,
+        model: String,
+        api_key: Option<String>,
+        shape: Shape,
+        proxy: &Proxy,
+    ) -> Result<Self> {
+        let http = proxy
+            .route(reqwest::Client::builder())?
             .build()
             .context("failed to build the transcription HTTP client")?;
         Ok(Self {
@@ -103,6 +111,7 @@ mod tests {
 
     use super::Server;
     use crate::backend::{Shape, Take, Transcriber};
+    use crate::config::{ApiKey, Proxy, ProxyLogin};
 
     /// A server that answers one request with `status` and `body`, and
     /// returns the request it read.
@@ -157,6 +166,66 @@ mod tests {
         }
     }
 
+    /// Through a manual proxy, the take goes to the proxy, which is signed
+    /// in to with the login and told the server's full URL.
+    #[tokio::test]
+    async fn a_manual_proxy_carries_the_take_and_its_login() {
+        let (proxy, server) = mock_server("200 OK", json!({"text": "ok"}).to_string()).await;
+        let transcriber = Server::new(
+            "http://asr.invalid/inference".to_string(),
+            "test-model".to_string(),
+            None,
+            Default::default(),
+            &Proxy::Manual {
+                url: proxy.trim_end_matches("/inference").to_string(),
+                login: Some(ProxyLogin {
+                    username: "me".to_string(),
+                    password: Some(ApiKey::new("p@ss".to_string())),
+                }),
+                bypass: String::new(),
+            },
+        )
+        .unwrap();
+
+        transcriber.transcribe(take(None)).await.unwrap();
+
+        let request = String::from_utf8_lossy(&server.await.unwrap()).into_owned();
+        assert!(
+            request.starts_with("POST http://asr.invalid/inference "),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("proxy-authorization: basic bwu6cebzcw=="),
+            "{request}"
+        );
+    }
+
+    /// A host the bypass list names is reached directly, even while the
+    /// proxy is down.
+    #[tokio::test]
+    async fn a_bypassed_host_is_reached_directly() {
+        let (url, server) = mock_server("200 OK", json!({"text": "ok"}).to_string()).await;
+        let transcriber = Server::new(
+            url,
+            "test-model".to_string(),
+            None,
+            Default::default(),
+            &Proxy::Manual {
+                url: "http://127.0.0.1:9".to_string(),
+                login: None,
+                bypass: "localhost, 127.0.0.1, ::1".to_string(),
+            },
+        )
+        .unwrap();
+
+        transcriber.transcribe(take(None)).await.unwrap();
+
+        let request = String::from_utf8_lossy(&server.await.unwrap()).into_owned();
+        assert!(request.starts_with("POST /inference "), "{request}");
+    }
+
     #[tokio::test]
     async fn the_take_is_uploaded_to_exactly_the_configured_url() {
         let (url, server) = mock_server("200 OK", json!({"text": "完整文本"}).to_string()).await;
@@ -165,6 +234,7 @@ mod tests {
             "test-model".to_string(),
             Some("sk-asr".to_string()),
             Default::default(),
+            &Proxy::Direct,
         )
         .unwrap();
 
@@ -190,8 +260,14 @@ mod tests {
     #[tokio::test]
     async fn no_key_and_automatic_language_send_neither() {
         let (url, server) = mock_server("200 OK", json!({"text": ""}).to_string()).await;
-        let transcriber =
-            Server::new(url, "test-model".to_string(), None, Default::default()).unwrap();
+        let transcriber = Server::new(
+            url,
+            "test-model".to_string(),
+            None,
+            Default::default(),
+            &Proxy::Direct,
+        )
+        .unwrap();
 
         transcriber.transcribe(take(None)).await.unwrap();
 
@@ -217,6 +293,7 @@ mod tests {
             "test-model".to_string(),
             Some("sk-asr".to_string()),
             shape,
+            &Proxy::Direct,
         )
         .unwrap();
 
@@ -242,8 +319,14 @@ mod tests {
             ("200 OK", "not-json"),
         ] {
             let (url, server) = mock_server(status, body.to_string()).await;
-            let transcriber =
-                Server::new(url, "test-model".to_string(), None, Default::default()).unwrap();
+            let transcriber = Server::new(
+                url,
+                "test-model".to_string(),
+                None,
+                Default::default(),
+                &Proxy::Direct,
+            )
+            .unwrap();
 
             assert!(
                 transcriber.transcribe(take(None)).await.is_err(),

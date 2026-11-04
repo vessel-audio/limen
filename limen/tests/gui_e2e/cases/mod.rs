@@ -5,13 +5,14 @@ mod history;
 mod lifecycle;
 mod models;
 mod navigation;
+mod network;
 mod settings;
 mod shortcuts;
 mod usage;
 mod window;
 
 use anyhow::Result;
-use limen_core::{HistoryEntry, HistoryOutcome, RequestEntry, RequestOutcome};
+use limen_core::{HistoryEntry, HistoryOutcome, RequestEntry, RequestOutcome, v1};
 
 use crate::Case;
 use crate::desktop::Key;
@@ -77,6 +78,8 @@ pub const ALL: &[Case] = cases![
     settings::the_font_select_applies_a_family,
     settings::lightweight_mode_skips_motion,
     settings::the_scrollbar_drags_the_settings_page,
+    network::a_manual_proxy_is_saved_and_applied,
+    network::a_proxy_url_with_a_login_is_refused,
     lifecycle::stopping_asks_first_and_start_brings_it_back,
     lifecycle::restarting_replaces_the_daemon,
     lifecycle::a_failed_start_offers_the_log,
@@ -110,6 +113,15 @@ pub fn failed_request(take: u64, error: &str) -> RequestEntry {
             error: error.to_string(),
         },
     }
+}
+
+/// How many times the daemon was sent `request`.
+pub fn reloads(session: &Session, request: &v1::Request) -> Result<usize> {
+    Ok(session
+        .requests()?
+        .iter()
+        .filter(|sent| *sent == request)
+        .count())
 }
 
 /// Replace a text field's contents by typing, as a user does.
