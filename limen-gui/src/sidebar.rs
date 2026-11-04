@@ -4,7 +4,8 @@
 //! the window edge and labels start at 48px. Collapsing narrows the sidebar to
 //! its icon column, which keeps every icon in place. The expanded sidebar is
 //! as wide as its edge is dragged; dragged narrower still, it collapses, and
-//! dragged back out, it expands again. Settings sit at the sidebar's foot.
+//! dragged back out, it expands again. Collapsing keeps the width it was
+//! dragged to, which the toggle and a drag back out both reopen it at. Settings sit at the sidebar's foot.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
@@ -51,6 +52,19 @@ impl SidebarMode {
             Self::Collapsed => 0.,
         }
     }
+}
+
+/// A press on the sidebar's edge, and the drag that may follow.
+#[derive(Debug, Clone, Copy)]
+pub struct EdgePress {
+    /// Where the edge was pressed.
+    at: Pixels,
+    /// How wide the sidebar was drawn when the drag started, which the
+    /// toggle's spring may not have reached yet.
+    drawn: Option<Pixels>,
+    /// The width the user had set before the press.
+    kept: Pixels,
+    mode: SidebarMode,
 }
 
 /// The sidebar's edge being dragged; it draws nothing under the pointer.
@@ -162,25 +176,41 @@ impl AppView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, _| {
-                    this.sidebar_press = Some((event.position.x, None));
+                    this.sidebar_press = Some(EdgePress {
+                        at: event.position.x,
+                        drawn: None,
+                        kept: this.sidebar_width,
+                        mode: this.sidebar_mode,
+                    });
                 }),
             )
             .on_drag(Resizing, |drag, _, _, cx| cx.new(|_| drag.clone()))
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<Resizing>, _, cx| {
-                // The width the drag starts from is the one drawn when it
-                // starts, which the toggle's spring may not have reached yet.
-                let (pressed, width) = match this.sidebar_press {
-                    Some((pressed, Some(width))) => (pressed, width),
-                    Some((pressed, None)) => (pressed, event.bounds.right()),
-                    None => return,
+                let Some(press) = this.sidebar_press else {
+                    return;
                 };
-                this.sidebar_press = Some((pressed, Some(width)));
-                let wanted = f32::from(width + event.event.position.x - pressed);
+                let drawn = press.drawn.unwrap_or(event.bounds.right());
+                this.sidebar_press = Some(EdgePress {
+                    drawn: Some(drawn),
+                    ..press
+                });
+                let wanted = f32::from(drawn + event.event.position.x - press.at);
+                // A collapsed sidebar dragged out opens as wide as it was
+                // kept; only a drag past that widens it.
+                let narrowest = match press.mode {
+                    SidebarMode::Expanded => MIN_WIDTH,
+                    SidebarMode::Collapsed => f32::from(press.kept),
+                };
                 match wanted < COLLAPSE_BELOW {
-                    true => this.sidebar_mode = SidebarMode::Collapsed,
+                    // Collapsing keeps the width set before this drag, not
+                    // the one it passed on its way in.
+                    true => {
+                        this.sidebar_mode = SidebarMode::Collapsed;
+                        this.sidebar_width = press.kept;
+                    }
                     false => {
                         this.sidebar_mode = SidebarMode::Expanded;
-                        this.sidebar_width = px(wanted.clamp(MIN_WIDTH, MAX_WIDTH));
+                        this.sidebar_width = px(wanted.clamp(narrowest, MAX_WIDTH));
                     }
                 }
                 cx.notify();

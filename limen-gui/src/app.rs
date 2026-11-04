@@ -46,9 +46,8 @@ pub struct AppView {
     pub sidebar_mode: crate::sidebar::SidebarMode,
     /// The expanded sidebar's width, as its edge was last dragged.
     pub sidebar_width: Pixels,
-    /// Where the sidebar's edge was last pressed, and how wide the sidebar
-    /// was drawn when the drag from it started.
-    pub sidebar_press: Option<(Pixels, Option<Pixels>)>,
+    /// The last press on the sidebar's edge, and the drag from it.
+    pub sidebar_press: Option<crate::sidebar::EdgePress>,
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_scale: FontScale,

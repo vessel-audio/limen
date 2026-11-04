@@ -53,7 +53,9 @@ pub fn sidebar_collapses_to_icons_and_back() -> Result<()> {
 }
 
 /// Dragging the sidebar's edge resizes it; dragged far enough in, it
-/// collapses to its icons, and dragged back out it expands again.
+/// collapses to its icons. The width it was dragged to is kept: the toggle
+/// and a drag back out both reopen it that wide, and a drag from there
+/// resizes it again.
 pub fn dragging_the_sidebar_edge_resizes_and_collapses_it() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     // A tab spans the sidebar but its 12px padding on each side; the edge
@@ -73,12 +75,25 @@ pub fn dragging_the_sidebar_edge_resizes_and_collapses_it() -> Result<()> {
     session.x11().drag((edge, y), (edge + 60, y))?;
     let (edge, _, wider) = tab()?;
     session.x11().drag((edge, y), (40, y))?;
-    let (edge, _, collapsed) = tab()?;
-    session.x11().drag((edge, y), (edge + 160, y))?;
-    let (_, _, reopened) = tab()?;
+    let (_, _, collapsed) = tab()?;
+    session.click("toggle-sidebar")?;
+    let (_, _, toggled) = tab()?;
+    session.click("toggle-sidebar")?;
+    let (edge, _, _) = tab()?;
+    session.x11().drag((edge, y), (edge + 120, y))?;
+    let (edge, _, reopened) = tab()?;
+    session.x11().drag((edge, y), (edge + 30, y))?;
+    let (_, _, widened) = tab()?;
     ensure!(
-        (wider - start, collapsed * 3 < start, reopened - collapsed) == (60, true, 160),
-        "the tab was {start}px, then {wider}px, {collapsed}px, and {reopened}px wide"
+        (
+            wider - start,
+            collapsed * 3 < start,
+            toggled,
+            reopened,
+            widened - wider
+        ) == (60, true, wider, wider, 30),
+        "the tab was {start}px, then {wider}px, {collapsed}px, {toggled}px toggled open, \
+         {reopened}px dragged open, and {widened}px"
     );
     Ok(())
 }
