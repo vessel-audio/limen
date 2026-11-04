@@ -15,7 +15,7 @@ const READY: &str = "Service ready";
 pub fn stopping_asks_first_and_start_brings_it_back() -> Result<()> {
     let session = Session::real()?;
     session.named("connection-status", READY)?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.click("stop-daemon")?;
     session.node("shutdown-confirmation")?;
     session.click("cancel-shutdown")?;
@@ -39,7 +39,7 @@ pub fn restarting_replaces_the_daemon() -> Result<()> {
     let session = Session::real()?;
     session.named("connection-status", READY)?;
     let before = session.daemon_pid()?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.click("restart-daemon")?;
     session.until("a new daemon", || {
         Ok(session.daemon_pid().is_ok_and(|pid| pid != before))

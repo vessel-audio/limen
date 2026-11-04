@@ -11,7 +11,7 @@ use crate::session::{Launch, Session};
 /// The tabs switch between the General controls and the About card.
 pub fn settings_tabs_switch_between_general_and_about() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.click("settings-tab-about")?;
     session.state("settings-tab-about", State::Selected, true)?;
     session.named("current-page", "About")?;
@@ -41,7 +41,7 @@ pub fn appearance_follows_the_choice_and_the_system() -> Result<()> {
         scheme: SystemScheme::PreferDark,
         ..Launch::default()
     })?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.until("the system's dark scheme", || dark(&session))?;
     for (choice, wanted) in [
         ("appearance-light", false),
@@ -64,8 +64,8 @@ pub fn language_choice_renames_the_interface() -> Result<()> {
         lang: "zh_CN.UTF-8",
         ..Launch::default()
     })?;
-    session.named("open-settings", "设置")?;
-    session.click("open-settings")?;
+    session.named("settings-page", "设置")?;
+    session.click("settings-page")?;
     for (choice, settings, dictation) in [
         ("language-english", "Settings", "Dictation"),
         ("language-chinese", "设置", "听写"),
@@ -73,7 +73,7 @@ pub fn language_choice_renames_the_interface() -> Result<()> {
         ("language-system", "设置", "听写"),
     ] {
         session.click(choice)?;
-        session.named("open-settings", settings)?;
+        session.named("settings-page", settings)?;
         session.named("dictation-page", dictation)?;
     }
     Ok(())
@@ -83,13 +83,13 @@ pub fn language_choice_renames_the_interface() -> Result<()> {
 /// 125% makes text taller, and 100% restores it.
 pub fn the_text_scale_resizes_the_interface() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.state("font-scale-100", State::Checked, true)?;
     let height = || -> Result<i32> {
         Ok(session
-            .settled("settings-tab-general")?
+            .settled("page-title")?
             .bounds
-            .context("no tab")?
+            .context("no title")?
             .height)
     };
     let normal = height()?;
@@ -110,7 +110,7 @@ pub fn the_text_scale_resizes_the_interface() -> Result<()> {
 /// which changes how wide text sets; following the system restores it.
 pub fn the_font_select_applies_a_family() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     let width = || -> Result<i32> {
         Ok(session
             .settled("current-page")?
@@ -146,7 +146,7 @@ pub fn the_font_select_applies_a_family() -> Result<()> {
 /// sidebar collapses at once instead of springing.
 pub fn lightweight_mode_skips_motion() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.reveal("lightweight-on")?;
     session.click("lightweight-on")?;
     session.state("lightweight-on", State::Checked, true)?;
@@ -166,10 +166,12 @@ pub fn lightweight_mode_skips_motion() -> Result<()> {
 }
 
 /// Dragging the always-visible scrollbar scrolls General settings to the
-/// service controls at the bottom.
+/// service controls at the bottom. Larger text pushes them below the view.
 pub fn the_scrollbar_drags_the_settings_page() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
+    session.click("font-scale-150")?;
+    session.state("font-scale-150", State::Checked, true)?;
     let view = session.wait("the settings scroll view", |nodes| {
         let index = nodes.iter().position(|node| node.id == "appearance-dark")?;
         viewport(nodes, index)

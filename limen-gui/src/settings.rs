@@ -9,6 +9,7 @@ use gpui_kit::*;
 use crate::a11y;
 use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
+use crate::sidebar::SidebarMode;
 
 mod font_scale;
 mod segmented;
@@ -16,7 +17,8 @@ mod segmented;
 pub use font_scale::FontScale;
 pub(crate) use segmented::{Segment, segmented};
 
-/// Settings subpages shown below the sidebar's Settings item.
+/// Settings subpages, listed below Settings in the expanded sidebar and
+/// atop the settings page while the sidebar is collapsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPage {
     General,
@@ -317,13 +319,12 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
         )
 }
 
-/// The settings title above tabs for its subpages.
+/// The settings title, above tabs for its subpages while the collapsed
+/// sidebar cannot list them.
 fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
-    div()
-        .v_flex()
-        .gap_4()
-        .child(crate::pages::title(rust_i18n::t!("settings.title")))
-        .child(
+    let tabs = match view.sidebar_mode {
+        SidebarMode::Expanded => None,
+        SidebarMode::Collapsed => Some(
             div()
                 .id("settings-tabs")
                 .accessibility_id("settings-tabs")
@@ -371,7 +372,13 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         }
                     }),
                 ),
-        )
+        ),
+    };
+    div()
+        .v_flex()
+        .gap_4()
+        .child(crate::pages::title(rust_i18n::t!("settings.title")))
+        .children(tabs)
 }
 
 /// One settings row: the title and description under `key` beside a control.

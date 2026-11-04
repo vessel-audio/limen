@@ -2,7 +2,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, button::ButtonVariants,
+    ActiveTheme, Icon, Sizable, StyledExt, TitleBar, button::ButtonVariants,
 };
 use gpui_kit::*;
 
@@ -178,27 +178,6 @@ impl AppView {
                                 false => dot.into_any_element(),
                             })
                             .child(status),
-                    )
-                    // Settings live outside the sidebar, one press away from
-                    // any page; the press must not start a window drag.
-                    .child(
-                        div()
-                            .ml_3()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(
-                                a11y::button("open-settings")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Settings)
-                                    .selected(matches!(self.page, Page::Settings(_)))
-                                    .tooltip(rust_i18n::t!("settings.title").to_string())
-                                    .accessibility_label(
-                                        rust_i18n::t!("settings.title").to_string(),
-                                    )
-                                    .on_click(cx.listener(|this, _, _, _| {
-                                        this.page = Page::Settings(SettingsPage::General);
-                                    })),
-                            ),
                     ),
             )
     }

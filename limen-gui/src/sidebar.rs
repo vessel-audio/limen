@@ -4,7 +4,7 @@
 //! the window edge and labels start at 48px. Collapsing narrows the sidebar to
 //! its icon column, which keeps every icon in place. The expanded sidebar is
 //! as wide as its edge is dragged; dragged narrower still, it collapses, and
-//! dragged back out, it expands again.
+//! dragged back out, it expands again. Settings sit at the sidebar's foot.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
@@ -12,6 +12,7 @@ use gpui_kit::*;
 
 use crate::app::{AppView, Page};
 use crate::motion;
+use crate::settings::SettingsPage;
 
 const ROW_HEIGHT: f32 = 34.;
 const ROW_GAP: f32 = 4.;
@@ -65,9 +66,16 @@ impl Render for Resizing {
 /// One navigable sidebar destination.
 struct Destination {
     id: &'static str,
-    icon: IconName,
+    lead: Lead,
     label: SharedString,
     page: Page,
+}
+
+/// What a row shows in the icon column.
+enum Lead {
+    Icon(IconName),
+    /// Nothing, so a subpage's label lines up under its parent's.
+    Indent,
 }
 
 impl AppView {
@@ -75,19 +83,19 @@ impl AppView {
         let workspace = [
             Destination {
                 id: "dictation-page",
-                icon: IconName::Mic,
+                lead: Lead::Icon(IconName::Mic),
                 label: rust_i18n::t!("nav.dictation").into(),
                 page: Page::Dictation,
             },
             Destination {
                 id: "history-page",
-                icon: IconName::Clock,
+                lead: Lead::Icon(IconName::Clock),
                 label: rust_i18n::t!("nav.history").into(),
                 page: Page::History,
             },
             Destination {
                 id: "shortcuts-page",
-                icon: IconName::Keyboard,
+                lead: Lead::Icon(IconName::Keyboard),
                 label: rust_i18n::t!("nav.shortcuts").into(),
                 page: Page::Shortcuts,
             },
@@ -95,13 +103,13 @@ impl AppView {
         let models = [
             Destination {
                 id: "providers-page",
-                icon: IconName::Boxes,
+                lead: Lead::Icon(IconName::Boxes),
                 label: rust_i18n::t!("nav.providers").into(),
                 page: Page::Providers,
             },
             Destination {
                 id: "usage-page",
-                icon: IconName::ChartColumn,
+                lead: Lead::Icon(IconName::ChartColumn),
                 label: rust_i18n::t!("nav.usage").into(),
                 page: Page::Usage,
             },
@@ -126,6 +134,7 @@ impl AppView {
                 models,
                 cx,
             ))
+            .child(self.settings(cx))
             .with_spring(
                 "sidebar-width",
                 SpringAnimation::new(motion::SPRING)
@@ -186,41 +195,9 @@ impl AppView {
         destinations: [Destination; N],
         cx: &mut Context<Self>,
     ) -> Div {
-        let labels = self.sidebar_mode.label_opacity();
         let selected = destinations
             .iter()
             .position(|destination| destination.page == self.page);
-        // One card per group springs to the selected row and fades out while
-        // a page outside the group is shown.
-        let highlight = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .h(px(ROW_HEIGHT))
-            .child(
-                div()
-                    .size_full()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .shadow_xs()
-                    .with_spring(
-                        SharedString::from(format!("{id}-highlight-opacity")),
-                        SpringAnimation::new(motion::SPRING).to(match selected {
-                            Some(_) => 1.,
-                            None => 0.,
-                        }),
-                        |highlight, opacity| highlight.opacity(opacity.clamp(0., 1.)),
-                    ),
-            )
-            .with_spring(
-                SharedString::from(format!("{id}-highlight-top")),
-                SpringAnimation::new(motion::SPRING).to(px(
-                    selected.unwrap_or_default() as f32 * (ROW_HEIGHT + ROW_GAP)
-                )),
-                |highlight, top| highlight.top(top),
-            );
         div()
             .v_flex()
             .child(
@@ -236,7 +213,7 @@ impl AppView {
                     .child(title.clone())
                     .with_spring(
                         SharedString::from(format!("{id}-label")),
-                        SpringAnimation::new(motion::SPRING).to(labels),
+                        SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.label_opacity()),
                         |label, opacity| label.opacity(opacity.clamp(0., 1.)),
                     ),
             )
@@ -249,55 +226,194 @@ impl AppView {
                     .relative()
                     .v_flex()
                     .gap(px(ROW_GAP))
-                    .child(highlight)
-                    .children(destinations.into_iter().map(|destination| {
-                        let page = destination.page;
-                        let label = destination.label.clone();
-                        let row = div()
-                            .id(destination.id)
-                            .role(Role::Tab)
-                            .accessibility_id(destination.id)
-                            .aria_label(label.clone())
-                            .aria_selected(self.page == page)
-                            .h_flex()
-                            .w_full()
-                            .h(px(ROW_HEIGHT))
-                            .items_center()
-                            .gap(px(10.))
-                            .rounded_lg()
-                            .px(px(10.))
-                            .overflow_hidden()
-                            .text_sm()
-                            .cursor_pointer()
-                            .child(Icon::new(destination.icon).flex_shrink_0().size(px(16.)))
-                            // Fade as well as clip, so no glyph edge peeks
-                            // past the icon column while collapsed.
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .whitespace_nowrap()
-                                    .child(destination.label)
-                                    .with_spring(
-                                        SharedString::from(format!("{}-label", destination.id)),
-                                        SpringAnimation::new(motion::SPRING).to(labels),
-                                        |label, opacity| label.opacity(opacity.clamp(0., 1.)),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, _, _| this.page = page));
-                        let row = match self.sidebar_mode {
-                            SidebarMode::Expanded => row,
-                            SidebarMode::Collapsed => row.tooltip(move |window, cx| {
-                                Tooltip::new(label.clone()).build(window, cx)
-                            }),
-                        };
-                        match self.page == page {
-                            true => row.text_color(cx.theme().foreground).font_medium(),
-                            false => row
-                                .text_color(cx.theme().muted_foreground)
-                                .hover(|style| style.bg(cx.theme().accent))
-                                .active(|style| style.bg(cx.theme().border)),
-                        }
-                    })),
+                    .child(highlight(id, selected, cx))
+                    .children(
+                        destinations
+                            .into_iter()
+                            .map(|destination| self.row(destination, cx)),
+                    ),
             )
     }
+
+    /// Settings at the foot of the sidebar. While a settings page is shown,
+    /// its subpages unfold below it in the expanded sidebar; the collapsed
+    /// one has no room for their labels, so the settings page lists them
+    /// at its top instead.
+    fn settings(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let title: SharedString = rust_i18n::t!("settings.title").into();
+        let subpages = [
+            Destination {
+                id: "settings-tab-general",
+                lead: Lead::Indent,
+                label: rust_i18n::t!("settings.general").into(),
+                page: Page::Settings(SettingsPage::General),
+            },
+            Destination {
+                id: "settings-tab-about",
+                lead: Lead::Indent,
+                label: rust_i18n::t!("about.menu").into(),
+                page: Page::Settings(SettingsPage::About),
+            },
+        ];
+        let (open, current) = match (self.sidebar_mode, self.page) {
+            (SidebarMode::Expanded, Page::Settings(page)) => (true, page),
+            (SidebarMode::Collapsed, Page::Settings(page)) => (false, page),
+            (
+                SidebarMode::Expanded | SidebarMode::Collapsed,
+                Page::Dictation | Page::History | Page::Shortcuts | Page::Providers | Page::Usage,
+            ) => (false, SettingsPage::General),
+        };
+        // The highlight rests on the open subpage, or on Settings itself
+        // while its subpages are folded away.
+        let selected = match (open, self.page) {
+            (true, page) => subpages
+                .iter()
+                .position(|subpage| subpage.page == page)
+                .map(|index| index + 1),
+            (false, Page::Settings(_)) => Some(0),
+            (
+                false,
+                Page::Dictation | Page::History | Page::Shortcuts | Page::Providers | Page::Usage,
+            ) => None,
+        };
+        let unfolded = match open {
+            true => subpages.len() as f32 * (ROW_HEIGHT + ROW_GAP),
+            false => 0.,
+        };
+        // Rows exist only while unfolded, so a folded list leaves no tabs
+        // behind for assistive technology to find.
+        let rows = match open {
+            true => subpages
+                .into_iter()
+                .map(|subpage| self.row(subpage, cx).mt(px(ROW_GAP)))
+                .collect(),
+            false => Vec::new(),
+        };
+        div()
+            .id("settings-navigation")
+            .accessibility_id("settings-navigation")
+            .role(Role::TabList)
+            .aria_label(title.clone())
+            .relative()
+            .mt_auto()
+            .pb_1()
+            .v_flex()
+            .child(highlight("settings-navigation", selected, cx))
+            .child(self.row(
+                Destination {
+                    id: "settings-page",
+                    lead: Lead::Icon(IconName::Settings),
+                    label: title.clone(),
+                    page: Page::Settings(current),
+                },
+                cx,
+            ))
+            .child(
+                div()
+                    .id("settings-tabs")
+                    .accessibility_id("settings-tabs")
+                    .role(Role::TabList)
+                    .aria_label(title)
+                    .v_flex()
+                    .overflow_hidden()
+                    .children(rows)
+                    .with_spring(
+                        "settings-tabs-height",
+                        SpringAnimation::new(motion::SPRING).to(px(unfolded)),
+                        |list, height| list.h(height.max(px(0.))),
+                    ),
+            )
+    }
+
+    /// One destination's row, selected while its page is shown.
+    fn row(&self, destination: Destination, cx: &mut Context<Self>) -> Stateful<Div> {
+        let page = destination.page;
+        let label = destination.label.clone();
+        let lead = match destination.lead {
+            Lead::Icon(icon) => Icon::new(icon)
+                .flex_shrink_0()
+                .size(px(16.))
+                .into_any_element(),
+            Lead::Indent => div().flex_shrink_0().size(px(16.)).into_any_element(),
+        };
+        let row = div()
+            .id(destination.id)
+            .role(Role::Tab)
+            .accessibility_id(destination.id)
+            .aria_label(label.clone())
+            .aria_selected(self.page == page)
+            .h_flex()
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(10.))
+            .rounded_lg()
+            .px(px(10.))
+            .overflow_hidden()
+            .text_sm()
+            .cursor_pointer()
+            .child(lead)
+            // Fade as well as clip, so no glyph edge peeks past the icon
+            // column while collapsed.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .whitespace_nowrap()
+                    .child(destination.label)
+                    .with_spring(
+                        SharedString::from(format!("{}-label", destination.id)),
+                        SpringAnimation::new(motion::SPRING).to(self.sidebar_mode.label_opacity()),
+                        |label, opacity| label.opacity(opacity.clamp(0., 1.)),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, _, _| this.page = page));
+        let row = match self.sidebar_mode {
+            SidebarMode::Expanded => row,
+            SidebarMode::Collapsed => {
+                row.tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+            }
+        };
+        match self.page == page {
+            true => row.text_color(cx.theme().foreground).font_medium(),
+            false => row
+                .text_color(cx.theme().muted_foreground)
+                .hover(|style| style.bg(cx.theme().accent))
+                .active(|style| style.bg(cx.theme().border)),
+        }
+    }
+}
+
+/// The card behind the `selected`th row of the tab list named `id`, which
+/// springs from row to row and fades out while none of its rows is selected.
+fn highlight(id: &str, selected: Option<usize>, cx: &App) -> impl IntoElement {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .h(px(ROW_HEIGHT))
+        .child(
+            div()
+                .size_full()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().background)
+                .shadow_xs()
+                .with_spring(
+                    SharedString::from(format!("{id}-highlight-opacity")),
+                    SpringAnimation::new(motion::SPRING).to(match selected {
+                        Some(_) => 1.,
+                        None => 0.,
+                    }),
+                    |highlight, opacity| highlight.opacity(opacity.clamp(0., 1.)),
+                ),
+        )
+        .with_spring(
+            SharedString::from(format!("{id}-highlight-top")),
+            SpringAnimation::new(motion::SPRING).to(px(
+                selected.unwrap_or_default() as f32 * (ROW_HEIGHT + ROW_GAP)
+            )),
+            |highlight, top| highlight.top(top),
+        )
 }

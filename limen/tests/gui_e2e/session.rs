@@ -186,7 +186,7 @@ impl Session {
             gui,
             desktop,
         };
-        session.node("open-settings")?;
+        session.node("settings-page")?;
         session.x11().focus_window(APP_ID)?;
         // Controls stay disabled until the daemon's first snapshot; a slow
         // machine would otherwise take a case's first press on one of them.

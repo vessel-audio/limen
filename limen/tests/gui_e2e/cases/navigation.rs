@@ -1,7 +1,7 @@
-//! Sidebar navigation, the sidebar toggle, and the settings button.
+//! Sidebar navigation, the sidebar toggle, and the settings subpages.
 
 use anyhow::{Context, Result, ensure};
-use atspi::{Role, State};
+use atspi::State;
 
 use crate::daemon::Scenario;
 use crate::desktop::Key;
@@ -83,38 +83,78 @@ pub fn dragging_the_sidebar_edge_resizes_and_collapses_it() -> Result<()> {
     Ok(())
 }
 
-/// The title bar's icon buttons explain themselves on hover.
-pub fn title_bar_buttons_show_tooltips() -> Result<()> {
+/// The sidebar toggle explains itself on hover.
+pub fn the_sidebar_toggle_shows_a_tooltip() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    for id in ["toggle-sidebar", "open-settings"] {
-        let (button, tooltip) = session.tooltip(id)?;
-        let (button, tooltip) = (
-            button.bounds.context("button is off screen")?,
-            tooltip.bounds.context("tooltip is off screen")?,
-        );
-        ensure!(
-            (tooltip.x - button.x).abs() < 200 && tooltip.y > button.y,
-            "the tooltip at {tooltip:?} is not beside the button at {button:?}"
-        );
-        session.x11().move_to(400, 400)?;
-        session.wait("the tooltip to close", |nodes| {
-            (!nodes.iter().any(|node| node.role == Role::ToolTip)).then_some(())
-        })?;
-    }
+    let (button, tooltip) = session.tooltip("toggle-sidebar")?;
+    let (button, tooltip) = (
+        button.bounds.context("button is off screen")?,
+        tooltip.bounds.context("tooltip is off screen")?,
+    );
+    ensure!(
+        (tooltip.x - button.x).abs() < 200 && tooltip.y > button.y,
+        "the tooltip at {tooltip:?} is not beside the button at {button:?}"
+    );
     Ok(())
 }
 
-/// The settings button opens General settings from any page, and the
-/// sidebar then selects nothing until it navigates again.
-pub fn settings_button_opens_general_settings() -> Result<()> {
+/// Settings, at the sidebar's foot, opens General settings from any page
+/// and unfolds its subpages below itself; leaving settings folds them away.
+pub fn settings_unfold_their_subpages_in_the_sidebar() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
+    let history = session.settled("history-page")?.bounds.context("no tab")?;
+    let settings = session.settled("settings-page")?.bounds.context("no tab")?;
+    ensure!(
+        settings.y > history.y + 200,
+        "Settings at {settings:?} is not at the sidebar's foot below {history:?}"
+    );
+    session.absent("settings-tab-general")?;
     session.click("history-page")?;
-    session.click("open-settings")?;
+    session.click("settings-page")?;
     session.named("current-page", "General")?;
     session.state("settings-tab-general", State::Selected, true)?;
     session.state("history-page", State::Selected, false)?;
+    let general = session
+        .settled("settings-tab-general")?
+        .bounds
+        .context("no subpage")?;
+    ensure!(
+        (general.y > settings.y - 100, general.x == history.x) == (true, true),
+        "the subpage at {general:?} is not under Settings in the sidebar"
+    );
     session.click("dictation-page")?;
     session.named("current-page", "Dictation")?;
+    session.absent("settings-tab-general")?;
+    Ok(())
+}
+
+/// While the sidebar is collapsed, the settings subpages move to the top
+/// of the settings page, and Settings names itself in a tooltip.
+pub fn a_collapsed_sidebar_moves_the_settings_subpages_atop_the_page() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    session.click("settings-page")?;
+    let unfolded = session
+        .settled("settings-tab-about")?
+        .bounds
+        .context("no subpage")?;
+    session.click("toggle-sidebar")?;
+    session.tooltip("settings-page")?;
+    let title = session.settled("page-title")?.bounds.context("no title")?;
+    let atop = session
+        .settled("settings-tab-about")?
+        .bounds
+        .context("no subpage")?;
+    ensure!(
+        (
+            atop.x > unfolded.x,
+            atop.y > title.y,
+            atop.y < title.y + 100
+        ) == (true, true, true),
+        "the tab at {atop:?} is not below the title at {title:?}"
+    );
+    session.click("settings-tab-about")?;
+    session.named("current-page", "About")?;
+    session.state("settings-page", State::Selected, true)?;
     Ok(())
 }
 
@@ -132,6 +172,13 @@ pub fn the_keyboard_reaches_and_presses_controls() -> Result<()> {
                 .filter(|focused| Some(focused.as_str()) != previous)
         })
     };
+    let width = || -> Result<i32> {
+        Ok(session
+            .settled("history-page")?
+            .bounds
+            .context("tab is off screen")?
+            .width)
+    };
     session.click("shortcuts-page")?;
     session.click("backend-portal")?;
     session.click("toggle-input")?;
@@ -142,11 +189,13 @@ pub fn the_keyboard_reaches_and_presses_controls() -> Result<()> {
         // before it moves would put Enter on a control one Tab ahead.
         let focused = focus(seen.last().map(String::as_str))?;
         seen.push(focused.clone());
-        if focused.contains(":open-settings:") {
+        if focused.contains(":toggle-sidebar:") {
+            let expanded = width()?;
             session.chord(&[Key::RETURN])?;
-            session.named("current-page", "General")?;
-            return Ok(());
+            return session.until("Enter to collapse the sidebar", || {
+                Ok(width()? * 3 < expanded)
+            });
         }
     }
-    anyhow::bail!("Tab never reached the settings button: {seen:?}")
+    anyhow::bail!("Tab never reached the sidebar toggle: {seen:?}")
 }
