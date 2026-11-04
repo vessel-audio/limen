@@ -102,12 +102,6 @@ impl AppView {
                 page: Page::Dictation,
             },
             Destination {
-                id: "history-page",
-                lead: Lead::Icon(IconName::Clock),
-                label: rust_i18n::t!("nav.history").into(),
-                page: Page::History,
-            },
-            Destination {
                 id: "shortcuts-page",
                 lead: Lead::Icon(IconName::Keyboard),
                 label: rust_i18n::t!("nav.shortcuts").into(),
@@ -296,7 +290,7 @@ impl AppView {
             (SidebarMode::Collapsed, Page::Settings(page)) => (false, page),
             (
                 SidebarMode::Expanded | SidebarMode::Collapsed,
-                Page::Dictation | Page::History | Page::Shortcuts | Page::Providers | Page::Usage,
+                Page::Dictation | Page::Shortcuts | Page::Providers | Page::Usage,
             ) => (false, SettingsPage::General),
         };
         // The highlight rests on the open subpage, or on Settings itself
@@ -307,10 +301,7 @@ impl AppView {
                 .position(|subpage| subpage.page == page)
                 .map(|index| index + 1),
             (false, Page::Settings(_)) => Some(0),
-            (
-                false,
-                Page::Dictation | Page::History | Page::Shortcuts | Page::Providers | Page::Usage,
-            ) => None,
+            (false, Page::Dictation | Page::Shortcuts | Page::Providers | Page::Usage) => None,
         };
         let unfolded = match open {
             true => subpages.len() as f32 * (ROW_HEIGHT + ROW_GAP),

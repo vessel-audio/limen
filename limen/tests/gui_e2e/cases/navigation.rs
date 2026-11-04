@@ -12,7 +12,6 @@ pub fn sidebar_switches_pages() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.state("dictation-page", State::Selected, true)?;
     for (tab, page) in [
-        ("history-page", "History"),
         ("shortcuts-page", "Shortcuts"),
         ("dictation-page", "Dictation"),
     ] {
@@ -34,19 +33,19 @@ pub fn sidebar_collapses_to_icons_and_back() -> Result<()> {
             .context("tab is off screen")?
             .width)
     };
-    let expanded = width("history-page")?;
+    let expanded = width("shortcuts-page")?;
     session.click("toggle-sidebar")?;
-    let collapsed = width("history-page")?;
+    let collapsed = width("shortcuts-page")?;
     ensure!(
         collapsed * 3 < expanded,
         "collapsed tab is {collapsed}px wide, expanded {expanded}px"
     );
-    session.tooltip("history-page")?;
-    session.click("history-page")?;
-    session.named("current-page", "History")?;
+    session.tooltip("shortcuts-page")?;
+    session.click("shortcuts-page")?;
+    session.named("current-page", "Shortcuts")?;
     session.click("toggle-sidebar")?;
     ensure!(
-        width("history-page")? == expanded,
+        width("shortcuts-page")? == expanded,
         "the sidebar did not expand"
     );
     Ok(())
@@ -62,7 +61,7 @@ pub fn dragging_the_sidebar_edge_resizes_and_collapses_it() -> Result<()> {
     // lies over the right padding, its middle 8px past the tab.
     let tab = || -> Result<(i32, i32, i32)> {
         let bounds = session
-            .settled("history-page")?
+            .settled("shortcuts-page")?
             .bounds
             .context("tab is off screen")?;
         Ok((
@@ -117,24 +116,27 @@ pub fn the_sidebar_toggle_shows_a_tooltip() -> Result<()> {
 /// and unfolds its subpages below itself; leaving settings folds them away.
 pub fn settings_unfold_their_subpages_in_the_sidebar() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
-    let history = session.settled("history-page")?.bounds.context("no tab")?;
+    let shortcuts = session
+        .settled("shortcuts-page")?
+        .bounds
+        .context("no tab")?;
     let settings = session.settled("settings-page")?.bounds.context("no tab")?;
     ensure!(
-        settings.y > history.y + 200,
-        "Settings at {settings:?} is not at the sidebar's foot below {history:?}"
+        settings.y > shortcuts.y + 200,
+        "Settings at {settings:?} is not at the sidebar's foot below {shortcuts:?}"
     );
     session.absent("settings-tab-general")?;
-    session.click("history-page")?;
+    session.click("shortcuts-page")?;
     session.click("settings-page")?;
     session.named("current-page", "General")?;
     session.state("settings-tab-general", State::Selected, true)?;
-    session.state("history-page", State::Selected, false)?;
+    session.state("shortcuts-page", State::Selected, false)?;
     let general = session
         .settled("settings-tab-general")?
         .bounds
         .context("no subpage")?;
     ensure!(
-        (general.y > settings.y - 100, general.x == history.x) == (true, true),
+        (general.y > settings.y - 100, general.x == shortcuts.x) == (true, true),
         "the subpage at {general:?} is not under Settings in the sidebar"
     );
     session.click("dictation-page")?;
@@ -189,7 +191,7 @@ pub fn the_keyboard_reaches_and_presses_controls() -> Result<()> {
     };
     let width = || -> Result<i32> {
         Ok(session
-            .settled("history-page")?
+            .settled("shortcuts-page")?
             .bounds
             .context("tab is off screen")?
             .width)

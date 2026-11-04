@@ -1,12 +1,12 @@
-//! The transcript history page.
+//! The list of takes on the dictation page: transcripts and failed requests.
 
 use anyhow::{Context, Result, ensure};
 use atspi::Role;
 use limen_core::v1;
 
-use super::kept;
+use super::{failed_request, kept};
 use crate::daemon::Scenario;
-use crate::desktop::{Button, Node};
+use crate::desktop::{Button, Node, viewport};
 use crate::session::Session;
 
 fn notifications(nodes: &[Node]) -> usize {
@@ -23,8 +23,6 @@ pub fn copy_puts_a_transcript_on_the_clipboard() -> Result<()> {
         history: vec![kept(1, "first transcript"), kept(2, "second transcript")],
         ..Scenario::default()
     })?;
-    session.click("history-page")?;
-    session.named("page-title", "History · 2")?;
     session.click("copy-1")?;
     session.clipboard("first transcript")?;
     session.click("copy-2")?;
@@ -54,19 +52,18 @@ pub fn clearing_history_asks_for_confirmation() -> Result<()> {
         history: vec![kept(1, "keep me for now")],
         ..Scenario::default()
     })?;
-    session.click("history-page")?;
     session.click("clear-history")?;
     session.node("clear-confirmation")?;
     session.click("cancel-clear")?;
     session.absent("clear-confirmation")?;
-    session.named("page-title", "History · 1")?;
+    session.node("copy-1")?;
     ensure!(
         !session.requests()?.contains(&v1::Request::ClearHistory),
         "cancelling cleared history"
     );
     session.click("clear-history")?;
     session.click("confirm-clear")?;
-    session.named("page-title", "History · 0")?;
+    session.absent("copy-1")?;
     session.absent("clear-confirmation")?;
     ensure!(
         session.requests()?.contains(&v1::Request::ClearHistory),
@@ -83,7 +80,6 @@ pub fn the_history_scrolls_with_the_wheel() -> Result<()> {
             .collect(),
         ..Scenario::default()
     })?;
-    session.click("history-page")?;
     let before = session.settled("copy-1")?.bounds.context("no bounds")?;
     let (x, y) = session
         .settled("copy-30")?
@@ -98,4 +94,31 @@ pub fn the_history_scrolls_with_the_wheel() -> Result<()> {
     );
     session.click("copy-1")?;
     session.clipboard("transcript number 1")
+}
+
+/// Transcripts and failed requests share one list, newest take first.
+pub fn transcripts_and_failures_share_one_list() -> Result<()> {
+    let failure = failed_request(2, "timed out");
+    let failed = format!("request-2-{}", failure.started_ms);
+    let session = Session::fake(Scenario {
+        history: vec![kept(1, "an earlier take")],
+        requests: vec![failure],
+        ..Scenario::default()
+    })?;
+    let place = |id: &str| {
+        session.wait(&format!("#{id} in its scroll view"), |nodes| {
+            let index = nodes.iter().position(|node| node.id == id)?;
+            Some((nodes[index].bounds?, viewport(nodes, index)?))
+        })
+    };
+    session.settled(failed.as_str())?;
+    session.settled("copy-1")?;
+    let ((failure, failure_view), (transcript, transcript_view)) =
+        (place(&failed)?, place("copy-1")?);
+    ensure!(
+        (failure_view == transcript_view, failure.y < transcript.y) == (true, true),
+        "the failure at {failure:?} in {failure_view:?} is not above the transcript at \
+         {transcript:?} in {transcript_view:?}"
+    );
+    Ok(())
 }

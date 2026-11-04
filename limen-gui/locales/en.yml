@@ -1,6 +1,5 @@
 app.title: Limen
 nav.dictation: Dictation
-nav.history: History
 nav.shortcuts: Shortcuts
 status.idle: Idle
 status.starting: Opening microphone…
@@ -21,7 +20,6 @@ hint.hold_timeout: Automatically stops at 60 seconds
 hint.no_sound: No sound detected for 3 seconds
 hint.shifted_symbol: Shifted symbols need manual entry
 history.title: History
-history.memory: In-memory only; cleared on daemon restart
 history.empty: No transcripts yet
 history.original: Original
 history.committed: Committed
@@ -109,8 +107,6 @@ settings.font_size: Text size
 settings.service: Background service
 requests.average: Avg
 requests.failed: Failed
-requests.empty: No transcription requests yet
-requests.succeeded: Transcribed
 requests.in_flight: Transcribing…
 settings.interface_font: Interface font
 settings.search_font: Search fonts
@@ -123,9 +119,7 @@ settings.interface_font_hint: Typeface used throughout the window
 settings.service_hint: Restart or stop the dictation daemon
 nav.section: Workspace
 nav.toggle_sidebar: Toggle sidebar
-requests.title: Requests
 requests.count: requests
-requests.kept: The daemon keeps the latest 20
 requests.failed_status: Failed
 action.apply: Apply
 settings.off: "Off"
@@ -203,4 +197,5 @@ network.password_saved: Saved
 network.bypass: No proxy for
 toast.network_applied: Network settings applied
 toast.network_saved: Network settings saved; the daemon uses them when it starts
+transcript.title: Latest transcript
 transcript.empty: The transcript of your next take appears here

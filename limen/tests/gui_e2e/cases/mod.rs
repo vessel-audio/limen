@@ -63,6 +63,7 @@ pub const ALL: &[Case] = cases![
     history::copy_puts_a_transcript_on_the_clipboard,
     history::clearing_history_asks_for_confirmation,
     history::the_history_scrolls_with_the_wheel,
+    history::transcripts_and_failures_share_one_list,
     shortcuts::the_backend_selector_swaps_the_form,
     shortcuts::copying_the_toggle_command,
     shortcuts::applying_the_portal_backend_writes_the_config,

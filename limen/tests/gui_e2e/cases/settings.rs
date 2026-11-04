@@ -150,13 +150,16 @@ pub fn lightweight_mode_skips_motion() -> Result<()> {
     session.reveal("lightweight-on")?;
     session.click("lightweight-on")?;
     session.state("lightweight-on", State::Checked, true)?;
-    let expanded = session.settled("history-page")?.bounds.context("no tab")?;
+    let expanded = session
+        .settled("shortcuts-page")?
+        .bounds
+        .context("no tab")?;
     session.click("toggle-sidebar")?;
     // The first width drawn once the click is handled is already the last.
     let first = session.wait("the sidebar to change", |nodes| {
         nodes
             .iter()
-            .find(|node| node.id == "history-page")?
+            .find(|node| node.id == "shortcuts-page")?
             .bounds
             .map(|bounds| bounds.width)
             .filter(|width| *width != expanded.width)

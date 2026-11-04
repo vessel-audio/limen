@@ -1,6 +1,5 @@
 //! The dictation page: a control strip with a live waveform and a way to the
-//! model settings, the newest transcript, and the daemon's recent
-//! transcription requests.
+//! model settings, the newest transcript, and the takes before it.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, StyledExt, button::ButtonVariants};
@@ -225,11 +224,16 @@ pub fn dictation(view: &AppView, window: &mut Window, cx: &mut Context<AppView>)
         .flex_1()
         .min_h_0()
         .w_full()
-        .max_w(px(720.))
-        .mx_auto()
         .gap_6()
         .p_8()
         .child(strip)
-        .child(super::transcript::transcript(view, window, cx))
-        .child(super::requests::requests(view, cx))
+        .child(
+            div()
+                .v_flex()
+                .flex_shrink_0()
+                .gap_3()
+                .child(super::section_header(rust_i18n::t!("transcript.title"), cx))
+                .child(super::transcript::transcript(view, window, cx)),
+        )
+        .child(super::takes::takes(view, cx))
 }

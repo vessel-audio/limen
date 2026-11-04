@@ -38,7 +38,6 @@ impl AppView {
         let dot = div().size(px(6.)).rounded_full().bg(color);
         let (section, page_key) = match self.page {
             Page::Dictation => ("nav.section", "nav.dictation"),
-            Page::History => ("nav.section", "nav.history"),
             Page::Shortcuts => ("nav.section", "nav.shortcuts"),
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
             Page::Settings(SettingsPage::Network) => ("settings.title", "settings.network"),
