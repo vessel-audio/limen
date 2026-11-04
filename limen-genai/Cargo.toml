@@ -1,0 +1,15 @@
+[package]
+name = "limen-genai"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+genai.workspace = true
+limen-core.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio.workspace = true

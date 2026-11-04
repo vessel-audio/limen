@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use limen_core::{
     Api, BoxFuture, ChatApi, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply,
-    SignInPrompt, Subscription, Take, Transcriber, Transient,
+    SignInPrompt, Subscription, Take, Transcriber, Transcript, Transient,
 };
 use rig_core::DynModel;
 use rig_core::completion::{CompletionRequest, FinishReason, OnUnsupported, Reasoning};
@@ -173,6 +173,14 @@ impl Rig {
                 http,
                 None,
             )),
+            Api::Together
+            | Api::Fireworks
+            | Api::Cohere
+            | Api::Kimi
+            | Api::Zai
+            | Api::Qwen
+            | Api::MiniMax
+            | Api::Nebius => bail!("{api:?} is not reached through rig"),
         };
         Ok((client, shape.body))
     }
@@ -191,26 +199,37 @@ impl ModelBackend for Rig {
     fn transcriber(&self, connection: Connection, model: String) -> Result<Box<dyn Transcriber>> {
         let api = connection.api;
         let (client, body) = self.client(connection)?;
-        let model = match (api, client) {
+        let transcription = match (api, client) {
             (Api::DeepSeek | Api::Anthropic, _) => bail!("{api:?} does not transcribe audio"),
-            (_, Client::OpenAi(client)) => client.transcription(model).erase(),
-            (_, Client::Gemini(client)) => client.transcription(model).erase(),
+            (_, Client::OpenAi(client)) => client.transcription(model.clone()).erase(),
+            (_, Client::Gemini(client)) => client.transcription(model.clone()).erase(),
             (_, Client::Anthropic(_) | Client::SignedIn(_)) => {
                 bail!("{api:?} does not transcribe audio")
             }
         };
-        Ok(Box::new(RigTranscriber(model, body)))
+        Ok(Box::new(RigTranscriber {
+            model: transcription,
+            body,
+            api,
+            name: model,
+        }))
     }
 
     fn chat(&self, connection: Connection, model: String) -> Result<Box<dyn ChatModel>> {
+        let api = connection.api;
         let (client, body) = self.client(connection)?;
-        let model = match client {
-            Client::OpenAi(client) => Chat::Ready(client.completion(model).erase()),
-            Client::Anthropic(client) => Chat::Ready(client.completion(model).erase()),
-            Client::Gemini(client) => Chat::Ready(client.completion(model).erase()),
-            Client::SignedIn(account) => Chat::SignedIn(account, model),
+        let chat = match client {
+            Client::OpenAi(client) => Chat::Ready(client.completion(model.clone()).erase()),
+            Client::Anthropic(client) => Chat::Ready(client.completion(model.clone()).erase()),
+            Client::Gemini(client) => Chat::Ready(client.completion(model.clone()).erase()),
+            Client::SignedIn(account) => Chat::SignedIn(account, model.clone()),
         };
-        Ok(Box::new(RigChat(model, body)))
+        Ok(Box::new(RigChat {
+            chat,
+            body,
+            api,
+            name: model,
+        }))
     }
 
     fn models(&self, connection: Connection) -> BoxFuture<'_, Result<Vec<String>>> {
@@ -294,22 +313,34 @@ fn sanitized(error: ProviderError) -> anyhow::Error {
     }
 }
 
-/// A transcription model, and the fields every request also carries.
-struct RigTranscriber(DynModel<Transcription>, JsonMap);
+/// A transcription model, the fields every request also carries, and the
+/// API and model it is priced as.
+struct RigTranscriber {
+    model: DynModel<Transcription>,
+    body: JsonMap,
+    api: Api,
+    name: String,
+}
 
 impl Transcriber for RigTranscriber {
-    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>> {
+    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<Transcript>> {
         let request = TranscriptionRequestBuilder::new(take.wav).filename("audio.wav".to_string());
         let request = match take.language {
             Some(language) => request.language(language),
             None => request,
         };
-        let request = match self.1.is_empty() {
+        let request = match self.body.is_empty() {
             true => request,
-            false => request.additional_params(serde_json::Value::Object(self.1.clone())),
+            false => request.additional_params(serde_json::Value::Object(self.body.clone())),
         };
-        let reply = self.0.call(request.build());
-        Box::pin(async move { Ok(reply.await.map_err(sanitized)?.text) })
+        let reply = self.model.call(request.build());
+        Box::pin(async move {
+            let reply = reply.await.map_err(sanitized)?;
+            Ok(Transcript {
+                usage: prices::usage(self.api, &self.name, &reply.usage),
+                text: reply.text,
+            })
+        })
     }
 }
 
@@ -319,8 +350,14 @@ enum Chat {
     SignedIn(signed_in::Account, String),
 }
 
-/// A chat model, and the fields every request also carries.
-struct RigChat(Chat, JsonMap);
+/// A chat model, the fields every request also carries, and the API and
+/// model it is priced as.
+struct RigChat {
+    chat: Chat,
+    body: JsonMap,
+    api: Api,
+    name: String,
+}
 
 impl ChatModel for RigChat {
     fn reply<'a>(&'a self, exchange: Exchange<'a>) -> BoxFuture<'a, Result<Reply>> {
@@ -332,17 +369,18 @@ impl ChatModel for RigChat {
             // A model that cannot turn reasoning off, or takes no
             // temperature, still polishes with its own default.
             .on_unsupported(OnUnsupported::Ignore);
-        let request = match self.1.is_empty() {
+        let request = match self.body.is_empty() {
             true => request,
-            false => request.additional_params(serde_json::Value::Object(self.1.clone())),
+            false => request.additional_params(serde_json::Value::Object(self.body.clone())),
         };
         Box::pin(async move {
-            let model = match &self.0 {
+            let model = match &self.chat {
                 Chat::Ready(model) => model.clone(),
                 Chat::SignedIn(account, model) => account.completion(model).await?,
             };
             let response = model.call(request).await.map_err(sanitized)?;
             Ok(Reply {
+                usage: prices::usage(self.api, &self.name, &response.usage),
                 text: response.text(),
                 finish: response.finish_reason().map(|reason| match reason {
                     FinishReason::Stop => Finish::Stop,
@@ -357,7 +395,10 @@ impl ChatModel for RigChat {
     }
 }
 
+mod prices;
 mod signed_in;
+
+pub use prices::Catalog;
 
 #[cfg(test)]
 mod tests;

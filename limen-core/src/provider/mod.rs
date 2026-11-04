@@ -11,6 +11,7 @@ use crate::attempts::Attempts;
 use crate::backend::{BoxFuture, ModelBackend, Transcriber};
 use crate::config::Config;
 use crate::connection::{self, AsrRoute};
+use crate::usage::{Meter, MeteredTranscriber};
 
 mod buffered;
 mod multipart;
@@ -65,8 +66,13 @@ pub trait EventSource: Send {
 }
 
 /// Build the buffered transcription provider for the configured service:
-/// through `backend`, unless it is Limen's own upload.
-pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn AsrProvider>> {
+/// through `backend`, unless it is Limen's own upload, its requests counted
+/// on `meter`.
+pub(crate) fn from_config(
+    cfg: &Config,
+    backend: &dyn ModelBackend,
+    meter: Meter,
+) -> Result<Box<dyn AsrProvider>> {
     let unset = |text: &str| text.trim().is_empty();
     match (
         cfg.provider.service().uses_url() && unset(&cfg.provider.url),
@@ -83,6 +89,12 @@ pub fn from_config(cfg: &Config, backend: &dyn ModelBackend) -> Result<Box<dyn A
         }
         AsrRoute::Api(connection) => Arc::from(backend.transcriber(connection, model)?),
     };
+    let transcriber = Arc::new(MeteredTranscriber {
+        inner: transcriber,
+        meter,
+        service: cfg.provider.service(),
+        model: cfg.provider.model.as_str().into(),
+    });
     let options = cfg.provider.options.get(&cfg.provider.service());
     let attempts = Attempts::each(
         options
@@ -100,7 +112,7 @@ pub async fn probe(cfg: &Config, backend: &dyn ModelBackend, wav: &Path) -> Resu
         language: cfg.provider.language.clone(),
         sample_rate: 16_000,
     };
-    let session = from_config(cfg, backend)?
+    let session = from_config(cfg, backend, Meter::discarding())?
         .start_session(&session_cfg)
         .await?;
     let (mut sink, mut events) = session.split();
@@ -157,6 +169,7 @@ mod tests {
     use crate::backend::testing::{Built, Recording, Refusing};
     use crate::backend::{Api, Connection};
     use crate::config::Config;
+    use crate::usage::Meter;
 
     fn config(url: &str) -> Config {
         toml::from_str(&format!("[provider]\nurl = \"{url}\"\nmodel = \"asr\"\n")).unwrap()
@@ -166,7 +179,7 @@ mod tests {
     fn a_take_without_a_server_or_model_says_which_to_choose() {
         let unset = |provider: &str| {
             let config: Config = toml::from_str(&format!("[provider]\n{provider}\n")).unwrap();
-            from_config(&config, &Refusing)
+            from_config(&config, &Refusing, Meter::discarding())
                 .err()
                 .map(|error| error.to_string())
         };
@@ -191,7 +204,7 @@ mod tests {
             "http://127.0.0.1:8080/inference",
             "https://asr.example/v1/audio/transcriptions?api-version=1",
         ] {
-            from_config(&config(url), &backend).unwrap();
+            from_config(&config(url), &backend, Meter::discarding()).unwrap();
         }
 
         assert_eq!(
@@ -231,7 +244,7 @@ mod tests {
             String::from_utf8_lossy(&request).into_owned()
         });
         let config = config(&format!("http://{address}/inference"));
-        let session = from_config(&config, &Refusing)
+        let session = from_config(&config, &Refusing, Meter::discarding())
             .unwrap()
             .start_session(&SessionConfig {
                 language: "auto".to_string(),

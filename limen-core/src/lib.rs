@@ -20,11 +20,12 @@ mod reload;
 mod session;
 mod shortcut;
 mod task;
+mod usage;
 
 pub use audio::Level;
 pub use backend::{
-    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, Reply, Shape,
-    SignInPrompt, SignInStep, Subscription, Take, Transcriber, Transient,
+    Api, BoxFuture, ChatModel, Connection, Exchange, Finish, ModelBackend, PriceList, Reply, Shape,
+    SignInPrompt, SignInStep, Subscription, Take, Transcriber, Transcript, Transient, Usage,
 };
 pub use config::{
     ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Service, ShortcutConfig,
@@ -54,3 +55,4 @@ pub use shortcut::setup::{
 };
 pub use shortcut::status::{PerAction, SessionState, ShortcutStatus, Trigger};
 pub use shortcut::{Action, Backend, HoldEdge, Shortcut, ShortcutError};
+pub use usage::{Balance, Ledger, Money, Tally, UsageRow, balance, local_day, read_usage, today};

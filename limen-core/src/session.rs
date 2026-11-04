@@ -26,6 +26,7 @@ use crate::backend::ModelBackend;
 use crate::config::{Config, ProviderConfig};
 use crate::dictation::Event;
 use crate::provider::{self, AudioSink, EventSource, SessionConfig, TranscriptEvent};
+use crate::usage::Meter;
 
 /// Upper bound for stopping capture and handing the take to the provider.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,6 +60,7 @@ impl SessionHandle {
     pub(crate) fn spawn(
         cfg: Config,
         backend: Arc<dyn ModelBackend>,
+        meter: Meter,
         dictation: mpsc::UnboundedSender<Event>,
     ) -> (Self, watch::Receiver<Level>) {
         let (mailbox, commands) = mpsc::unbounded_channel();
@@ -67,6 +69,7 @@ impl SessionHandle {
             SessionActor {
                 cfg,
                 backend,
+                meter,
                 commands,
                 dictation,
                 active: None,
@@ -116,6 +119,8 @@ impl SessionHandle {
 struct SessionActor {
     cfg: Config,
     backend: Arc<dyn ModelBackend>,
+    /// Where the takes' transcription requests are counted.
+    meter: Meter,
     commands: mpsc::UnboundedReceiver<SessionCommand>,
     /// The dictation loop's mailbox; every outcome is reported here.
     dictation: mpsc::UnboundedSender<Event>,
@@ -166,7 +171,14 @@ impl SessionActor {
     async fn start(&mut self) {
         // A take never outlives the next `Start`, even if a `Teardown` was missed.
         self.teardown().await;
-        let event = match Active::open(&self.cfg, &*self.backend, self.level.clone()).await {
+        let event = match Active::open(
+            &self.cfg,
+            &*self.backend,
+            self.meter.clone(),
+            self.level.clone(),
+        )
+        .await
+        {
             Ok(active) => {
                 self.active = Some(active);
                 Event::SessionStarted
@@ -250,13 +262,14 @@ impl Active {
     async fn open(
         cfg: &Config,
         backend: &dyn ModelBackend,
+        meter: Meter,
         level: watch::Sender<Level>,
     ) -> Result<Self> {
         let session_cfg = SessionConfig {
             language: cfg.provider.language.clone(),
             sample_rate: SAMPLE_RATE,
         };
-        let session = provider::from_config(cfg, backend)?
+        let session = provider::from_config(cfg, backend, meter)?
             .start_session(&session_cfg)
             .await?;
         let (sink, events) = session.split();
@@ -363,6 +376,7 @@ mod tests {
     use crate::config::Config;
     use crate::dictation::Event;
     use crate::provider::{AudioSink, EventSource, TranscriptEvent};
+    use crate::usage::Meter;
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -458,6 +472,7 @@ mod tests {
             SessionActor {
                 cfg,
                 backend: Arc::new(crate::backend::testing::Refusing),
+                meter: Meter::discarding(),
                 commands,
                 dictation,
                 active: Some(active),

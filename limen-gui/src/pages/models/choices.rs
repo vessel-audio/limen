@@ -93,6 +93,14 @@ pub fn logo(service: Service, cx: &App) -> AnyElement {
         Service::Groq => tinted("limen/logos/groq.svg"),
         Service::OpenRouter => tinted("limen/logos/openrouter.svg"),
         Service::XAi => tinted("limen/logos/xai.svg"),
+        Service::Together => colored("limen/logos/together-color.svg"),
+        Service::Fireworks => colored("limen/logos/fireworks-color.svg"),
+        Service::Cohere => colored("limen/logos/cohere-color.svg"),
+        Service::Kimi => colored("limen/logos/kimi-color.svg"),
+        Service::Zai => tinted("limen/logos/zai.svg"),
+        Service::Qwen => colored("limen/logos/qwen-color.svg"),
+        Service::MiniMax => colored("limen/logos/minimax-color.svg"),
+        Service::Nebius => tinted("limen/logos/nebius.svg"),
     }
 }
 
@@ -110,6 +118,14 @@ pub fn service_label(service: Service) -> SharedString {
         Service::Groq => "Groq".into(),
         Service::OpenRouter => "OpenRouter".into(),
         Service::XAi => "xAI".into(),
+        Service::Together => "Together".into(),
+        Service::Fireworks => "Fireworks".into(),
+        Service::Cohere => "Cohere".into(),
+        Service::Kimi => "Kimi".into(),
+        Service::Zai => "Z.ai".into(),
+        Service::Qwen => "Qwen".into(),
+        Service::MiniMax => "MiniMax".into(),
+        Service::Nebius => "Nebius".into(),
     }
 }
 

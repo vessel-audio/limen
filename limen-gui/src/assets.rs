@@ -10,7 +10,7 @@ use gpui_kit::{AssetSource, Result, SharedString};
 pub const MARK: &str = "limen/mark.svg";
 
 /// The providers' logos, by asset path.
-const LOGOS: [(&str, &[u8]); 9] = [
+const LOGOS: [(&str, &[u8]); 17] = [
     (
         "limen/logos/openai.svg",
         include_bytes!("../assets/logos/openai.svg"),
@@ -46,6 +46,38 @@ const LOGOS: [(&str, &[u8]); 9] = [
     (
         "limen/logos/githubcopilot.svg",
         include_bytes!("../assets/logos/githubcopilot.svg"),
+    ),
+    (
+        "limen/logos/together-color.svg",
+        include_bytes!("../assets/logos/together-color.svg"),
+    ),
+    (
+        "limen/logos/fireworks-color.svg",
+        include_bytes!("../assets/logos/fireworks-color.svg"),
+    ),
+    (
+        "limen/logos/cohere-color.svg",
+        include_bytes!("../assets/logos/cohere-color.svg"),
+    ),
+    (
+        "limen/logos/kimi-color.svg",
+        include_bytes!("../assets/logos/kimi-color.svg"),
+    ),
+    (
+        "limen/logos/zai.svg",
+        include_bytes!("../assets/logos/zai.svg"),
+    ),
+    (
+        "limen/logos/qwen-color.svg",
+        include_bytes!("../assets/logos/qwen-color.svg"),
+    ),
+    (
+        "limen/logos/minimax-color.svg",
+        include_bytes!("../assets/logos/minimax-color.svg"),
+    ),
+    (
+        "limen/logos/nebius.svg",
+        include_bytes!("../assets/logos/nebius.svg"),
     ),
 ];
 

@@ -15,6 +15,7 @@ use crate::ipc;
 use crate::notify::notify;
 use crate::session::SessionHandle;
 use crate::shortcut::portal::{Bus, ShortcutHandle};
+use crate::usage::Meter;
 
 pub(crate) struct ActorExit {
     pub(super) result: Result<()>,
@@ -28,7 +29,9 @@ pub async fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> R
     let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (polish, polish_rx) = watch::channel(cfg.polish.clone());
-    let (input_tx, input_reports, input_worker) = input::spawn(&cfg, polish_rx, backend.clone())?;
+    let meter = Meter::open(&paths);
+    let (input_tx, input_reports, input_worker) =
+        input::spawn(&cfg, polish_rx, backend.clone(), meter.clone())?;
 
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
@@ -36,7 +39,7 @@ pub async fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> R
     let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let (projection, snapshots) = Projection::new(&cfg);
-    let (session, levels) = SessionHandle::spawn(cfg, backend, session_report_tx);
+    let (session, levels) = SessionHandle::spawn(cfg, backend, meter, session_report_tx);
     let shortcut_watch = shortcuts.subscribe();
     let actor = DictationActor::new(
         session,
