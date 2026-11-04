@@ -394,6 +394,38 @@ fn card(rows: impl IntoIterator<Item = Div>, cx: &App) -> Div {
 /// One settings row: the title and description under `key` beside a control.
 fn setting(key: &str, control: impl IntoElement, cx: &mut Context<AppView>) -> Div {
     let hint = format!("{key}_hint");
+    row(
+        title(key).child(
+            div()
+                .text_xs()
+                .font_normal()
+                .text_color(cx.theme().muted_foreground)
+                .child(rust_i18n::t!(&hint).to_string()),
+        ),
+        control,
+        cx,
+    )
+}
+
+/// A settings row whose title under `key` needs no description.
+fn titled(key: &str, control: impl IntoElement, cx: &mut Context<AppView>) -> Div {
+    row(title(key), control, cx)
+}
+
+/// The title under `key`, in the label column of a settings row.
+fn title(key: &str) -> Div {
+    div()
+        .v_flex()
+        .flex_1()
+        .min_w(px(160.))
+        .gap_0p5()
+        .text_sm()
+        .font_medium()
+        .child(rust_i18n::t!(key).to_string())
+}
+
+/// `label` beside `control`, which wraps below it when the row is narrow.
+fn row(label: Div, control: impl IntoElement, cx: &mut Context<AppView>) -> Div {
     div()
         .h_flex()
         .flex_wrap()
@@ -404,24 +436,6 @@ fn setting(key: &str, control: impl IntoElement, cx: &mut Context<AppView>) -> D
         .px_5()
         .py_4()
         .border_color(cx.theme().border)
-        .child(
-            div()
-                .v_flex()
-                .flex_1()
-                .min_w(px(160.))
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .child(rust_i18n::t!(key).to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(rust_i18n::t!(&hint).to_string()),
-                ),
-        )
+        .child(label)
         .child(div().flex_shrink_0().child(control))
 }

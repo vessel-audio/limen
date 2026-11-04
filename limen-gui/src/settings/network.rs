@@ -8,7 +8,7 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use limen_core::{ApiKey, ConfigChange, KeyChange, Network, ProxyMode, ProxyPassword};
 
-use super::{Segment, SettingsPage, card, header, segmented, setting};
+use super::{Segment, SettingsPage, card, header, segmented, titled};
 use crate::a11y;
 use crate::app::{AppView, Page};
 use crate::bridge::{BridgeCommand, NetworkRequest};
@@ -243,8 +243,7 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
             .aria_label(rust_i18n::t!(key).to_string())
     };
     // A manual proxy's fields belong to the Manual choice, so they sit
-    // under it, indented along a guide, rather than beside it as settings
-    // of their own.
+    // under it, indented, rather than beside it as settings of their own.
     let manual = match form.mode {
         ProxyMode::Manual => {
             // The core keeps no password for a proxy without a username.
@@ -285,16 +284,7 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     .child(div().text_sm().child(rust_i18n::t!(key).to_string()))
                     .child(div().w(px(300.)).flex_shrink_0().child(control))
             });
-            Some(
-                div()
-                    .v_flex()
-                    .mx_5()
-                    .mb_4()
-                    .pl_4()
-                    .border_l_2()
-                    .border_color(cx.theme().border)
-                    .children(fields),
-            )
+            Some(div().v_flex().mx_5().mb_4().pl_4().children(fields))
         }
         ProxyMode::System | ProxyMode::None => None,
     };
@@ -313,7 +303,7 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .child(card(
             [div()
                 .v_flex()
-                .child(setting("network.proxy", mode, cx))
+                .child(titled("network.proxy", mode, cx))
                 .children(manual)],
             cx,
         ))

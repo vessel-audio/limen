@@ -193,7 +193,6 @@ toast.polish_model_works: 润色模型可用
 toast.polish_saved: 已保存润色设置，后台服务启动时生效
 settings.network: 网络
 network.proxy: 代理
-network.proxy_hint: 访问模型服务的方式
 network.direct: 不使用
 network.manual: 手动
 network.server: 代理服务器

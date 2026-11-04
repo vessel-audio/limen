@@ -193,7 +193,6 @@ toast.polish_model_works: The polish model answered
 toast.polish_saved: Polish settings saved; the daemon uses them when it starts
 settings.network: Network
 network.proxy: Proxy
-network.proxy_hint: How requests to model services reach them
 network.direct: None
 network.manual: Manual
 network.server: Proxy server
