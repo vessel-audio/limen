@@ -108,10 +108,12 @@ mod dictation;
 mod models;
 mod requests;
 mod shortcuts;
+mod usage;
 pub use dictation::dictation;
 pub use models::{ModelForms, follow as follow_models, providers};
 pub use requests::RequestKey;
 pub use shortcuts::shortcuts;
+pub use usage::{UsageState, follow as follow_usage, usage};
 
 /// Serif page heading shared by every non-dictation page.
 pub fn title(text: impl Into<SharedString>) -> Stateful<Div> {

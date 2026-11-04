@@ -10,10 +10,10 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
-    Action as ShortcutAction, Backend, ConfigChange, DaemonNotRunning, Delivery, KeySource, Keys,
-    Launch, ModelBackend, ModelRole, Paths, Provider, Push, Report, SetupError, Shortcut,
-    SignInStep, Subscription, clear, daemon_peer_pid, edit, set, setup, spawn_daemon, subscribe,
-    terminate_daemon, v1,
+    Action as ShortcutAction, Backend, Balance, ConfigChange, DaemonNotRunning, Delivery,
+    KeySource, Keys, Launch, Ledger, ModelBackend, ModelRole, Paths, Provider, Push, Report,
+    Service, SetupError, Shortcut, SignInStep, Subscription, clear, daemon_peer_pid, edit, set,
+    setup, spawn_daemon, subscribe, terminate_daemon, v1,
 };
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
@@ -93,6 +93,12 @@ pub enum BridgeEvent {
         subscription: Subscription,
         signed_in: bool,
     },
+    /// The usage ledger and the providers' card order, or why they could
+    /// not be read.
+    UsageRead(Result<(Ledger, Vec<Service>), String>),
+    /// The provider of each role that reports a balance, and its balance
+    /// or why it could not be asked.
+    Balances(Vec<(ModelRole, Service, Result<Balance, String>)>),
     /// What the sign-in `id` asks the user to do now.
     SignInStep {
         id: u64,
