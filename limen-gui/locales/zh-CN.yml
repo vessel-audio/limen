@@ -161,6 +161,7 @@ models.no_models: 服务器未列出任何模型
 models.enter_server: 请先填写服务器
 models.subscriptions: 订阅
 models.apis: API
+models.others: 其他提供商
 models.account: 账号
 models.signed_in: 已登录
 models.signed_out: 未登录

@@ -41,6 +41,8 @@ pub struct ProviderForm {
     pub advanced: AdvancedFields,
     /// The advanced settings are showing.
     pub show_advanced: bool,
+    /// The cards of the services other than the configured one are showing.
+    pub show_others: bool,
     /// The model select's focus while closed; it moves into the list while
     /// open, when changing the items would clear what the user types.
     closed_focus: FocusHandle,
@@ -243,6 +245,7 @@ impl ModelForms {
                 model,
                 advanced,
                 show_advanced: false,
+                show_others: false,
                 loaded: None,
                 arrived: None,
                 polishing: Polishing::Off,
@@ -390,6 +393,28 @@ impl ProviderForm {
         self.loaded.as_ref().map(|(provider, _)| match provider {
             Provider::Asr { service, .. } | Provider::Polish { service, .. } => *service,
         })
+    }
+
+    /// The saved service, once it has a model and, for a custom server, a
+    /// URL to reach it at.
+    pub fn configured(&self) -> Option<Service> {
+        self.loaded
+            .as_ref()
+            .and_then(|(provider, _)| match provider {
+                Provider::Asr {
+                    service,
+                    url,
+                    model,
+                    ..
+                }
+                | Provider::Polish {
+                    service,
+                    url,
+                    model,
+                    ..
+                } => (!model.trim().is_empty() && (!service.uses_url() || !url.trim().is_empty()))
+                    .then_some(*service),
+            })
     }
 }
 

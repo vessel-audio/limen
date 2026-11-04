@@ -84,7 +84,8 @@ fn closed(session: &Session) -> Result<()> {
 }
 
 /// Open the dialog of the card `card`, such as `asr-provider-custom`, once
-/// the page's settings have loaded.
+/// the page's settings have loaded, unfolding the services other than the
+/// configured one when the card is among them.
 fn open_card(session: &Session, card: &str, prefix: &str) -> Result<()> {
     let open = || {
         session.wait("the page", |nodes| {
@@ -97,7 +98,13 @@ fn open_card(session: &Session, card: &str, prefix: &str) -> Result<()> {
         if open()? {
             return Ok(true);
         }
-        session.click(card)?;
+        let shown = session.wait("the page", |nodes| {
+            Some(nodes.iter().any(|node| node.id == card))
+        })?;
+        match shown {
+            true => session.click(card)?,
+            false => session.click(format!("{prefix}-others").as_str())?,
+        };
         std::thread::sleep(std::time::Duration::from_millis(400));
         open()
     })
@@ -350,6 +357,23 @@ pub fn the_switch_shows_the_providers() -> Result<()> {
         !session.paths().config_file.exists(),
         "turning the switch on with no provider saved something"
     );
+    Ok(())
+}
+
+/// The configured provider leads the page; the others fold under a toggle.
+pub fn the_configured_provider_leads() -> Result<()> {
+    let session = Session::fake(Scenario::default())?;
+    std::fs::create_dir_all(session.paths().config_file.parent().unwrap())?;
+    std::fs::write(
+        &session.paths().config_file,
+        "[provider]\nurl = \"\"\n\n[polish]\nenabled = true\nservice = \"groq\"\nmodel = \"m\"\n",
+    )?;
+    session.click("polish-page")?;
+    session.node("polish-others")?;
+    session.node("polish-provider-groq")?;
+    session.absent("polish-provider-custom")?;
+    session.click("polish-others")?;
+    session.node("polish-provider-custom")?;
     Ok(())
 }
 

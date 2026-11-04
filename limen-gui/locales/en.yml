@@ -161,6 +161,7 @@ models.no_models: The server listed no models
 models.enter_server: Enter the server first
 models.subscriptions: Subscriptions
 models.apis: API
+models.others: Other providers
 models.account: Account
 models.signed_in: Signed in
 models.signed_out: Not signed in
