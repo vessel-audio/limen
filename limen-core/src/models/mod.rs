@@ -26,7 +26,8 @@ pub use settings::{KeySource, KeyState, Polishing, Provider, load_provider, save
 const LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which provider: the one that transcribes or the one that polishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ModelRole {
     /// `[provider]`, which transcribes each take.
     Asr,

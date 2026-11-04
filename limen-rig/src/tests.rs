@@ -5,6 +5,7 @@ use tokio::task::JoinHandle;
 
 use limen_core::{
     Api, ChatApi, Connection, Exchange, Finish, ModelBackend, Reply, Shape, Subscription, Take,
+    Usage,
 };
 
 use super::Rig;
@@ -138,7 +139,7 @@ async fn a_keyless_compatible_server_gets_the_take_without_a_credential() {
     let body = String::from_utf8_lossy(&request.body);
     assert_eq!(
         (
-            text.as_str(),
+            text.text.as_str(),
             request.head.lines().next(),
             request.header("authorization")
         ),
@@ -182,6 +183,11 @@ async fn a_compatible_chat_is_asked_deterministically_and_its_reply_reported() {
             Reply {
                 text: "你好，世界。".to_string(),
                 finish: Some(Finish::Stop),
+                usage: Usage {
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    ..Usage::default()
+                },
             },
             Some("POST /v1/chat/completions HTTP/1.1"),
             Some("Bearer sk-polish".to_string()),
@@ -216,6 +222,11 @@ async fn a_cut_off_reply_reports_why_it_stopped() {
         Reply {
             text: "你好，世界。".to_string(),
             finish: Some(Finish::Length),
+            usage: Usage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..Usage::default()
+            },
         }
     );
 }
@@ -238,6 +249,11 @@ async fn an_unknown_finish_reason_keeps_none_of_its_text() {
         Reply {
             text: "你好，世界。".to_string(),
             finish: Some(Finish::Other),
+            usage: Usage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..Usage::default()
+            },
         }
     );
 }
@@ -455,6 +471,11 @@ async fn a_keyless_anthropic_server_gets_no_credential_header() {
             Reply {
                 text: "你好，世界。".to_string(),
                 finish: Some(Finish::Stop),
+                usage: Usage {
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    ..Usage::default()
+                },
             },
             Some("POST /v1/messages HTTP/1.1"),
             None,

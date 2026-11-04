@@ -36,7 +36,7 @@ pub use options::{ChatApi, ProviderOptions};
 pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update_provider};
-pub(crate) use write::{check_writable, lock_dir, snippet, update_shortcut};
+pub(crate) use write::{check_writable, lock_dir, replace, snippet, update_shortcut};
 
 /// An API key saved from the GUI. Its `Debug` output never shows the key,
 /// so configs and commands that hold one stay safe to log.

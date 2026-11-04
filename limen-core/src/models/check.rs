@@ -11,6 +11,7 @@ use crate::config::{KeyChange, Paths};
 use crate::connection;
 use crate::polish::{CONSERVATIVE_PROMPT, MAX_TOKENS};
 use crate::provider::{self, SessionConfig, TranscriptEvent};
+use crate::usage::Meter;
 
 /// How long the model may take to answer.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
@@ -39,7 +40,9 @@ pub async fn check_model(
         let config = edited_off_thread(paths, provider, key).await?;
         match provider {
             Provider::Asr { .. } => {
-                let session = provider::from_config(&config, backend)?
+                // A check is the GUI's, not dictation: the daemon's ledger
+                // counts only what dictation sent.
+                let session = provider::from_config(&config, backend, Meter::discarding())?
                     .start_session(&SessionConfig {
                         language: config.provider.language.clone(),
                         sample_rate: SAMPLE_RATE,
@@ -110,6 +113,7 @@ mod tests {
             reply: Reply {
                 text: "This is a test.".to_string(),
                 finish: Some(finish),
+                usage: crate::backend::Usage::default(),
             },
         }
     }

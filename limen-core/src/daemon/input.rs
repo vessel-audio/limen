@@ -12,6 +12,7 @@ use crate::dictation::InputOutcome;
 use crate::input_method::{InputMethod, default_backend, sanitize_control_characters};
 use crate::ipc::v1::Delivery;
 use crate::polish::Polisher;
+use crate::usage::Meter;
 
 pub(crate) const MAX_OUTSTANDING_INPUT: usize = 17;
 
@@ -99,11 +100,12 @@ async fn process(
 
 /// Start the serial input worker, returning its job and report mailboxes.
 /// Each job is polished as `polish` reads when the job begins, by a model
-/// `models` builds.
+/// `models` builds, its requests counted on `meter`.
 pub(crate) fn spawn(
     config: &Config,
     mut polish: watch::Receiver<PolishConfig>,
     models: Arc<dyn ModelBackend>,
+    meter: Meter,
 ) -> Result<(
     mpsc::UnboundedSender<InputJob>,
     mpsc::UnboundedReceiver<InputReport>,
@@ -112,13 +114,13 @@ pub(crate) fn spawn(
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputJob>();
     let (report_tx, reports) = mpsc::unbounded_channel::<InputReport>();
     let backend = default_backend(config.input_method.backend);
-    let mut polisher = Polisher::from_config(&polish.borrow_and_update(), &*models)?;
+    let mut polisher = Polisher::from_config(&polish.borrow_and_update(), &*models, meter.clone())?;
     tracing::info!(?backend, "input method backend");
     let task = tokio::spawn(async move {
         let mut input_method = InputMethod::new(backend);
         while let Some(job) = input_rx.recv().await {
             if polish.has_changed().is_ok_and(|changed| changed) {
-                match Polisher::from_config(&polish.borrow_and_update(), &*models) {
+                match Polisher::from_config(&polish.borrow_and_update(), &*models, meter.clone()) {
                     Ok(reloaded) => polisher = reloaded,
                     Err(error) => tracing::warn!(
                         error = %format!("{error:#}"),
@@ -147,6 +149,7 @@ mod tests {
     use crate::input_method::{Backend, InputMethod};
     use crate::ipc::v1::Delivery;
     use crate::polish::Polisher;
+    use crate::usage::Meter;
     use tokio::sync::mpsc;
 
     fn config() -> Config {
@@ -198,7 +201,8 @@ mod tests {
     }
 
     async fn committed(jobs: impl IntoIterator<Item = InputJob>) -> Vec<String> {
-        let polisher = Polisher::from_config(&config().polish, &Refusing).unwrap();
+        let polisher =
+            Polisher::from_config(&config().polish, &Refusing, Meter::discarding()).unwrap();
         let mut input = RecordingInput::default();
         let (_jobs, input_rx) = mpsc::unbounded_channel();
         for job in jobs {
@@ -230,6 +234,7 @@ mod tests {
                 Ok(Reply {
                     text: "修正".to_string(),
                     finish: Some(Finish::Stop),
+                    usage: crate::backend::Usage::default(),
                 })
             })
         }

@@ -170,6 +170,7 @@ async fn transcribe(
     attempts
         .run("transcription", || transcriber.transcribe(take.clone()))
         .await
+        .map(|transcript| transcript.text)
 }
 
 /// Wrap raw s16le samples in a minimal WAV container.
@@ -203,7 +204,7 @@ mod tests {
 
     use super::{Provider, Source};
     use crate::attempts::Attempts;
-    use crate::backend::{BoxFuture, Take, Transcriber};
+    use crate::backend::{BoxFuture, Take, Transcriber, Transcript, Usage};
     use crate::provider::{AsrProvider, AudioSink, EventSource, SessionConfig, TranscriptEvent};
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -235,12 +236,15 @@ mod tests {
     }
 
     impl Transcriber for Scripted {
-        fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>> {
+        fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<Transcript>> {
             Box::pin(async move {
                 self.takes.lock().unwrap().push(take);
                 self.asked.notify_one();
                 self.release.notified().await;
-                (self.answer)()
+                (self.answer)().map(|text| Transcript {
+                    text,
+                    usage: Usage::default(),
+                })
             })
         }
     }

@@ -23,6 +23,15 @@ pub struct Take {
     pub language: Option<String>,
 }
 
+/// What a transcriber answered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transcript {
+    pub text: String,
+    /// The tokens the service reported, for one that bills by token, and
+    /// their cost where the backend knows it.
+    pub usage: Usage,
+}
+
 /// A model that turns one take into its text.
 ///
 /// The daemon builds one per take with the model and key already bound, and
@@ -31,7 +40,7 @@ pub struct Take {
 /// take is abandoned, so implementations must not keep working after a drop.
 pub trait Transcriber: Send + Sync {
     /// The transcript of `take`, or why there is none.
-    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>>;
+    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<Transcript>>;
 }
 
 /// One instruction-and-message exchange with a chat model.
@@ -62,12 +71,28 @@ pub enum Finish {
 }
 
 /// What a chat model answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
     /// The reply text; empty when the model wrote none.
     pub text: String,
     /// Why the reply ended; `None` when the provider did not say.
     pub finish: Option<Finish>,
+    pub usage: Usage,
+}
+
+/// What one request used, as far as its service or the backend's price
+/// list tells.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Usage {
+    /// Every input token, cached ones included.
+    pub input_tokens: Option<u64>,
+    /// The part of `input_tokens` read from the service's cache.
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    /// What the request cost in US dollars: the service's own figure, or
+    /// the model's list price for the tokens counted; `None` when neither
+    /// is known.
+    pub cost_usd: Option<f64>,
 }
 
 /// The model APIs a [`ModelBackend`] reaches, in Limen's own vocabulary.
@@ -88,6 +113,17 @@ pub enum Api {
     ChatGpt,
     /// GitHub Copilot, with the stored sign-in's session.
     Copilot,
+    Together,
+    Fireworks,
+    Cohere,
+    /// Moonshot AI's Kimi platform.
+    Kimi,
+    /// Zhipu's Z.ai platform.
+    Zai,
+    /// Alibaba Cloud's international DashScope, which serves Qwen.
+    Qwen,
+    MiniMax,
+    Nebius,
 }
 
 impl Api {
@@ -101,8 +137,20 @@ impl Api {
                 Some(ChatApi::ChatCompletions)
             }
             // A subscription's backend picks its own: ChatGPT's takes only
-            // Responses, Copilot's routes each model.
-            Self::Anthropic | Self::Gemini | Self::ChatGpt | Self::Copilot => None,
+            // Responses, Copilot's routes each model. The vendors below
+            // have one chat API each.
+            Self::Anthropic
+            | Self::Gemini
+            | Self::ChatGpt
+            | Self::Copilot
+            | Self::Together
+            | Self::Fireworks
+            | Self::Cohere
+            | Self::Kimi
+            | Self::Zai
+            | Self::Qwen
+            | Self::MiniMax
+            | Self::Nebius => None,
         }
     }
 }
@@ -235,6 +283,19 @@ pub trait ModelBackend: Send + Sync {
     fn signed_in(&self, subscription: Subscription) -> bool;
 }
 
+/// The list prices of chat models, for a backend whose services report
+/// tokens but not what they cost.
+///
+/// The program builds one and hands it to such a backend, which asks it once
+/// per reply and puts the answer in [`Usage::cost_usd`]. Implementations
+/// price at the standard tier's list price, so the figure is an estimate.
+pub trait PriceList: Send + Sync {
+    /// What `usage`'s tokens cost on `model` of `api`, in US dollars;
+    /// `None` when the list has no price for the model, or `usage` counts
+    /// no tokens.
+    fn price(&self, api: Api, model: &str, usage: &Usage) -> Option<f64>;
+}
+
 /// A chat model that answers one exchange at a time.
 ///
 /// Polishing asks for one deterministic, short correction, so
@@ -255,7 +316,7 @@ pub(crate) mod testing {
 
     use super::{
         BoxFuture, ChatModel, Connection, Exchange, ModelBackend, Reply, SignInPrompt,
-        Subscription, Take, Transcriber,
+        Subscription, Take, Transcriber, Transcript, Usage,
     };
 
     /// A backend that refuses every request.
@@ -306,7 +367,7 @@ pub(crate) mod testing {
     struct Failing;
 
     impl Transcriber for Failing {
-        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<String>> {
+        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<Transcript>> {
             Box::pin(async { bail!("this test transcribes nothing") })
         }
     }
@@ -327,9 +388,14 @@ pub(crate) mod testing {
     struct Answer(String, Reply);
 
     impl Transcriber for Answer {
-        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<String>> {
+        fn transcribe(&self, _: Take) -> BoxFuture<'_, Result<Transcript>> {
             let transcript = self.0.clone();
-            Box::pin(async move { Ok(transcript) })
+            Box::pin(async move {
+                Ok(Transcript {
+                    text: transcript,
+                    usage: Usage::default(),
+                })
+            })
         }
     }
 

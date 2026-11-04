@@ -222,7 +222,7 @@ fn line_end(text: &str, index: usize) -> (usize, &'static str) {
 /// Replace `path` with `contents`: a unique temp file next to it gets `mode`,
 /// the contents, and an fsync, then is renamed over `path`, and the directory
 /// is fsynced so that the rename survives a crash too.
-pub(super) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
+pub(crate) fn replace(path: &Path, contents: &str, mode: Option<u32>) -> Result<()> {
     let dir = path
         .parent()
         .context("config path has no parent directory")?;

@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::{BoxFuture, Shape, Take, Transcriber, Transient};
+use crate::backend::{BoxFuture, Shape, Take, Transcriber, Transcript, Transient, Usage};
 
 pub struct Server {
     http: reqwest::Client,
@@ -33,7 +33,7 @@ impl Server {
 }
 
 impl Transcriber for Server {
-    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<String>> {
+    fn transcribe(&self, take: Take) -> BoxFuture<'_, Result<Transcript>> {
         Box::pin(async move {
             let form = reqwest::multipart::Form::new()
                 .text("model", self.model.clone())
@@ -81,7 +81,10 @@ impl Transcriber for Server {
                 .json::<TranscriptionResponse>()
                 .await
                 .context("parse response")
-                .map(|body| body.text)
+                .map(|body| Transcript {
+                    text: body.text,
+                    usage: Usage::default(),
+                })
         })
     }
 }
@@ -165,7 +168,7 @@ mod tests {
         )
         .unwrap();
 
-        let text = transcriber.transcribe(take(Some("zh"))).await.unwrap();
+        let text = transcriber.transcribe(take(Some("zh"))).await.unwrap().text;
 
         let request = String::from_utf8_lossy(&server.await.unwrap()).into_owned();
         assert_eq!(text, "完整文本");

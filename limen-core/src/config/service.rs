@@ -29,6 +29,14 @@ pub enum Service {
     OpenRouter,
     #[serde(rename = "xai")]
     XAi,
+    Together,
+    Fireworks,
+    Cohere,
+    Kimi,
+    Zai,
+    Qwen,
+    MiniMax,
+    Nebius,
 }
 
 impl Service {
@@ -42,7 +50,7 @@ impl Service {
     ];
 
     /// The services that polish, in the order they are offered.
-    pub const POLISHING: [Self; 11] = [
+    pub const POLISHING: [Self; 19] = [
         Self::Custom,
         Self::ChatGpt,
         Self::Copilot,
@@ -54,6 +62,14 @@ impl Service {
         Self::Groq,
         Self::OpenRouter,
         Self::XAi,
+        Self::Together,
+        Self::Fireworks,
+        Self::Cohere,
+        Self::Kimi,
+        Self::Zai,
+        Self::Qwen,
+        Self::MiniMax,
+        Self::Nebius,
     ];
 
     /// The name the config uses, such as `custom`.
@@ -70,6 +86,14 @@ impl Service {
             Self::Groq => "groq",
             Self::OpenRouter => "openrouter",
             Self::XAi => "xai",
+            Self::Together => "together",
+            Self::Fireworks => "fireworks",
+            Self::Cohere => "cohere",
+            Self::Kimi => "kimi",
+            Self::Zai => "zai",
+            Self::Qwen => "qwen",
+            Self::MiniMax => "minimax",
+            Self::Nebius => "nebius",
         }
     }
 
@@ -93,7 +117,15 @@ impl Service {
             | Self::Mistral
             | Self::Groq
             | Self::OpenRouter
-            | Self::XAi => None,
+            | Self::XAi
+            | Self::Together
+            | Self::Fireworks
+            | Self::Cohere
+            | Self::Kimi
+            | Self::Zai
+            | Self::Qwen
+            | Self::MiniMax
+            | Self::Nebius => None,
         }
     }
 
@@ -117,6 +149,14 @@ impl Service {
             Self::Groq => Some("GROQ_API_KEY"),
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::XAi => Some("XAI_API_KEY"),
+            Self::Together => Some("TOGETHER_API_KEY"),
+            Self::Fireworks => Some("FIREWORKS_API_KEY"),
+            Self::Cohere => Some("COHERE_API_KEY"),
+            Self::Kimi => Some("MOONSHOT_API_KEY"),
+            Self::Zai => Some("ZAI_API_KEY"),
+            Self::Qwen => Some("DASHSCOPE_API_KEY"),
+            Self::MiniMax => Some("MINIMAX_API_KEY"),
+            Self::Nebius => Some("NEBIUS_API_KEY"),
         }
     }
 
@@ -134,6 +174,14 @@ impl Service {
             Self::Groq => Some("https://api.groq.com/openai/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::XAi => Some("https://api.x.ai"),
+            Self::Together => Some("https://api.together.xyz/v1"),
+            Self::Fireworks => Some("https://api.fireworks.ai/inference/v1"),
+            Self::Cohere => Some("https://api.cohere.com/v1"),
+            Self::Kimi => Some("https://api.moonshot.ai/v1"),
+            Self::Zai => Some("https://api.z.ai/api/paas/v4"),
+            Self::Qwen => Some("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+            Self::MiniMax => Some("https://api.minimax.io/anthropic/v1"),
+            Self::Nebius => Some("https://api.studio.nebius.ai/v1"),
         }
     }
 
@@ -163,6 +211,14 @@ impl Service {
             Self::Groq => Some(Api::Groq),
             Self::OpenRouter => Some(Api::OpenRouter),
             Self::XAi => Some(Api::XAi),
+            Self::Together => Some(Api::Together),
+            Self::Fireworks => Some(Api::Fireworks),
+            Self::Cohere => Some(Api::Cohere),
+            Self::Kimi => Some(Api::Kimi),
+            Self::Zai => Some(Api::Zai),
+            Self::Qwen => Some(Api::Qwen),
+            Self::MiniMax => Some(Api::MiniMax),
+            Self::Nebius => Some(Api::Nebius),
         }
     }
 }
