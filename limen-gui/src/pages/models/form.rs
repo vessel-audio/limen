@@ -424,7 +424,7 @@ impl ProviderForm {
 /// models.
 pub fn follow(view: &mut AppView, window: &mut Window, cx: &mut Context<AppView>) {
     for role in [ModelRole::Asr, ModelRole::Polish] {
-        let visible = view.page == Page::Models(role);
+        let visible = view.page == Page::Providers;
         let commands = view.commands.clone();
         let form = view.models.form(role);
         if visible && !form.visible && !form.open {

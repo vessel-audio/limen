@@ -4,7 +4,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, StyledExt, button::ButtonVariants};
 use gpui_kit::*;
-use limen_core::{Control, DictationState, ModelRole};
+use limen_core::{Control, DictationState};
 
 use crate::a11y;
 use crate::app::{AppView, LEVEL_BARS, Page};
@@ -201,7 +201,7 @@ pub fn dictation(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         .label(rust_i18n::t!("nav.models").to_string())
                         .flex_shrink_0()
                         .on_click(cx.listener(|this, _, _, _| {
-                            this.page = Page::Models(ModelRole::Asr);
+                            this.page = Page::Providers;
                         })),
                 )
                 .child(

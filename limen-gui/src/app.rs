@@ -64,9 +64,8 @@ pub struct AppView {
     pub shortcuts_scroll: SmoothScroll,
     pub history_scroll: SmoothScroll,
     pub requests_scroll: SmoothScroll,
-    /// The ASR and Polish pages, each scrolled on its own.
-    pub asr_scroll: SmoothScroll,
-    pub polish_scroll: SmoothScroll,
+    /// The Providers page, scrolled on its own.
+    pub providers_scroll: SmoothScroll,
     /// The failed request whose full error is shown.
     pub expanded_request: Option<crate::pages::RequestKey>,
 }
@@ -77,8 +76,8 @@ pub enum Page {
     Dictation,
     History,
     Shortcuts,
-    /// A model provider, under Models in the sidebar.
-    Models(ModelRole),
+    /// The ASR and polishing providers, under Models in the sidebar.
+    Providers,
     Settings(SettingsPage),
 }
 
@@ -179,8 +178,7 @@ impl AppView {
             shortcut_report: None,
             expanded_request: None,
             settings_scroll: SmoothScroll::default(),
-            asr_scroll: SmoothScroll::default(),
-            polish_scroll: SmoothScroll::default(),
+            providers_scroll: SmoothScroll::default(),
             shortcuts_scroll: SmoothScroll::default(),
             history_scroll: SmoothScroll::default(),
             requests_scroll: SmoothScroll::default(),
@@ -428,8 +426,7 @@ impl Render for AppView {
             &self.shortcuts_scroll,
             &self.history_scroll,
             &self.requests_scroll,
-            &self.asr_scroll,
-            &self.polish_scroll,
+            &self.providers_scroll,
         ] {
             scroll.step(window);
         }
@@ -446,11 +443,11 @@ impl Render for AppView {
                 .flex_1()
                 .min_h_0()
                 .child(pages::shortcuts(self, cx, window)),
-            Page::Models(role) => div()
+            Page::Providers => div()
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(pages::models(self, role, window, cx)),
+                .child(pages::providers(self, window, cx)),
             Page::Settings(page) => match page {
                 SettingsPage::General => div()
                     .v_flex()

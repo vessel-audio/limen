@@ -37,7 +37,7 @@ pub const ALL: &[Case] = cases![
     dictation::failed_requests_expand_to_the_full_error,
     dictation::the_request_list_scrolls_with_the_wheel,
     dictation::recording_another_take_queues_it,
-    models::the_dictation_button_opens_the_asr_page,
+    models::the_dictation_button_opens_the_providers_page,
     models::an_asr_provider_is_saved_and_applied,
     models::a_vendor_is_chosen_from_its_card,
     models::an_invalid_asr_server_is_reported,

@@ -131,8 +131,7 @@ action.apply: Apply
 settings.off: "Off"
 settings.on: "On"
 nav.models: Models
-nav.asr: ASR
-nav.polish: Polish
+nav.providers: Providers
 models.asr_title: ASR model
 models.polish_title: Polish model
 models.custom: Custom
