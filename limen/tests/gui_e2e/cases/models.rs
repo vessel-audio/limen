@@ -440,8 +440,14 @@ pub fn edits_made_while_saving_survive() -> Result<()> {
     open_card(&session, "asr-provider-custom", "asr")?;
     retype(&session, "asr-url", "http://a/v1")?;
     type_model(&session, "typed-model")?;
+    // The address is selected before saving, and keeps the focus a pressed
+    // button does not take, so only keystrokes come between the save and
+    // the edit: finding a control walks the accessibility tree, which on a
+    // slow machine outlasts the reply.
+    session.click("asr-url")?;
+    session.chord(&[Key::CONTROL, Key::char('a')])?;
     session.click("asr-save")?;
-    retype(&session, "asr-url", "http://b/v1")?;
+    session.x11().type_text("http://b/v1")?;
     session.named("toast", "ASR settings applied")?;
     session.click("asr-save")?;
     session.until("the edits made during the first save to be saved", || {
