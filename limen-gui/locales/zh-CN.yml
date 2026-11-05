@@ -1,6 +1,5 @@
 app.title: Limen
 nav.dictation: 听写
-nav.history: 历史
 nav.shortcuts: 快捷键
 status.idle: 空闲
 status.starting: 正在打开麦克风…
@@ -21,7 +20,6 @@ hint.hold_timeout: 60 秒时自动结束
 hint.no_sound: 连续 3 秒未检测到声音
 hint.shifted_symbol: Shift 符号键请使用手动输入
 history.title: 历史
-history.memory: 仅保存在后台服务内存中，重启即清空
 history.empty: 还没有识别记录
 history.original: 原文
 history.committed: 已提交
@@ -109,8 +107,6 @@ settings.font_size: 文字大小
 settings.service: 后台服务
 requests.average: 平均
 requests.failed: 失败
-requests.empty: 还没有转写请求
-requests.succeeded: 转写完成
 requests.in_flight: 正在转写…
 settings.interface_font: 界面字体
 settings.search_font: 搜索字体
@@ -123,9 +119,7 @@ settings.interface_font_hint: 窗口内所有文字使用的字体
 settings.service_hint: 重启或停止听写后台服务
 nav.section: 工作区
 nav.toggle_sidebar: 收起或展开侧边栏
-requests.title: 请求
 requests.count: 个请求
-requests.kept: 后台服务保留最近 20 个
 requests.failed_status: 转写失败
 action.apply: 应用
 settings.off: 关闭
@@ -203,4 +197,5 @@ network.password_saved: 已保存
 network.bypass: 不使用代理的地址
 toast.network_applied: 已应用网络设置
 toast.network_saved: 已保存网络设置，后台服务启动时生效
+transcript.title: 最新识别结果
 transcript.empty: 下一段录音的转写文本将显示在这里

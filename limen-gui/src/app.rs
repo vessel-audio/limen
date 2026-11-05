@@ -63,8 +63,8 @@ pub struct AppView {
     pub shortcut_report: Option<Result<limen_core::Report, crate::bridge::ShortcutFailure>>,
     pub settings_scroll: SmoothScroll,
     pub shortcuts_scroll: SmoothScroll,
-    pub history_scroll: SmoothScroll,
-    pub requests_scroll: SmoothScroll,
+    /// The dictation page's list of takes.
+    pub takes_scroll: SmoothScroll,
     /// The Providers and Usage pages, each scrolled on its own.
     pub providers_scroll: SmoothScroll,
     pub usage_scroll: SmoothScroll,
@@ -80,7 +80,6 @@ pub struct AppView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Dictation,
-    History,
     Shortcuts,
     /// The ASR and polishing providers, under Models in the sidebar.
     Providers,
@@ -195,8 +194,7 @@ impl AppView {
             usage: crate::pages::UsageState::default(),
             transcript: crate::pages::TranscriptState::default(),
             shortcuts_scroll: SmoothScroll::default(),
-            history_scroll: SmoothScroll::default(),
-            requests_scroll: SmoothScroll::default(),
+            takes_scroll: SmoothScroll::default(),
         }
     }
 
@@ -454,8 +452,7 @@ impl Render for AppView {
         for scroll in [
             &self.settings_scroll,
             &self.shortcuts_scroll,
-            &self.history_scroll,
-            &self.requests_scroll,
+            &self.takes_scroll,
             &self.providers_scroll,
             &self.usage_scroll,
             &self.network_scroll,
@@ -472,7 +469,6 @@ impl Render for AppView {
                 .flex_1()
                 .min_h_0()
                 .child(pages::dictation(self, window, cx)),
-            Page::History => pages::history(self, cx),
             Page::Shortcuts => div()
                 .v_flex()
                 .flex_1()
