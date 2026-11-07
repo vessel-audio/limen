@@ -289,7 +289,7 @@ mod tests {
 
     use super::{Refusal, check_writable, snippet, update_shortcut, with_shortcut};
     use crate::config::{Config, DEFAULT_CONFIG, Paths, ShortcutConfig};
-    use crate::shortcut::{Action, Backend};
+    use crate::shortcut::{Action, Backend, Shortcut};
 
     const LEGACY: &str = r#"# my config
 [provider]
@@ -314,6 +314,16 @@ model = "test-model"
         names
     }
 
+    /// The platform default keys, rendered as the writer emits them; on
+    /// macOS the defaults are Ctrl+Alt+Z/X instead of Super+Z/X.
+    fn default_toggle_line() -> String {
+        format!(r#"toggle = "{}""#, Shortcut::DEFAULT_TOGGLE)
+    }
+
+    fn default_hold_line() -> String {
+        format!(r#"hold = "{}""#, Shortcut::DEFAULT_HOLD)
+    }
+
     fn gnome(toggle: &str) -> ShortcutConfig {
         ShortcutConfig {
             backend: Backend::GnomeKeybinding,
@@ -333,7 +343,7 @@ model = "test-model"
             .unwrap(),
             DEFAULT_CONFIG
                 .replace(r#"backend = "none""#, r#"backend = "gnome-keybinding""#)
-                .replace(r#"toggle = "Super+Z""#, r#"toggle = "Ctrl+Alt+V""#)
+                .replace(&default_toggle_line(), r#"toggle = "Ctrl+Alt+V""#)
         );
     }
 
@@ -343,9 +353,20 @@ model = "test-model"
             "{LEGACY}\n[shortcut]\nbackend   =   'none'   # pick one\ntoggle = \"super+z\"\n"
         );
         assert_eq!(
-            with_shortcut(&text, &ShortcutConfig::default(), &gnome("Super+Z")).unwrap(),
+            // The text's toggle (super+z) is the current one; the platform
+            // default would differ on macOS and force a rewrite.
+            with_shortcut(
+                &text,
+                &ShortcutConfig {
+                    toggle: "Super+Z".parse().unwrap(),
+                    ..ShortcutConfig::default()
+                },
+                &gnome("Super+Z"),
+            )
+            .unwrap(),
             format!(
-                "{LEGACY}\n[shortcut]\nbackend   =   \"gnome-keybinding\"   # pick one\ntoggle = \"super+z\"\nhold = \"Super+X\"\n"
+                "{LEGACY}\n[shortcut]\nbackend   =   \"gnome-keybinding\"   # pick one\ntoggle = \"super+z\"\n{}\n",
+                default_hold_line()
             )
         );
     }
@@ -362,7 +383,10 @@ model = "test-model"
     fn the_snippet_is_the_whole_section() {
         assert_eq!(
             snippet(&gnome("Ctrl+Alt+V")),
-            "[shortcut]\nbackend = \"gnome-keybinding\"\ntoggle = \"Ctrl+Alt+V\"\nhold = \"Super+X\"\n"
+            format!(
+                "[shortcut]\nbackend = \"gnome-keybinding\"\ntoggle = \"Ctrl+Alt+V\"\n{}\n",
+                default_hold_line()
+            )
         );
     }
 
@@ -581,7 +605,10 @@ model = "test-model"
         let text = "[provider]\r\nurl = \"http://127.0.0.1:8000/v1\"\nmodel = \"m\"\r\n\r\n[shortcut]\nbackend = \"none\"\r\ntoggle = \"Super+Z\"\r\n";
         assert_eq!(
             with_shortcut(text, &ShortcutConfig::default(), &gnome("Super+Z")).unwrap(),
-            "[provider]\r\nurl = \"http://127.0.0.1:8000/v1\"\nmodel = \"m\"\r\n\r\n[shortcut]\nbackend = \"gnome-keybinding\"\r\ntoggle = \"Super+Z\"\r\nhold = \"Super+X\"\r\n"
+            format!(
+                "[provider]\r\nurl = \"http://127.0.0.1:8000/v1\"\nmodel = \"m\"\r\n\r\n[shortcut]\nbackend = \"gnome-keybinding\"\r\ntoggle = \"Super+Z\"\r\n{}\r\n",
+                default_hold_line()
+            )
         );
     }
 
@@ -598,8 +625,10 @@ model = "test-model"
                 with_shortcut("x = 1", &ShortcutConfig::default(), &gnome("Super+Z")).unwrap(),
             ],
             [
-                "[shortcut]\nbackend = \"gnome-keybinding\"\ntoggle = \"Super+Z\"\nhold = \"Super+X\"\n"
-                    .to_string(),
+                format!(
+                    "[shortcut]\nbackend = \"gnome-keybinding\"\ntoggle = \"Super+Z\"\n{}\n",
+                    default_hold_line()
+                ),
                 format!("x = 1\n\n{}", snippet(&gnome("Super+Z"))),
             ]
         );
@@ -635,7 +664,8 @@ model = "test-model"
         assert_eq!(
             with_shortcut(&text, &ShortcutConfig::default(), &gnome("Ctrl+Alt+V")).unwrap(),
             format!(
-                "{LEGACY}\n[shortcut]\ntoggle = \"Ctrl+Alt+V\"\nbackend = \"gnome-keybinding\"\nhold = \"Super+X\"\n"
+                "{LEGACY}\n[shortcut]\ntoggle = \"Ctrl+Alt+V\"\nbackend = \"gnome-keybinding\"\n{}\n",
+                default_hold_line()
             )
         );
     }

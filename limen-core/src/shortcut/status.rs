@@ -65,13 +65,12 @@ mod tests {
 
     #[test]
     fn status_serializes_as_documented() {
+        let toggle: Shortcut = "Super+Z".parse().unwrap();
+        let hold: Shortcut = "Super+X".parse().unwrap();
         let status = ShortcutStatus {
             backend: Backend::Portal,
             session: SessionState::Bound,
-            preferred: PerAction {
-                toggle: Shortcut::DEFAULT_TOGGLE,
-                hold: Shortcut::DEFAULT_HOLD,
-            },
+            preferred: PerAction { toggle, hold },
             actual: PerAction {
                 toggle: Some(Trigger::new("Press <Super>z".to_string())),
                 hold: None,

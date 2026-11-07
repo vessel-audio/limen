@@ -20,9 +20,13 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, Command};
 
+#[cfg(target_os = "linux")]
 const FCITX_SERVICE: &str = "org.fcitx.Fcitx5";
+#[cfg(target_os = "linux")]
 const FCITX_PATH: &str = "/org/freedesktop/Fcitx5/Limen";
+#[cfg(target_os = "linux")]
 const FCITX_INTERFACE: &str = "org.fcitx.Fcitx5.Limen1";
+#[cfg(target_os = "linux")]
 const FCITX_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 const INPUT_METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,6 +36,10 @@ pub enum Backend {
     Dotool,
     Wtype,
     Fcitx5,
+    /// macOS: commits through CGEvent keyboard events (enigo). Every variant
+    /// parses on every platform so config files stay portable; picking a
+    /// backend for the wrong OS fails with a clear error at commit time.
+    Cgevent,
 }
 
 /// Stateless apart from the cross-segment spacing rule.
@@ -40,7 +48,12 @@ pub struct InputMethod {
     /// dotool stays running and reads commands on stdin; respawned on error.
     dotool_stdin: Option<ChildStdin>,
     dotool_child: Option<Child>,
+    #[cfg(target_os = "linux")]
     fcitx_connection: Option<zbus::Connection>,
+    /// Built on first commit; construction prompts for the Accessibility
+    /// permission the CGEvent backend needs.
+    #[cfg(target_os = "macos")]
+    enigo: Option<enigo::Enigo>,
     /// Whether the previously committed segment ended in an ASCII
     /// letter/digit — Latin words need a separating space, CJK runs don't.
     last_was_latin: bool,
@@ -52,7 +65,10 @@ impl InputMethod {
             backend,
             dotool_stdin: None,
             dotool_child: None,
+            #[cfg(target_os = "linux")]
             fcitx_connection: None,
+            #[cfg(target_os = "macos")]
+            enigo: None,
             last_was_latin: false,
         }
     }
@@ -73,13 +89,12 @@ impl InputMethod {
             return Ok(());
         }
         let needs_space = self.last_was_latin && text.chars().next().is_some_and(is_latin);
+        let payload = match needs_space {
+            true => format!(" {text}"),
+            false => text.to_string(),
+        };
         match self.backend {
             Backend::Wtype => {
-                let payload = if needs_space {
-                    format!(" {text}")
-                } else {
-                    text.to_string()
-                };
                 wtype(&payload).await?;
             }
             Backend::Dotool => {
@@ -102,12 +117,16 @@ impl InputMethod {
                 }
             }
             Backend::Fcitx5 => {
-                let payload = if needs_space {
-                    format!(" {text}")
-                } else {
-                    text.to_string()
-                };
+                #[cfg(target_os = "linux")]
                 self.fcitx_commit(&payload).await?;
+                #[cfg(not(target_os = "linux"))]
+                bail!("the fcitx5 backend is only available on Linux");
+            }
+            Backend::Cgevent => {
+                #[cfg(target_os = "macos")]
+                self.cgevent_commit(&payload)?;
+                #[cfg(not(target_os = "macos"))]
+                bail!("the cgevent backend is only available on macOS");
             }
         }
         self.last_was_latin = text.chars().last().is_some_and(is_latin);
@@ -155,6 +174,26 @@ impl InputMethod {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn cgevent_commit(&mut self, text: &str) -> Result<()> {
+        use enigo::Keyboard;
+
+        if self.enigo.is_none() {
+            // The default settings prompt for the Accessibility permission on
+            // first construction; a refusal surfaces as this error.
+            self.enigo =
+                Some(enigo::Enigo::new(&enigo::Settings::default()).context(
+                    "failed to set up CGEvent input (grant the Accessibility permission)",
+                )?);
+        }
+        self.enigo
+            .as_mut()
+            .unwrap()
+            .text(text)
+            .context("failed to commit text through CGEvent")
+    }
+
+    #[cfg(target_os = "linux")]
     async fn fcitx_commit(&mut self, text: &str) -> Result<()> {
         if self.fcitx_connection.is_none() {
             let connection =
@@ -245,9 +284,14 @@ async fn wait_for_process(
     }
 }
 
-/// Use Fcitx unless a legacy backend is explicitly configured.
+/// Use Fcitx on Linux and CGEvent on macOS unless a legacy backend is
+/// explicitly configured.
 pub fn default_backend(configured: Option<Backend>) -> Backend {
-    configured.unwrap_or(Backend::Fcitx5)
+    #[cfg(target_os = "linux")]
+    const DEFAULT: Backend = Backend::Fcitx5;
+    #[cfg(target_os = "macos")]
+    const DEFAULT: Backend = Backend::Cgevent;
+    configured.unwrap_or(DEFAULT)
 }
 
 #[cfg(test)]
@@ -275,9 +319,17 @@ mod tests {
         assert_eq!(sanitize_control_characters(text), text);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn fcitx_is_the_default_backend() {
         assert_eq!(default_backend(None), Backend::Fcitx5);
+        assert_eq!(default_backend(Some(Backend::Dotool)), Backend::Dotool);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cgevent_is_the_default_backend() {
+        assert_eq!(default_backend(None), Backend::Cgevent);
         assert_eq!(default_backend(Some(Backend::Dotool)), Backend::Dotool);
     }
 
@@ -321,6 +373,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("timed out"));
-        assert!(!std::path::Path::new(&format!("/proc/{process_id}")).exists());
+        // SAFETY: signal 0 only probes for the process; no delivery happens.
+        let alive = unsafe { libc::kill(process_id as i32, 0) } == 0;
+        assert!(!alive);
     }
 }

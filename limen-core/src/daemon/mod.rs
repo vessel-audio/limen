@@ -35,8 +35,7 @@ use crate::config::{Config, PolishConfig};
 use crate::dictation::{self, Control, Dictation, Effect, Event, InputOutcome, Notification};
 use crate::ipc;
 use crate::session::{SessionCommand, SessionHandle};
-use crate::shortcut::portal::ShortcutHandle;
-use crate::shortcut::{Activation, ActivationReceipt, HoldEdge};
+use crate::shortcut::{Activation, ActivationReceipt, HoldEdge, ShortcutHandle};
 
 use input::{InputJob, InputReport, MAX_OUTSTANDING_INPUT};
 use projection::{Completion, Projection};

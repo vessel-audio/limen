@@ -3,7 +3,10 @@
 //! Exit codes: 0 on success; 1 for runtime failures; 2 for arguments or
 //! configuration that can never work.
 
+#[cfg(target_os = "macos")]
+mod carbon;
 mod gnome;
+#[cfg(target_os = "linux")]
 mod portal;
 
 use std::process::ExitCode;
@@ -27,7 +30,7 @@ pub(crate) enum ShortcutCommand {
         /// Key that starts and stops dictation, e.g. Super+Z or <Super>z
         #[arg(long, value_name = "KEYS", value_parser = parse_keys)]
         toggle: Option<Shortcut>,
-        /// Key to hold while talking (portal backend only)
+        /// Key to hold while talking (portal and carbon backends)
         #[arg(long, value_name = "KEYS", value_parser = parse_keys)]
         hold: Option<Shortcut>,
     },
@@ -72,8 +75,21 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
     let current = shortcut_config(paths)?;
     match command {
         ShortcutCommand::Status => match current.backend {
+            #[cfg(target_os = "linux")]
             Backend::Portal => portal::status(paths, current).await,
+            #[cfg(not(target_os = "linux"))]
+            Backend::Portal => {
+                eprintln!("the portal backend is only available on Linux");
+                Ok(())
+            }
             Backend::GnomeKeybinding => gnome::status().await,
+            #[cfg(target_os = "macos")]
+            Backend::Carbon => carbon::status(paths, current).await,
+            #[cfg(not(target_os = "macos"))]
+            Backend::Carbon => {
+                eprintln!("the carbon backend is only available on macOS");
+                Ok(())
+            }
             Backend::None => {
                 gnome::status_none();
                 Ok(())
@@ -97,8 +113,15 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
             .await?;
             render(&report);
             match backend {
+                #[cfg(target_os = "linux")]
                 Backend::Portal => portal::finish_setup(paths).await,
+                #[cfg(not(target_os = "linux"))]
+                Backend::Portal => Ok(()),
                 Backend::GnomeKeybinding => Ok(()),
+                #[cfg(target_os = "macos")]
+                Backend::Carbon => carbon::finish_setup(paths).await,
+                #[cfg(not(target_os = "macos"))]
+                Backend::Carbon => Ok(()),
                 Backend::None => {
                     gnome::status_none();
                     Ok(())
@@ -109,7 +132,14 @@ async fn dispatch(paths: &Paths, command: ShortcutCommand) -> Result<(), SetupEr
             let report = set(paths, action, keys).await?;
             render(&report);
             match report.backend() {
+                #[cfg(target_os = "linux")]
                 Backend::Portal => portal::finish_set(paths, action, keys).await,
+                #[cfg(not(target_os = "linux"))]
+                Backend::Portal => Ok(()),
+                #[cfg(target_os = "macos")]
+                Backend::Carbon => carbon::finish_set(paths, action, keys).await,
+                #[cfg(not(target_os = "macos"))]
+                Backend::Carbon => Ok(()),
                 Backend::GnomeKeybinding | Backend::None => Ok(()),
             }
         }

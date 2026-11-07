@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
+use super::Launch;
+
 /// The app ID the portal knows the daemon by.
 pub const APP_ID: &str = "io.github.Emin017.Limen";
 
@@ -22,15 +24,6 @@ const ENTRY: &str = include_str!("../../../data/io.github.Emin017.Limen.desktop"
 
 /// The icon the entry names, installed beside an entry written here.
 const ICON: &str = include_str!("../../../data/io.github.Emin017.Limen.svg");
-
-/// Which command a non-Nix desktop entry launches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Launch {
-    /// Open the graphical control panel.
-    Gui,
-    /// Run the resident daemon.
-    Daemon,
-}
 
 impl Launch {
     fn subcommand(self) -> &'static str {

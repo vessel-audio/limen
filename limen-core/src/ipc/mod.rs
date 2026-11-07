@@ -21,7 +21,9 @@ pub(crate) use subscription::Watchers;
 pub(crate) mod wire;
 
 use std::io::ErrorKind;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -80,13 +82,17 @@ impl Drop for BoundSocket {
 ///
 /// Device and inode name a file only while it exists: ext4 hands a freed
 /// inode to the next file, so a replacement socket bound after the old one
-/// was unlinked can carry the same pair. The identity holds an `O_PATH`
-/// descriptor to its inode, which keeps the inode allocated and the pair
-/// unique for as long as the identity lives.
+/// was unlinked can carry the same pair. On Linux the identity holds an
+/// `O_PATH` descriptor to its inode, which keeps the inode allocated and the
+/// pair unique for as long as the identity lives. macOS cannot open socket
+/// vnodes at all (open(2) answers ENOTSUP even with O_EVTONLY), so the inode
+/// goes unpinned and `remove_if_owned` accepts the narrow reuse window
+/// between its metadata check and the unlink.
 #[derive(Debug)]
 pub struct SocketIdentity {
     device: u64,
     inode: u64,
+    #[cfg(target_os = "linux")]
     _pinned: std::fs::File,
 }
 
@@ -102,17 +108,29 @@ impl SocketIdentity {
     /// Capture and pin the file now at the socket path.
     pub fn for_path(paths: &Paths) -> Result<Self> {
         let inspect = || format!("failed to inspect {}", paths.socket.display());
-        let pinned = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_PATH)
-            .open(&paths.socket)
-            .with_context(inspect)?;
-        let metadata = pinned.metadata().with_context(inspect)?;
-        Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            _pinned: pinned,
-        })
+        #[cfg(target_os = "linux")]
+        {
+            // O_PATH opens the socket node without read access.
+            let pinned = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH)
+                .open(&paths.socket)
+                .with_context(inspect)?;
+            let metadata = pinned.metadata().with_context(inspect)?;
+            Ok(Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                _pinned: pinned,
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let metadata = std::fs::metadata(&paths.socket).with_context(inspect)?;
+            Ok(Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
     }
 
     /// Remove the path only if it still belongs to this daemon's socket.
@@ -142,6 +160,15 @@ impl SocketIdentity {
 }
 
 pub fn bind(paths: &Paths) -> Result<BoundSocket> {
+    // macOS keeps the socket under the user's cache dir (see
+    // Paths::discover); make sure the private `run` directory exists.
+    #[cfg(target_os = "macos")]
+    if let Some(parent) = paths.socket.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to restrict {}", parent.display()))?;
+    }
     if paths.socket.exists() {
         // Distinguish a live daemon (refuse to start a second one) from a
         // stale socket file left by a crashed one (safe to replace).

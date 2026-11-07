@@ -9,9 +9,9 @@ pub(super) use super::daemon_status;
 use super::gnome;
 use super::{Keys, Note, Report, SetupError, check_config, check_distinct, rebind};
 use crate::config::{self, Paths, ShortcutConfig};
-use crate::shortcut::desktop_entry::{self, APP_ID, Install, Launch};
+use crate::shortcut::desktop_entry::{self, APP_ID, Install};
 use crate::shortcut::program::Program;
-use crate::shortcut::{Action, Backend, Shortcut};
+use crate::shortcut::{Action, Backend, Launch, Shortcut};
 
 impl From<(&Program, Install)> for Report {
     fn from((program, install): (&Program, Install)) -> Self {

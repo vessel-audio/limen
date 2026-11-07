@@ -3,7 +3,10 @@
 //! These functions change configuration and desktop state without printing.
 //! Reports describe user-visible side effects for the caller to render.
 
+#[cfg(target_os = "macos")]
+mod carbon;
 mod gnome;
+#[cfg(target_os = "linux")]
 mod portal;
 
 pub use gnome::{GnomeBinding, GnomeStatus, gnome_status};
@@ -14,7 +17,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
 
-use super::desktop_entry::Launch;
+use super::Launch;
 use super::program::Program;
 use super::status::ShortcutStatus;
 use super::{Action, Backend, Shortcut};
@@ -124,13 +127,27 @@ pub async fn setup(
     launch: Launch,
 ) -> Result<Report, SetupError> {
     let mut report = Report::default();
+    // Only the Linux portal arm launches through a desktop entry.
+    #[cfg(not(target_os = "linux"))]
+    let _ = launch;
     let result = match configured(paths) {
         Err(error) => Err(error),
         Ok(current) => match (backend, keys.hold) {
             (Backend::GnomeKeybinding, Some(_)) => Err(SetupError::usage(
-                "--hold is only used by the portal backend",
+                "--hold is only used by the portal and carbon backends",
             )),
+            #[cfg(target_os = "linux")]
             (Backend::Portal, _) => portal::setup(paths, current, keys, &mut report, launch).await,
+            #[cfg(not(target_os = "linux"))]
+            (Backend::Portal, _) => Err(SetupError::usage(
+                "the portal backend is only available on Linux",
+            )),
+            #[cfg(target_os = "macos")]
+            (Backend::Carbon, _) => carbon::setup(paths, current, keys, &mut report).await,
+            #[cfg(not(target_os = "macos"))]
+            (Backend::Carbon, _) => Err(SetupError::usage(
+                "the carbon backend is only available on macOS",
+            )),
             (Backend::GnomeKeybinding, None) => {
                 let toggle = keys.toggle.unwrap_or(current.toggle);
                 match check_distinct(toggle, current.hold) {
@@ -156,8 +173,19 @@ pub async fn set(paths: &Paths, action: Action, keys: Shortcut) -> Result<Report
         Ok(current) => {
             backend = current.backend;
             match (current.backend, action) {
+                #[cfg(target_os = "linux")]
                 (Backend::Portal, _) => {
                     portal::set(paths, current, action, keys, &mut report).await
+                }
+                #[cfg(not(target_os = "linux"))]
+                (Backend::Portal, _) => {
+                    Err(anyhow!("the portal backend is only available on Linux").into())
+                }
+                #[cfg(target_os = "macos")]
+                (Backend::Carbon, _) => carbon::set(paths, action, keys, &mut report).await,
+                #[cfg(not(target_os = "macos"))]
+                (Backend::Carbon, _) => {
+                    Err(anyhow!("the carbon backend is only available on macOS").into())
                 }
                 (Backend::GnomeKeybinding, Action::Toggle) => {
                     match check_distinct(keys, current.hold) {
@@ -167,7 +195,7 @@ pub async fn set(paths: &Paths, action: Action, keys: Shortcut) -> Result<Report
                 }
                 (Backend::GnomeKeybinding, Action::Hold) => Err(anyhow!(
                     "the gnome-keybinding backend cannot hold to talk; \
-                     for hold-to-talk run `limen shortcut setup portal`"
+                     for hold-to-talk run `limen shortcut setup portal` or `carbon`"
                 )
                 .into()),
                 (Backend::None, _) => Err(not_set_up()),
@@ -190,6 +218,10 @@ pub async fn clear(paths: &Paths, action: Action) -> Result<Report, SetupError> 
                     "GNOME decides the portal's keys; clear them in GNOME Settings with `limen shortcut edit`"
                 )
                 .into()),
+                (Backend::Carbon, _) => Err(anyhow!(
+                    "the carbon backend always binds both keys; change them with `limen shortcut set`"
+                )
+                .into()),
                 (Backend::GnomeKeybinding, Action::Toggle) => gnome::clear(&mut report).await,
                 (Backend::GnomeKeybinding, Action::Hold) => {
                     Err(anyhow!("the gnome-keybinding backend has no hold-to-talk key").into())
@@ -209,8 +241,13 @@ pub async fn edit(paths: &Paths) -> Result<Report, SetupError> {
         Ok(current) => {
             backend = current.backend;
             match current.backend {
+                #[cfg(target_os = "linux")]
                 Backend::Portal => portal::edit().await,
-                Backend::GnomeKeybinding => {
+                #[cfg(not(target_os = "linux"))]
+                Backend::Portal => {
+                    Err(anyhow!("the portal backend is only available on Linux").into())
+                }
+                Backend::Carbon | Backend::GnomeKeybinding => {
                     Err(anyhow!("change the key with `limen shortcut set toggle <KEYS>`").into())
                 }
                 Backend::None => Err(not_set_up()),
@@ -233,10 +270,11 @@ fn complete(
 }
 
 fn not_set_up() -> SetupError {
-    anyhow!(
-        "no shortcut backend is set up; run `limen shortcut setup <portal|gnome-keybinding>` first"
-    )
-    .into()
+    #[cfg(target_os = "linux")]
+    const BACKENDS: &str = "portal|gnome-keybinding";
+    #[cfg(target_os = "macos")]
+    const BACKENDS: &str = "carbon";
+    anyhow!("no shortcut backend is set up; run `limen shortcut setup <{BACKENDS}> first").into()
 }
 
 /// Read only the shortcut section, retaining defaults when no config exists.

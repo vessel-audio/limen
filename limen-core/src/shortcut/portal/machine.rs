@@ -133,7 +133,7 @@ fn status(config: &ShortcutConfig, session: SessionState) -> ShortcutStatus {
 pub(super) fn initial_status(config: ShortcutConfig) -> ShortcutStatus {
     let session = match config.backend {
         Backend::Portal => SessionState::Binding,
-        Backend::GnomeKeybinding | Backend::None => SessionState::Disabled,
+        Backend::GnomeKeybinding | Backend::Carbon | Backend::None => SessionState::Disabled,
     };
     status(&config, session)
 }
@@ -336,7 +336,7 @@ impl Machine {
                     Output::Publish(self.status.clone()),
                 ]
             }
-            Backend::GnomeKeybinding | Backend::None => {
+            Backend::GnomeKeybinding | Backend::Carbon | Backend::None => {
                 self.stage = Stage::Idle;
                 self.status = status(&self.config, SessionState::Disabled);
                 vec![Output::Publish(self.status.clone())]

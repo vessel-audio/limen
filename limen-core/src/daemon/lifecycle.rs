@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::sync::{mpsc, watch};
 
 use super::Projection;
@@ -14,7 +14,7 @@ use crate::dictation::Event;
 use crate::ipc;
 use crate::notify::notify;
 use crate::session::SessionHandle;
-use crate::shortcut::portal::{Bus, ShortcutHandle};
+use crate::shortcut::ShortcutHandle;
 use crate::usage::Meter;
 
 pub(crate) struct ActorExit {
@@ -25,7 +25,53 @@ pub(crate) struct ActorExit {
 
 /// Run the resident daemon with the discovered paths and loaded
 /// configuration; `backend` builds every model client it uses.
-pub async fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+///
+/// Sync because macOS needs the calling (main) thread: Carbon hotkey events
+/// only dispatch while the main thread pumps its event loop, so there the
+/// tokio runtime moves to a worker thread and the main thread runs the pump.
+/// On Linux this is a plain runtime wrapper.
+pub fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+    run_platform(paths, cfg, backend)
+}
+
+/// The tokio runtime goes on a worker thread; the main thread pumps the
+/// Carbon event loop, without which no hotkey event is ever dispatched.
+#[cfg(target_os = "macos")]
+fn run_platform(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let pump = crate::shortcut::carbon::install_event_pump();
+    let worker_done = Arc::new(AtomicBool::new(false));
+    let thread_done = worker_done.clone();
+    let worker = std::thread::Builder::new()
+        .name("limen-runtime".into())
+        .spawn(move || {
+            let result = run_runtime(paths, cfg, backend);
+            thread_done.store(true, Ordering::SeqCst);
+            result
+        })
+        .context("failed to spawn the daemon runtime thread")?;
+    pump.run(worker_done);
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("the daemon runtime thread panicked"))?
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_platform(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+    run_runtime(paths, cfg, backend)
+}
+
+/// Build the tokio runtime and block on the daemon.
+fn run_runtime(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build the daemon runtime")?
+        .block_on(run_async(paths, cfg, backend))
+}
+
+async fn run_async(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
     let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (polish, polish_rx) = watch::channel(cfg.polish.clone());
@@ -36,7 +82,7 @@ pub async fn run(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> R
     // The session actor holds the only sender, so this mailbox closes exactly
     // when the actor stops.
     let (activation_tx, activations) = mpsc::unbounded_channel();
-    let shortcuts = ShortcutHandle::spawn(cfg.shortcut, Bus::Session, activation_tx, notify);
+    let shortcuts = crate::shortcut::spawn_shortcuts(cfg.shortcut, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let (projection, snapshots) = Projection::new(&cfg);
     let (session, levels) = SessionHandle::spawn(cfg, backend, meter, session_report_tx);

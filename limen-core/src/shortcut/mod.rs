@@ -16,8 +16,12 @@
 //! Ctrl). Rendering always lists the modifiers in GTK's order: Shift, Ctrl,
 //! Alt, Super.
 
+#[cfg(target_os = "macos")]
+pub(crate) mod carbon;
+#[cfg(target_os = "linux")]
 pub(crate) mod desktop_entry;
 pub(crate) mod gnome;
+#[cfg(target_os = "linux")]
 pub(crate) mod portal;
 pub(crate) mod program;
 pub(crate) mod setup;
@@ -27,6 +31,34 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+
+/// Which command a non-Nix desktop entry launches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Launch {
+    /// Open the graphical control panel.
+    Gui,
+    /// Run the resident daemon.
+    Daemon,
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) use carbon::ShortcutHandle;
+/// The platform's shortcut actor, owned by the daemon.
+#[cfg(target_os = "linux")]
+pub(crate) use portal::ShortcutHandle;
+
+/// Spawn the platform's shortcut actor: the portal session on Linux, the
+/// Carbon hotkey registrar on macOS.
+pub(crate) fn spawn_shortcuts(
+    config: crate::config::ShortcutConfig,
+    activations: tokio::sync::mpsc::UnboundedSender<ActivationReceipt>,
+    notify: fn(&str, &str),
+) -> ShortcutHandle {
+    #[cfg(target_os = "linux")]
+    return ShortcutHandle::spawn(config, portal::Bus::Session, activations, notify);
+    #[cfg(target_os = "macos")]
+    return ShortcutHandle::spawn(config, activations, notify);
+}
 
 /// What a shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -47,6 +79,7 @@ impl Action {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn from_id(id: &str) -> Option<Self> {
         match id {
             "toggle" => Some(Self::Toggle),
@@ -61,9 +94,12 @@ impl Action {
 #[serde(rename_all = "kebab-case")]
 pub enum Backend {
     /// The daemon binds both actions through the GlobalShortcuts portal.
+    /// Linux only.
     Portal,
     /// A GNOME custom keybinding runs `limen toggle`; toggle only.
     GnomeKeybinding,
+    /// The daemon binds both actions through Carbon hotkeys. macOS only.
+    Carbon,
     /// The user binds `limen toggle` in the desktop settings.
     #[default]
     None,
@@ -75,6 +111,7 @@ impl fmt::Display for Backend {
         f.write_str(match self {
             Self::Portal => "portal",
             Self::GnomeKeybinding => "gnome-keybinding",
+            Self::Carbon => "carbon",
             Self::None => "none",
         })
     }
@@ -137,14 +174,37 @@ pub struct Shortcut {
 }
 
 impl Shortcut {
-    /// `Super+Z`, the default toggle shortcut.
+    /// The default toggle shortcut: `Super+Z` on Linux, `Ctrl+Alt+Shift+D` on
+    /// macOS, where Super is Cmd and `Cmd+Z` would shadow Undo system-wide,
+    /// Ctrl+Alt+Z collides with VoiceOver's VO prefix, and ⌃⌥Space is macOS's
+    /// "select next input source". Three modifiers stay clear of all three.
+    #[cfg(target_os = "linux")]
     pub const DEFAULT_TOGGLE: Self = Self::with_super(Key::Letter('z'));
-    /// `Super+X`, the default hold-to-talk shortcut.
+    #[cfg(target_os = "macos")]
+    pub const DEFAULT_TOGGLE: Self = Self::with_ctrl_alt_shift(Key::Letter('d'));
+    /// The default hold-to-talk shortcut; Space is comfortable to hold.
+    #[cfg(target_os = "linux")]
     pub const DEFAULT_HOLD: Self = Self::with_super(Key::Letter('x'));
+    #[cfg(target_os = "macos")]
+    pub const DEFAULT_HOLD: Self = Self::with_ctrl_alt_shift(Key::Named {
+        keysym: "space",
+        label: "Space",
+    });
 
+    #[cfg(target_os = "linux")]
     const fn with_super(key: Key) -> Self {
         Self {
             modifiers: Modifiers(Modifier::Super.bit()),
+            key,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    const fn with_ctrl_alt_shift(key: Key) -> Self {
+        Self {
+            modifiers: Modifiers(
+                Modifier::Ctrl.bit() | Modifier::Alt.bit() | Modifier::Shift.bit(),
+            ),
             key,
         }
     }
@@ -206,6 +266,7 @@ impl Shortcut {
     }
 
     /// The portal format, e.g. `CTRL+ALT+w`.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn portal_trigger(self) -> String {
         self.modifiers
             .iter()
@@ -340,6 +401,7 @@ impl Modifier {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn portal_name(self) -> &'static str {
         match self {
             Self::Shift => "SHIFT",
@@ -466,9 +528,9 @@ mod tests {
 
     #[test]
     fn every_format_parses_to_the_same_shortcut() {
+        let shortcut = parse("Super+Z");
         let shortcuts = ["Super+Z", "super+z", "<Super>z", "LOGO+z"].map(parse);
-        assert_eq!(shortcuts, [Shortcut::DEFAULT_TOGGLE; 4]);
-        let shortcut = Shortcut::DEFAULT_TOGGLE;
+        assert_eq!(shortcuts, [shortcut; 4]);
         assert_eq!(
             [
                 shortcut.to_string(),
@@ -543,14 +605,14 @@ mod tests {
     fn gnome_accelerators_ignore_case() {
         assert_eq!(
             ["<super>z", "<SUPER>Z", "<Super>Z"].map(parse),
-            [Shortcut::DEFAULT_TOGGLE; 3]
+            [parse("Super+Z"); 3]
         );
         assert_eq!(parse("<Super>Z").gnome_accelerator(), "<Super>z");
     }
 
     #[test]
     fn trigger_descriptions_yield_their_accelerators() {
-        let super_z = Shortcut::DEFAULT_TOGGLE;
+        let super_z = parse("Super+Z");
         let ctrl_f9 = parse("Ctrl+F9");
         // GNOME 50 portal wordings, including translations.
         let cases = [
