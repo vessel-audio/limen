@@ -168,8 +168,8 @@ fn backend_options() -> Vec<(&'static str, Backend, String)> {
 }
 
 /// The portal page minus GNOME's settings editor: Carbon registers the
-/// configured keys with the daemon directly.
-#[cfg(target_os = "macos")]
+/// configured keys with the daemon directly. Compiled on every platform so a
+/// macOS-written config still renders on Linux.
 fn carbon(view: &AppView) -> Div {
     let status = view.model.snapshot.as_ref().map(|snapshot| {
         let status = &snapshot.shortcut;

@@ -5,7 +5,6 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
-pub(super) use super::daemon_status;
 use super::gnome;
 use super::{Keys, Note, Report, SetupError, check_config, check_distinct, rebind};
 use crate::config::{self, Paths, ShortcutConfig};
