@@ -1,331 +1,103 @@
 # Limen
 
-System-wide voice input for Wayland: microphone audio is buffered for one take,
-transcribed after the stop shortcut, and committed to the focused
-Fcitx-compatible input context (Ghostty, Claude Code, GTK applications).
+System-wide voice input: hold a key (or toggle it), speak, and the
+transcript is committed to the focused app — Ghostty, Claude Code, GTK
+apps on Linux/Wayland, any text field on macOS. Nothing is typed while you
+speak, and Limen never presses Enter for you.
 
 ## Requirements
 
-- Wayland session (developed against GNOME/Mutter)
+Linux (Wayland, developed against GNOME/Mutter):
+
 - `pw-record` (PipeWire) and `notify-send` (libnotify)
-- Fcitx5 5.1.0 or newer with its D-Bus addon
-- CMake, pkg-config, a C++ compiler, and Fcitx5 development files for the
-  user-local text-input addon
-- An ASR service, one of:
-  - a server exposing OpenAI-compatible `POST /v1/audio/transcriptions`, such
-    as [sglang-omni](https://github.com/sgl-project/sglang-omni) serving
-    Qwen3-ASR
-  - the whisper.cpp server, which takes the take at exactly its configured URL
-  - an API key for OpenAI, Groq, Mistral, or Gemini
-- For hold-to-talk, a desktop with the GlobalShortcuts portal (GNOME 48 or
-  newer); toggling works with any desktop shortcut
+- Fcitx5 5.1.0+ with its D-Bus addon — it commits Unicode text directly
+  instead of simulating keystrokes (`dotool`/`wtype` remain as legacy
+  backends)
 
-`dotool` and `wtype` are optional legacy backends. Fcitx5 is the default because
-it commits Unicode text directly instead of simulating keyboard layouts.
+macOS: no extra packages; recording uses CoreAudio and text commits through
+CGEvent.
 
-## macOS
-
-The daemon, CLI, and control panel also run on macOS, where the platform
-backends replace the Linux desktop stack:
-
-| Concern | Linux | macOS |
-|---|---|---|
-| Recording | `pw-record` (PipeWire) | CoreAudio (via cpal) |
-| Text commit | Fcitx5 D-Bus addon | CGEvent keyboard events (enigo) |
-| Global shortcuts | GlobalShortcuts portal / GNOME | **broken**, see below |
-| Notifications | `notify-send` | `terminal-notifier`, else `osascript` |
-
-Differences to expect:
-
-- **Global shortcuts are broken on macOS.** The `carbon` backend registers
-  its hotkeys, but Carbon never dispatches their events to a plain CLI
-  process (verified against raw `RegisterEventHotKey` with both
-  `RunCurrentEventLoop` and `CFRunLoopRunInMode` pumps, with and without
-  `TransformProcessType`; a listen-only CGEventTap needs the Input
-  Monitoring permission). Bind `limen toggle` in a launcher instead —
-  Raycast, Hammerspoon, or Keyboard Maestro all run shell commands on
-  hotkeys, and Hammerspoon can map key down/up to `limen hold press` /
-  `limen hold release` for hold-to-talk. A proper fix means an `.app`
-  bundle or a permission-gated CGEventTap backend.
-- macOS asks for two permissions, attributed to the app that hosts the
-  process: **Microphone** on the first take, and **Accessibility** when text
-  is first committed. Run from a terminal, they belong to the terminal app
-  (System Settings → Privacy & Security).
-- `brew install terminal-notifier` gives native-looking notifications under
-  its own identity; without it, notifications fall back to osascript and show
-  up as Script Editor.
-- Config lives at `~/Library/Application Support/dev.limen.limen/config.toml`;
-  the socket and log live under `~/Library/Caches/dev.limen.limen/`.
-- The `[audio] device` setting takes an exact CoreAudio device name, such as
-  `MacBook Pro Microphone`, instead of a pw-record target.
-- The desktop end-to-end tests are Linux-only; on macOS `cargo gui-e2e` is a
-  stub. Everything else in `cargo test --workspace` runs on both platforms.
-
-An `.app` bundle with a stable bundle ID (native UNUserNotificationCenter
-notifications, a LaunchAgent, working Carbon hotkeys, TCC identity
-independent of the terminal) is future work.
+Both platforms need an ASR service: a local server speaking
+OpenAI-compatible `POST /v1/audio/transcriptions` (e.g.
+[sglang-omni](https://github.com/sgl-project/sglang-omni) or whisper.cpp),
+or an API key for OpenAI, Groq, Mistral, or Gemini.
 
 ## Build
-
-### Cargo
 
 ```bash
 cargo build --release
 ```
 
-### Nix / flake-parts
-
-Build the default package and run the daemon from the flake:
-
-```bash
-nix build
-nix run . -- daemon
-```
-
-For development, enter the Rust and Fcitx addon build environment, run all
-flake checks, or format the project:
-
-```bash
-nix develop
-nix flake check
-nix fmt
-```
-
-The package provides `pw-record` and `notify-send` in its runtime PATH and
-installs the desktop entry that the shortcut portal needs. It does not install
-the Fcitx addon; follow the separate addon setup below.
-
-The GUI has desktop end-to-end tests. Inside `nix develop`, `cargo gui-e2e`
-launches the control panel in a private Xvfb display with its own D-Bus and
-AT-SPI buses, finds every control through the accessibility tree, presses it
-with real pointer and keyboard input, and checks what the desktop sees: the
-clipboard, window-manager requests, rendered colors, programs started, GNOME
-settings, the config file, and the daemon protocol. Pass part of a case name to
-run fewer cases, such as `cargo gui-e2e shortcuts`. Each case leaves a
-screenshot, its accessibility tree, and logs under `target/tmp/gui-e2e/`.
-
-## GUI control panel
-
-Open the GPUI control panel with `limen gui` or the desktop launcher. The
-default Nix package includes it; `nix run .#headless -- daemon` builds and runs
-the headless variant without GPUI. Closing the window never stops the daemon,
-so shortcut dictation keeps working. If the daemon is not running, the GUI starts
-it in the background and keeps its log at the XDG state path.
-
-The dictation, history, and shortcut pages update live from the daemon. Stopping
-a take with the GUI button keeps the polished text in history and copies it to
-the clipboard instead of typing it into the GUI. The level meter and recent
-errors are visible on the dictation page. Use the about page to open the config
-or log, restart the background service, or stop it after confirmation. If an
-upgrade leaves an outdated daemon running, restart it from the GUI so the new
-protocol takes effect.
-
-The Models pages, opened from the sidebar or the Models button on the dictation
-page, show each role's providers as cards, the saved one marked; the Polish page
-also has the switch that turns polishing on or off. A card opens a dialog: a
-vendor's shows the URL its API is reached at, which a gateway's can replace,
-and needs an API key and a model; Custom names your own server by its URL and
-the API it speaks, OpenAI-compatible, whisper.cpp for ASR, or any vendor's.
-Polishing over OpenAI's API or a compatible one also chooses its chat API,
-Chat Completions or Responses; OpenAI and xAI default to Responses, the others
-to Chat Completions. Polishing can also use a ChatGPT or GitHub Copilot plan
-you already pay for, under Subscriptions: its dialog has no key, only Sign in,
-which opens ChatGPT's sign-in page in the browser (or shows a code to enter
-when the browser cannot return to Limen), or shows the code to enter on
-GitHub's page for Copilot. The sign-in is kept under `sign-ins/` beside the
-config file, readable by you alone, refreshed as it expires, and used by the
-daemon from its next correction; Sign out forgets it. No server or model is set until you choose one. Once the server
-address or key stops changing, the dialog asks the provider for its models: a
-server that offers exactly one fills it in, and otherwise the list offers them
-and also takes a typed name; Detect asks at once. The whisper.cpp server lists
-none. Test asks the model to do its job once with the fields as typed, without
-saving them. Each dialog's Advanced settings belong to that provider alone:
-the header the key is
-sent in, extra request headers, extra JSON body fields, a timeout for each
-try, and how many times a request that failed for now (the service was
-unreachable, busy, or failing) is tried again; a rejected key or a refused
-request is never repeated, and `[polish].timeout_ms` bounds a whole
-correction, retries included. They are saved under `[provider.options.<service>]`
-or `[polish.options.<service>]`; the config file is not private, so a key
-belongs in the API key field, sent in the key header, never in the headers. Saving writes `config.toml` and applies the change to a running
-daemon from its next take. API keys never go into
-`config.toml`: they are saved in `keys.toml` beside it with mode 0600, and a
-saved key comes before the variable named by `api_key_env`, which defaults to
-the vendor's own, such as `OPENAI_API_KEY`.
+With Nix: `nix build` then `nix run . -- daemon`; `nix develop` enters the
+dev shell. The GUI has desktop end-to-end tests on Linux: `cargo gui-e2e`.
 
 ## Setup
 
-1. Start your ASR server, e.g. sgl-omni:
-   ```bash
-   sgl-omni serve --model-path Qwen/Qwen3-ASR-0.6B --port 8000
-   ```
-2. Install the Fcitx5 addon and restart Fcitx5. Build artifacts use a
-   source-specific directory under `${XDG_CACHE_HOME:-$HOME/.cache}/limen/fcitx5`
-   (override with `LIMEN_BUILD_DIR`); installation targets
-   `${XDG_DATA_HOME:-$HOME/.local/share}` and never uses sudo:
+1. **ASR.** First run writes an annotated config (`$XDG_CONFIG_HOME/limen/config.toml` on Linux,
+   `~/Library/Application Support/dev.limen.limen/config.toml` on macOS).
+   Pick a provider and model on the GUI's ASR page, or set `provider.url`
+   and `provider.model` by hand.
+2. **Text input (Linux only).** Install the Fcitx5 addon and restart Fcitx5:
    ```bash
    contrib/fcitx5-limen/install-user.sh
    fcitx5 -d -r
-   busctl --user introspect org.fcitx.Fcitx5 /org/freedesktop/Fcitx5/Limen
    ```
-   The introspection output must contain `CommitText`. On NixOS, `nix develop`
-   provides CMake, pkg-config, GCC, coreutils, and Fcitx5 development files.
-   Use the same `fcitx5` package version as the running daemon; rebuild after
-   Fcitx upgrades because the addon uses its C++ ABI.
-3. First run writes an annotated default config to
-   `$XDG_CONFIG_HOME/limen/config.toml` with no ASR server or model; set them
-   on the GUI's ASR page, or point `provider.url` at your server's
-   `/v1/audio/transcriptions` endpoint and set `provider.model`. `input_method.backend` defaults to
-   `fcitx5` and requires the addon from step 2.
-4. Start the daemon:
+   Rebuild it after Fcitx upgrades (C++ ABI).
+3. **Daemon.** Start it and keep it running — Limen does not install an
+   autostart entry:
    ```bash
    limen daemon
    ```
-   The portal shortcuts below live in the daemon, so keep it running, e.g.
-   by starting it from your session's autostart; Limen does not
-   install an autostart entry yet.
-5. Bind the shortcuts, choosing one way:
-   - **Portal (recommended, supports hold-to-talk):**
-     ```bash
-     limen shortcut setup portal
-     ```
-     The first time, GNOME asks you to confirm the keys, prefilled with
-     Super+Z (toggle) and Super+X (hold to talk); pass `--toggle KEYS` or
-     `--hold KEYS` to suggest others. GNOME keeps the binding from then on:
-     change it in GNOME Settings with `limen shortcut edit`. Without a
-     Nix package, setup installs the desktop entry the portal needs into
-     `~/.local/share/applications`.
-   - **GNOME custom shortcut (toggle only):**
-     ```bash
-     limen shortcut setup gnome-keybinding --toggle Super+Z
-     ```
-     It writes a GNOME custom shortcut that runs `limen toggle`, keeping
-     your other custom shortcuts, and refuses a key GNOME already uses. Change
-     the key later with `limen shortcut set toggle KEYS`.
-   - **By hand:** bind `limen toggle` in your desktop's keyboard
-     settings (backend `none`, the default). Compositors with key-release
-     bindings can also run `limen hold press` and `limen hold
-     release`, e.g. sway's `bindsym --no-repeat` and `bindsym --release`.
+4. **Shortcut.**
+   - Linux: `limen shortcut setup portal` (GNOME confirms once; supports
+     hold-to-talk) or `setup gnome-keybinding` (toggle only), or bind
+     `limen toggle` in your desktop settings yourself. `limen shortcut
+     status` shows what is bound.
+   - macOS: **global hotkeys are broken for now** — a CLI process never
+     receives Carbon hotkey events. Bind `limen toggle` in a launcher
+     (Raycast, Hammerspoon, Keyboard Maestro); Hammerspoon can map key
+     down/up to `limen hold press` / `limen hold release` for
+     hold-to-talk.
 
-   `limen shortcut status` shows what is bound. A config managed by
-   home-manager is never rewritten: setup prints the `[shortcut]` section to
-   add to it instead.
+macOS asks for two permissions, attributed to the hosting terminal app:
+**Microphone** on the first take and **Accessibility** on the first text
+commit. `brew install terminal-notifier` gives native-looking
+notifications.
 
-Press the toggle once to start dictation and again to stop. Nothing is typed
-while you are speaking. After the second press, the complete take is
-transcribed and the final text is committed once. The tool never presses
-Enter for you.
+## Usage
 
-With hold-to-talk, hold the key while you speak; releasing it stops and
-transcribes. A hold shorter than 300ms counts as an accidental tap and is
-dropped, and a hold longer than 60s is stopped and transcribed as if you had
-released the key.
+Toggle: press once to start, again to stop; the take is transcribed and
+committed once. Hold-to-talk: speak while held; a hold under 300 ms is
+dropped as accidental, one over 60 s is stopped for you.
+
+## GUI control panel
+
+`limen gui` opens the control panel: live dictation state, level meter and
+history, ASR/polish provider setup (including ChatGPT and Copilot sign-in),
+proxy settings, and the shortcut page. Closing the window never stops the
+daemon. API keys and the proxy password are saved in `keys.toml` (mode
+0600), never in `config.toml`. `nix run .#headless -- daemon` runs without
+the GUI.
 
 ## Commands
 
-- `limen gui` — open the graphical control panel (GUI-enabled builds)
-- `limen daemon` — resident process (capture, ASR session, text input,
-  portal shortcuts)
-- `limen toggle` — start/stop dictation (for the desktop shortcut)
-- `limen hold press|release` — the hold-to-talk key went down or up (for
-  key-release bindings)
-- `limen status` — print daemon state (`idle` / `recording` / `finalizing`)
-- `limen shortcut status|setup|set|clear|edit` — show, set up, or change
-  the global shortcuts; exits with 1 on failure and 2 on invalid arguments
-- `limen probe <wav>` — transcribe a 16kHz mono wav and print the final
-  result with timestamps
-
-## Recognition
-
-Each take is buffered in memory and sent in one transcription request when
-recording stops. The `service` in `[provider]` picks where it goes: a vendor,
-or `custom`, your server at `url` speaking `format`. Vendors and every format
-but `whisper-cpp` are reached through
-[rig](https://github.com/0xPlaygrounds/rig), with `url` as the API's base URL,
-such as `http://127.0.0.1:8000/v1`; `whisper-cpp` uploads the take to exactly
-`url`. A config without `service` keeps working: a URL ending in
-`/audio/transcriptions` is an OpenAI-compatible server, and any other URL gets
-the whisper.cpp upload. There are no incremental transcript
-or text input events during recording. A successful request produces one final
-transcript for the whole take.
-
-## Conservative polishing
-
-Polishing is disabled by default, and no model is chosen for it. Enable it on
-the GUI's Polish page with the chat model of your choice, or in the config with
-the API key in the daemon's environment, never in the config file. A local
-server needs no key:
-
-```toml
-[polish]
-enabled = true
-service = "custom"
-format = "openai-compatible"   # or any vendor's API: anthropic, gemini, ...
-url = "http://127.0.0.1:8080/v1"
-model = "qwen3-8b"
-timeout_ms = 5000
-```
-
-A vendor's own API takes no `url` or `format`, and reads its key from its own
-variable unless `api_key_env` names another. Its URL, and for polishing its
-chat API, are its own unless its options name others:
-
-```toml
-[polish]
-enabled = true
-service = "openai"   # or anthropic, gemini, deepseek, mistral, groq, openrouter, xai
-model = "your-model"
-
-[polish.options.openai]
-url = "https://gateway.example/v1"
-chat_api = "chat-completions"   # or "responses"
-```
-
-A custom server's URL is its API's base URL, without a query. Remote servers
-must use HTTPS; HTTP is allowed only on a loopback address, for example
-`http://127.0.0.1:3425/v1`. The request asks for temperature 0
-and no reasoning, which each API receives in its own form, or not at all where a
-model cannot take it.
-
-Only the non-empty final transcript of each take is considered for correction.
-Audio, conversation history, and other takes are not sent to the polishing
-service. The prompt only permits conservative ASR correction; translation,
-expansion, summaries, answers, and instructions contained in the transcript are
-not allowed.
-
-A vendor without a key produces one warning and no HTTP request. Missing keys, timeouts,
-HTTP or JSON errors, empty content, control characters, and non-`stop` finish
-reasons all select the original transcript. A correction that the selected
-input method cannot commit (for example, Unicode punctuation through `dotool`) also
-selects the original. The selected transcript gets exactly one commit
-attempt; failures are never retried with alternate text because a timeout could
-otherwise duplicate text. `finalizing` includes correction and text input drain,
-not just the transcription request.
-
-## Proxy
-
-Requests to model services, subscription sign-ins, and balance checks go
-through the proxy that Settings › Network chooses, saved under `[network]`:
-`system` (the default) follows `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and
-`NO_PROXY` in the daemon's environment; `none` always connects directly; and
-`manual` uses `proxy_url`, an `http://`, `https://`, `socks5://`, or
-`socks5h://` address, for every host but those `no_proxy` lists, which starts
-as `localhost, 127.0.0.1, ::1` so local servers are reached directly:
-
-```toml
-[network]
-proxy = "manual"
-proxy_url = "socks5h://127.0.0.1:1080"
-proxy_username = "me"
-no_proxy = "localhost, 127.0.0.1, ::1, .corp.example"
-```
-
-The proxy's password, like API keys, is saved in `keys.toml` with mode 0600,
-never in `config.toml`, which refuses a URL with a login in it. Saving applies
-the proxy to a running daemon from its next request.
+- `limen gui` — control panel (GUI-enabled builds)
+- `limen daemon` — resident process (capture, ASR, text input, shortcuts)
+- `limen toggle` — start/stop dictation
+- `limen hold press|release` — hold-to-talk key edges (for key-release bindings)
+- `limen status` — daemon state (`idle` / `recording` / `finalizing`)
+- `limen shortcut status|setup|set|clear|edit` — manage the global shortcuts
+- `limen probe <wav>` — transcribe a 16 kHz mono wav and print the result
 
 ## Config
 
-`$XDG_CONFIG_HOME/limen/config.toml` — see the annotated default written
-on first run. Logs and the IPC socket follow the XDG spec
-(`$XDG_STATE_HOME/limen/`, `$XDG_RUNTIME_DIR/limen.sock`).
+The annotated default written on first run covers everything. Highlights:
+
+- `[polish]` (off by default) corrects the final transcript with a chat
+  model — conservatively, and audio never leaves the ASR service. If a
+  correction cannot be committed, the original transcript is used.
+- `[network]` picks the proxy for model requests: `system` (the
+  environment's `HTTPS_PROXY` etc.), `none`, or `manual` with `proxy_url`
+  and `no_proxy`. Remote servers must use HTTPS; HTTP is loopback-only.
+- Logs and the IPC socket live under the XDG state/runtime dirs on Linux
+  and under `~/Library/Caches/dev.limen.limen/` on macOS.
