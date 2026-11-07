@@ -23,6 +23,48 @@ Fcitx-compatible input context (Ghostty, Claude Code, GTK applications).
 `dotool` and `wtype` are optional legacy backends. Fcitx5 is the default because
 it commits Unicode text directly instead of simulating keyboard layouts.
 
+## macOS
+
+The daemon, CLI, and control panel also run on macOS, where the platform
+backends replace the Linux desktop stack:
+
+| Concern | Linux | macOS |
+|---|---|---|
+| Recording | `pw-record` (PipeWire) | CoreAudio (via cpal) |
+| Text commit | Fcitx5 D-Bus addon | CGEvent keyboard events (enigo) |
+| Global shortcuts | GlobalShortcuts portal / GNOME | **broken**, see below |
+| Notifications | `notify-send` | `terminal-notifier`, else `osascript` |
+
+Differences to expect:
+
+- **Global shortcuts are broken on macOS.** The `carbon` backend registers
+  its hotkeys, but Carbon never dispatches their events to a plain CLI
+  process (verified against raw `RegisterEventHotKey` with both
+  `RunCurrentEventLoop` and `CFRunLoopRunInMode` pumps, with and without
+  `TransformProcessType`; a listen-only CGEventTap needs the Input
+  Monitoring permission). Bind `limen toggle` in a launcher instead —
+  Raycast, Hammerspoon, or Keyboard Maestro all run shell commands on
+  hotkeys, and Hammerspoon can map key down/up to `limen hold press` /
+  `limen hold release` for hold-to-talk. A proper fix means an `.app`
+  bundle or a permission-gated CGEventTap backend.
+- macOS asks for two permissions, attributed to the app that hosts the
+  process: **Microphone** on the first take, and **Accessibility** when text
+  is first committed. Run from a terminal, they belong to the terminal app
+  (System Settings → Privacy & Security).
+- `brew install terminal-notifier` gives native-looking notifications under
+  its own identity; without it, notifications fall back to osascript and show
+  up as Script Editor.
+- Config lives at `~/Library/Application Support/dev.limen.limen/config.toml`;
+  the socket and log live under `~/Library/Caches/dev.limen.limen/`.
+- The `[audio] device` setting takes an exact CoreAudio device name, such as
+  `MacBook Pro Microphone`, instead of a pw-record target.
+- The desktop end-to-end tests are Linux-only; on macOS `cargo gui-e2e` is a
+  stub. Everything else in `cargo test --workspace` runs on both platforms.
+
+An `.app` bundle with a stable bundle ID (native UNUserNotificationCenter
+notifications, a LaunchAgent, working Carbon hotkeys, TCC identity
+independent of the terminal) is future work.
+
 ## Build
 
 ### Cargo
