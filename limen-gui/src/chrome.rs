@@ -61,6 +61,10 @@ impl AppView {
                     .items_center()
                     .w_full()
                     .pr_2()
+                    // macOS traffic lights sit over the title bar's top-left
+                    // corner (repositioned in AppView::new); keep the brand
+                    // clear of them.
+                    .children(cfg!(target_os = "macos").then(|| div().flex_shrink_0().w(px(76.))))
                     .child(
                         div()
                             .h_flex()
