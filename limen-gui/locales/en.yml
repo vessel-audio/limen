@@ -70,6 +70,8 @@ shortcuts.hold_order: Release X before Super; otherwise recording stops after 60
 footer.polish: polish
 footer.shortcut: shortcut
 shortcuts.gnome_backend: GNOME custom shortcut
+shortcuts.carbon_backend: macOS global hotkey
+shortcuts.carbon_hint: "Broken on macOS: hotkeys register but never fire from a CLI process. Bind limen toggle in a launcher instead."
 shortcuts.edit: Change in GNOME Settings
 shortcuts.preferred_toggle: Preferred toggle
 shortcuts.preferred_hold: Preferred hold-to-talk

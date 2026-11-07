@@ -70,6 +70,8 @@ shortcuts.hold_order: 请先松开 X 再松开 Super；否则最长 60 秒后自
 footer.polish: 润色
 footer.shortcut: 快捷键
 shortcuts.gnome_backend: GNOME 自定义快捷键
+shortcuts.carbon_backend: macOS 全局快捷键
+shortcuts.carbon_hint: "在 macOS 上暂不可用：热键能注册但 CLI 进程收不到事件。请在 Raycast/Hammerspoon 等启动器里绑定 limen toggle。"
 shortcuts.edit: 在 GNOME 设置中修改
 shortcuts.preferred_toggle: 首选切换键
 shortcuts.preferred_hold: 首选按住说话键

@@ -174,7 +174,6 @@ mod tests {
     use gpui_kit::{Keystroke, Modifiers};
 
     use super::{Action, Event, RecorderError, RecorderState};
-    use limen_core::Shortcut;
 
     fn key(modifiers: Modifiers, key: &str) -> Keystroke {
         Keystroke {
@@ -186,7 +185,7 @@ mod tests {
 
     fn recording() -> RecorderState {
         RecorderState::Recording {
-            previous: Some(Shortcut::DEFAULT_TOGGLE),
+            previous: Some("Super+Z".parse().unwrap()),
         }
     }
 
@@ -201,7 +200,7 @@ mod tests {
                     },
                     "z",
                 ),
-                Shortcut::DEFAULT_TOGGLE,
+                "Super+Z".parse().unwrap(),
             ),
             (
                 key(
@@ -263,7 +262,7 @@ mod tests {
             (state, action),
             (
                 RecorderState::Idle {
-                    current: Some(Shortcut::DEFAULT_TOGGLE),
+                    current: Some("Super+Z".parse().unwrap()),
                 },
                 None,
             )
@@ -282,14 +281,14 @@ mod tests {
     #[test]
     fn backspace_outside_recording_does_not_clear_or_block_manual_editing() {
         let (state, action) = RecorderState::Idle {
-            current: Some(Shortcut::DEFAULT_TOGGLE),
+            current: Some("Super+Z".parse().unwrap()),
         }
         .apply(Event::Backspace);
         assert_eq!(action, None);
         assert_eq!(
             state,
             RecorderState::Idle {
-                current: Some(Shortcut::DEFAULT_TOGGLE),
+                current: Some("Super+Z".parse().unwrap()),
             }
         );
     }
@@ -309,7 +308,7 @@ mod tests {
                 recording().apply(Event::Key(keystroke)),
                 (
                     RecorderState::Invalid {
-                        previous: Some(Shortcut::DEFAULT_TOGGLE),
+                        previous: Some("Super+Z".parse().unwrap()),
                         error: RecorderError::ShiftedSymbol,
                     },
                     None
@@ -322,11 +321,11 @@ mod tests {
     fn manual_entry_accepts_both_formats_and_keeps_the_old_value_on_error() {
         for text in ["Super+Z", "<Super>z"] {
             let (state, action) = recording().apply(Event::Manual(text.to_string()));
-            assert_eq!(action, Some(Action::Set(Shortcut::DEFAULT_TOGGLE)));
+            assert_eq!(action, Some(Action::Set("Super+Z".parse().unwrap())));
             assert_eq!(
                 state,
                 RecorderState::Idle {
-                    current: Some(Shortcut::DEFAULT_TOGGLE),
+                    current: Some("Super+Z".parse().unwrap()),
                 }
             );
         }
