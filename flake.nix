@@ -24,11 +24,15 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
       ];
 
       perSystem =
         { self', pkgs, ... }:
         let
+          inherit (pkgs) lib;
+          linuxOnly = lib.optionals pkgs.stdenv.isLinux;
           treefmtEval = treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "Cargo.toml";
             programs = {
@@ -65,25 +69,35 @@
                   rust-analyzer
                   cmake
                   pkg-config
-                  gcc
                   gnumake
                   coreutils
-                  dbus
-                  desktop-file-utils
-                  fcitx5
-                  pipewire
-                  libnotify
                   pre-commit
-                  # Desktop E2E: a headless X server for `cargo gui-e2e`.
-                  xvfb
                   ;
               }
-              # Desktop E2E: real `gsettings` over a keyfile backend.
-              ++ [
-                pkgs.glib.bin
-                pkgs.glib.dev
-              ];
+              # gcc and the desktop stack are Linux-only: macOS builds against
+              # the system SDK, and there is no D-Bus/Fcitx/PipeWire there.
+              ++ linuxOnly (
+                builtins.attrValues {
+                  inherit (pkgs)
+                    gcc
+                    dbus
+                    desktop-file-utils
+                    fcitx5
+                    pipewire
+                    libnotify
+                    # Desktop E2E: a headless X server for `cargo gui-e2e`.
+                    xvfb
+                    ;
+                }
+                # Desktop E2E: real `gsettings` over a keyfile backend.
+                ++ [
+                  pkgs.glib.bin
+                  pkgs.glib.dev
+                ]
+              );
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
             # Desktop E2E renders with Mesa's software Vulkan driver, registers
             # with a private AT-SPI registry, and sees only the fonts in
             # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
