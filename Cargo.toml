@@ -49,3 +49,12 @@ zbus = { version = "6.1.0", default-features = false, features = [
   "proxy",
   "tokio",
 ] }
+# macOS backends (limen-core, cfg(target_os = "macos") only).
+cpal = "0.17"
+enigo = { version = "0.6", default-features = false }
+global-hotkey = "0.7"
+core-foundation = "0.10"
+crossbeam-channel = "0.5"
+# Shared mic capture, published from its own repository; pinned to a commit
+# for reproducible nix builds (the lock vendoring hashes it).
+vessel-capture = { git = "https://github.com/vessel-audio/vessel-capture", rev = "9fc07ab2ed58ab6a0e5cbb9d81846ba0a881fc31" }

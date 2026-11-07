@@ -63,6 +63,7 @@ impl std::fmt::Debug for ApiKey {
 }
 
 /// Written on first run; annotated so nothing relies on hidden defaults.
+#[cfg(target_os = "linux")]
 const DEFAULT_CONFIG: &str = r#"# Limen configuration
 # ASR backend: one buffered take per HTTP transcription request.
 
@@ -148,20 +149,91 @@ backend = "none"
 toggle = "Super+Z"
 # Hold to talk; portal only
 hold = "Super+X"
+"#;
 
-[network]
-# How requests to model services reach them:
-#   "system": through the proxy HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY names,
-#             except to the hosts NO_PROXY lists
-#   "none":   directly, whatever the environment names
-#   "manual": through `proxy_url`, except to the hosts `no_proxy` lists
-proxy = "system"
-# An http://, https://, socks5://, or socks5h:// URL, such as
-# "http://127.0.0.1:7890"; never with a login in it
-proxy_url = ""
-# Who signs in to the proxy; its password is saved from the GUI
-# proxy_username = "me"
-no_proxy = "localhost, 127.0.0.1, ::1"
+/// Written on first run; annotated so nothing relies on hidden defaults.
+#[cfg(target_os = "macos")]
+const DEFAULT_CONFIG: &str = r#"# Limen configuration
+# ASR backend: one buffered take per HTTP transcription request.
+
+[provider]
+# Who transcribes each take:
+#   "custom": your server at `url`, speaking `format`
+#   "openai", "groq", "mistral", "gemini": the vendor's own API; `url` and
+#            `format` are not used
+service = "custom"
+# What a custom server speaks:
+#   "openai-compatible": OpenAI's routes under `url`, such as vLLM or
+#                        sglang-omni at "http://127.0.0.1:8000/v1"
+#   "whisper-cpp":       the take uploaded to exactly `url`, such as
+#                        "http://127.0.0.1:8080/inference"
+#   "openai", "gemini", "mistral", "groq": that API, with `url` as its
+#                        base URL
+format = "openai-compatible"
+url = ""
+# One of the models the server lists; the ASR page offers them
+model = ""
+language = "auto"
+# Read the API key from this environment variable; not needed for a local
+# server. A vendor's own variable, such as OPENAI_API_KEY, is read when unset
+# api_key_env = "MY_ASR_KEY"
+
+[audio]
+# CoreAudio device name; defaults to the system default input
+# device = "MacBook Pro Microphone"
+# Length of one audio push (milliseconds)
+chunk_ms = 100
+
+[input_method]
+# Input method backend:
+#   "cgevent": direct Unicode commit through macOS CGEvent keyboard events;
+#              macOS asks for the Accessibility permission on first commit
+# backend = "cgevent"   # default: direct Unicode commit through CGEvent
+
+[polish]
+# Conservative correction of the final transcript of each take by a chat
+# model of your choice; audio is never sent to it.
+enabled = false
+# Who corrects it:
+#   "custom": your server at `url`, speaking `format`
+#   "openai", "anthropic", "gemini", "deepseek", "mistral", "groq",
+#   "openrouter", "xai": the vendor's own API; `url` and `format` are not
+#   used
+#   "chatgpt", "copilot": your ChatGPT or GitHub Copilot plan, signed in to on
+#   the Polish page; no key, `url`, or `format`
+service = "custom"
+# What a custom server speaks: "openai-compatible", such as llama.cpp,
+# Ollama, or vLLM at "http://127.0.0.1:8080/v1", or any of the vendors'
+# APIs above, with `url` as its base URL
+format = "openai-compatible"
+url = ""
+model = ""
+# Read the API key from this environment variable; a vendor's own variable,
+# such as OPENAI_API_KEY, is read when unset
+# api_key_env = "MY_POLISH_KEY"
+timeout_ms = 5000
+# Settings of one provider, here OpenAI; [provider] takes the same but
+# `chat_api`, and a custom server's URL is `url` above
+# [polish.options.openai]
+# url = "https://gateway.example/v1"  # in place of the vendor's own
+# chat_api = "chat-completions"  # or "responses", OpenAI's default
+# key_header = "api-key"         # the header the key is sent in
+# timeout_ms = 4000              # one try; timeout_ms above bounds them all
+# retries = 1                    # tries again after a failure
+# body = '{"top_p": 0.9}'        # fields every request body also carries
+# headers = { X-Org = "limen" }  # never a key: this file is not private
+
+[shortcut]
+# How global shortcuts are bound; set up with `limen shortcut setup <backend>`:
+#   "carbon": recommended; supports hold-to-talk. The running daemon registers
+#             the keys as macOS global hotkeys
+#   "none":   bind `limen toggle` in your desktop settings yourself
+backend = "none"
+# The keys carbon registers. Three modifiers: on macOS Super is Cmd, plain
+# Cmd/Ctrl+Alt combos collide with Undo/Cut, VoiceOver's VO prefix, or the
+# IME switcher (⌃Space / ⌃⌥Space).
+toggle = "Shift+Ctrl+Alt+D"
+hold = "Shift+Ctrl+Alt+Space"
 "#;
 
 /// All resolved XDG paths.
@@ -188,9 +260,15 @@ impl Paths {
     pub fn discover() -> Result<Self> {
         let proj = ProjectDirs::from("dev", "limen", "limen")
             .context("cannot resolve user directories (HOME unset?)")?;
+        // Linux: the runtime dir keeps the socket out of the shared /tmp.
+        // macOS has no runtime dir; the per-user cache dir serves instead
+        // (bind() creates and restricts the `run` subdirectory).
+        #[cfg(target_os = "linux")]
         let socket = dirs::runtime_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("limen.sock");
+        #[cfg(target_os = "macos")]
+        let socket = proj.cache_dir().join("run").join("limen.sock");
         Ok(Self {
             config_file: proj.config_dir().join("config.toml"),
             socket,
@@ -793,8 +871,8 @@ mod tests {
             base_config().shortcut,
             ShortcutConfig {
                 backend: Backend::None,
-                toggle: "Super+Z".parse().unwrap(),
-                hold: "Super+X".parse().unwrap(),
+                toggle: crate::shortcut::Shortcut::DEFAULT_TOGGLE,
+                hold: crate::shortcut::Shortcut::DEFAULT_HOLD,
             }
         );
     }
@@ -825,7 +903,10 @@ mod tests {
         config.shortcut.hold = config.shortcut.toggle;
         assert_eq!(
             config.validate().unwrap_err().to_string(),
-            "shortcut.toggle and shortcut.hold must differ; both are Super+Z"
+            format!(
+                "shortcut.toggle and shortcut.hold must differ; both are {}",
+                config.shortcut.toggle
+            )
         );
     }
 }

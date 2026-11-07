@@ -15,9 +15,9 @@ use crate::config::{ApiKey, PolishConfig, ProviderConfig, Service, ShortcutConfi
 use crate::dictation::{Event, MAX_HOLD};
 use crate::ipc::{self, v1::Reply};
 use crate::session::{SessionCommand, SessionHandle};
-use crate::shortcut::portal::{Bus, ShortcutHandle};
 use crate::shortcut::status::{PerAction, ShortcutStatus};
 use crate::shortcut::{Activation, ActivationReceipt, Backend, HoldEdge};
+use crate::shortcut::{ShortcutHandle, spawn_shortcuts};
 
 const TAP: Duration = Duration::from_millis(100);
 const KEPT: Duration = Duration::from_secs(1);
@@ -403,12 +403,7 @@ async fn shortcut_rebind_applies_only_a_valid_config() {
     let base =
         "[provider]\nurl = \"http://127.0.0.1:8000/v1/audio/transcriptions\"\nmodel = \"m\"\n";
     let (activations, _activations) = mpsc::unbounded_channel();
-    let shortcuts = ShortcutHandle::spawn(
-        ShortcutConfig::default(),
-        Bus::Session,
-        activations,
-        |_, _| {},
-    );
+    let shortcuts = spawn_shortcuts(ShortcutConfig::default(), activations, |_, _| {});
     let before = shortcuts.status();
     let (mailbox, _session) = mpsc::unbounded_channel();
     let (input_tx, _input) = mpsc::unbounded_channel();

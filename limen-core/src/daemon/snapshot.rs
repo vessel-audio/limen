@@ -127,6 +127,7 @@ impl ConfigSummary {
             crate::input_method::Backend::Dotool => "dotool",
             crate::input_method::Backend::Wtype => "wtype",
             crate::input_method::Backend::Fcitx5 => "fcitx5",
+            crate::input_method::Backend::Cgevent => "cgevent",
         };
         Self {
             input_method: capped(backend, CONFIG_CAP).0,

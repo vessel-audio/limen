@@ -2,8 +2,7 @@
 
 use anyhow::{Context, Result, anyhow};
 
-use super::portal;
-use super::{Note, Report, SetupError, check_config, rebind};
+use super::{Note, Report, SetupError, check_config, daemon_status, rebind};
 use crate::config::{self, Paths, ShortcutConfig};
 use crate::shortcut::gnome::gsettings::{self, Gsettings};
 use crate::shortcut::gnome::{self as keybinding, Clear, Managed};
@@ -91,7 +90,7 @@ pub(super) async fn bind(
         keybinding::toggle_command(program.path()),
     );
     // Keep the daemon's exact portal config so failed GNOME writes can restore it.
-    let previous_portal = match portal::daemon_status(paths).await? {
+    let previous_portal = match daemon_status(paths).await? {
         Some(status) if status.backend == Backend::Portal => Some(ShortcutConfig {
             backend: Backend::Portal,
             toggle: status.preferred.toggle,

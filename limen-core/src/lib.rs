@@ -49,7 +49,9 @@ pub use models::{
 pub use network::{Network, ProxyPassword, configured_proxy, load_network, save_network};
 pub use provider::probe;
 pub use reload::ConfigChange;
-pub use shortcut::desktop_entry::{APP_ID, Launch};
+pub use shortcut::Launch;
+#[cfg(target_os = "linux")]
+pub use shortcut::desktop_entry::APP_ID;
 pub use shortcut::program::Program;
 pub use shortcut::setup::{GnomeBinding, GnomeStatus, configured as shortcut_config};
 pub use shortcut::setup::{

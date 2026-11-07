@@ -137,15 +137,56 @@ async fn daemon_peer(paths: &Paths) -> Result<(u32, SocketIdentity)> {
     let stream = tokio::net::UnixStream::connect(&paths.socket)
         .await
         .with_context(|| format!("cannot connect to {}", paths.socket.display()))?;
-    let credentials = stream.peer_cred().context("cannot read peer credentials")?;
-    let pid = peer_pid(
-        credentials.pid().context("peer has no PID")?,
-        credentials.uid(),
-    )?;
+    let (pid, uid) = peer_credentials(&stream).context("cannot read peer credentials")?;
+    let pid = peer_pid(pid, uid)?;
     match SocketIdentity::for_path(paths)? == socket {
         true => Ok((pid, socket)),
         false => bail!("daemon socket changed while checking its owner; retry"),
     }
+}
+
+/// Peer PID and UID of a connected Unix stream.
+#[cfg(target_os = "linux")]
+fn peer_credentials(stream: &tokio::net::UnixStream) -> Result<(i32, u32)> {
+    let credentials = stream.peer_cred()?;
+    Ok((
+        credentials.pid().context("peer has no PID")?,
+        credentials.uid(),
+    ))
+}
+
+/// macOS: tokio's `peer_cred` is cfg-gated away, so read the credentials
+/// straight off the socket fd.
+#[cfg(target_os = "macos")]
+fn peer_credentials(stream: &tokio::net::UnixStream) -> Result<(i32, u32)> {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = stream.as_raw_fd();
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    // SAFETY: getpeereid only writes to the two out-pointers, which are valid
+    // for the duration of the call.
+    let result = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error()).context("getpeereid failed");
+    }
+    let mut pid: libc::pid_t = 0;
+    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: getsockopt writes at most `length` bytes into `pid`, which is
+    // exactly the space it points at.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            &mut pid as *mut libc::pid_t as *mut libc::c_void,
+            &mut length,
+        )
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error()).context("getsockopt LOCAL_PEERPID failed");
+    }
+    Ok((pid, uid))
 }
 
 /// Validated process and socket identities captured before daemon termination.

@@ -18,7 +18,7 @@ use limen_core::{Config, HoldEdge, Paths};
 #[command(
     name = "limen",
     version,
-    about = "Wayland voice input: mic -> ASR -> type into focused window"
+    about = "System-wide voice input: mic -> ASR -> type into focused window"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -69,6 +69,14 @@ fn main() -> anyhow::Result<ExitCode> {
             let backend = Arc::new(backend::Backends::new(paths.sign_ins()));
             limen_gui::run(paths, backend).map(|()| ExitCode::SUCCESS)
         }
+        // The daemon owns its runtime: on macOS the main thread must pump the
+        // Carbon event loop, so the tokio runtime lives on a worker thread.
+        Command::Daemon => {
+            let cfg = Config::load_or_create(&paths)?;
+            let backend = Arc::new(backend::Backends::new(paths.sign_ins()));
+            limen_core::run_daemon(paths, cfg, backend)?;
+            Ok(ExitCode::SUCCESS)
+        }
         command => run_async(command, paths),
     }
 }
@@ -81,12 +89,7 @@ fn run_async(command: Command, paths: Paths) -> anyhow::Result<ExitCode> {
             let code = match command {
                 #[cfg(feature = "gui")]
                 Command::Gui => unreachable!("GUI commands do not use the async runtime"),
-                Command::Daemon => {
-                    let cfg = Config::load_or_create(&paths)?;
-                    let backend = Arc::new(backend::Backends::new(paths.sign_ins()));
-                    limen_core::run_daemon(paths, cfg, backend).await?;
-                    ExitCode::SUCCESS
-                }
+                Command::Daemon => unreachable!("the daemon owns its runtime"),
                 Command::Toggle => {
                     let reply = limen_core::send(&paths, "toggle").await?;
                     println!("{reply}");
