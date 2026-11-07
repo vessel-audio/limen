@@ -20,7 +20,7 @@ checksum = "023da0e5097f46df7092d5280b02efb9bbf8d93298daeced42652463e357d636"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
- "atspi-common",
+ "atspi-common 0.13.0",
  "phf 0.13.1",
  "serde",
  "zvariant",
@@ -61,7 +61,7 @@ dependencies = [
  "async-channel",
  "async-executor",
  "async-task",
- "atspi",
+ "atspi 0.29.0",
  "futures-lite",
  "futures-util",
  "serde",
@@ -538,8 +538,18 @@ version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c77886257be21c9cd89a4ae7e64860c6f0eefca799bb79127913052bd0eefb3d"
 dependencies = [
- "atspi-common",
- "atspi-proxies",
+ "atspi-common 0.13.0",
+ "atspi-proxies 0.13.0",
+]
+
+[[package]]
+name = "atspi"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bf601cccedfffec598ec2db1f9d6745885458bccc0e8916d7023f017c94b3d0"
+dependencies = [
+ "atspi-common 0.14.0",
+ "atspi-proxies 0.14.0",
 ]
 
 [[package]]
@@ -559,12 +569,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "atspi-common"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8a79bed3f5b408ce3152f36e07327a845e6ed5d7e2821a89264037dbcc11daf"
+dependencies = [
+ "enumflags2",
+ "serde",
+ "static_assertions",
+ "zbus 5.19.0",
+ "zbus-lockstep",
+ "zbus-lockstep-macros",
+ "zbus_names",
+ "zvariant",
+]
+
+[[package]]
 name = "atspi-proxies"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2230e48787ed3eb4088996eab66a32ca20c0b67bbd4fd6cdfe79f04f1f04c9fc"
 dependencies = [
- "atspi-common",
+ "atspi-common 0.13.0",
+ "serde",
+ "zbus 5.19.0",
+]
+
+[[package]]
+name = "atspi-proxies"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53403acd3ab2fdb5914f6558da22e540fc07656fce5510f8c02be0e6ef68413e"
+dependencies = [
+ "atspi-common 0.14.0",
  "serde",
  "zbus 5.19.0",
 ]
@@ -3993,7 +4030,7 @@ name = "limen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "atspi",
+ "atspi 0.30.0",
  "clap",
  "futures-util",
  "libc",
