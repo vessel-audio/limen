@@ -27,7 +27,7 @@ serde_json.workspace = true
 # Desktop E2E needs Xvfb, D-Bus, and AT-SPI from the dev shell, so plain
 # `cargo test` skips it; run it with `cargo gui-e2e`. Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-atspi = { version = "0.29", default-features = false, features = ["proxies"] }
+atspi = { version = "0.30", default-features = false, features = ["proxies"] }
 x11rb = { version = "0.13", features = ["xtest"] }
 zbus = { version = "5.5", default-features = false, features = [
   "async-io",
