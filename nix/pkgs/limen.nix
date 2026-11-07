@@ -20,7 +20,7 @@
 }:
 
 let
-  inherit (stdenv) isLinux isDarwin;
+  inherit (stdenv.hostPlatform) isLinux;
   launch = if withGui then "gui" else "daemon";
   runtimePipewire =
     if withGui then

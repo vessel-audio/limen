@@ -32,7 +32,7 @@
         { self', pkgs, ... }:
         let
           inherit (pkgs) lib;
-          linuxOnly = lib.optionals pkgs.stdenv.isLinux;
+          linuxOnly = lib.optionals pkgs.stdenv.hostPlatform.isLinux;
           treefmtEval = treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "Cargo.toml";
             programs = {
@@ -97,7 +97,7 @@
               );
             RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
           }
-          // lib.optionalAttrs pkgs.stdenv.isLinux {
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             # Desktop E2E renders with Mesa's software Vulkan driver, registers
             # with a private AT-SPI registry, and sees only the fonts in
             # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
