@@ -11,21 +11,33 @@
 //! Run them with `cargo gui-e2e` inside `nix develop`; every case leaves a
 //! final screenshot and its logs under `target/tmp/gui-e2e/<module>/<case>/`.
 
+//! Linux-only: the harness boots Xvfb with private D-Bus and AT-SPI buses
+//! and drives the app with XTest. On other platforms it compiles to a stub
+//! that says so.
+
+#[cfg(target_os = "linux")]
 mod cases;
+#[cfg(target_os = "linux")]
 mod daemon;
+#[cfg(target_os = "linux")]
 mod desktop;
+#[cfg(target_os = "linux")]
 mod session;
 
+#[cfg(target_os = "linux")]
 use std::panic::AssertUnwindSafe;
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::time::Instant;
 
 /// One named end-to-end case.
+#[cfg(target_os = "linux")]
 pub struct Case {
     pub name: &'static str,
     pub run: fn() -> anyhow::Result<()>,
 }
-
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
@@ -35,6 +47,7 @@ fn main() -> ExitCode {
 }
 
 /// Run every case whose name contains one of the filters, or all of them.
+#[cfg(target_os = "linux")]
 fn run(args: &[String]) -> ExitCode {
     let filters = args
         .iter()
@@ -102,4 +115,10 @@ fn run(args: &[String]) -> ExitCode {
         true => ExitCode::SUCCESS,
         false => ExitCode::FAILURE,
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("limen gui-e2e is only supported on Linux");
+    std::process::ExitCode::from(2)
 }

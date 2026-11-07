@@ -80,14 +80,7 @@ pub(super) async fn wait_for_termination(
     let pid = termination.pid;
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let exited = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-                Ok(stat) => stat
-                    .rsplit_once(") ")
-                    .is_some_and(|(_, state)| state.starts_with('Z')),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-                Err(_) => false,
-            };
-            match exited {
+            match process_exited(pid) {
                 false => tokio::time::sleep(Duration::from_millis(50)).await,
                 true => {
                     return termination
@@ -100,4 +93,42 @@ pub(super) async fn wait_for_termination(
     })
     .await
     .map_err(|_| StartError::Failed("daemon did not exit within 5s".to_string()))?
+}
+
+/// A zombie still has a /proc entry, so read the state rather than testing
+/// for existence.
+#[cfg(target_os = "linux")]
+fn process_exited(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat
+            .rsplit_once(") ")
+            .is_some_and(|(_, state)| state.starts_with('Z')),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+/// A zombie child still answers kill(2) probes, so ask the kernel for the
+/// process status instead; reaping here would break the caller's own wait().
+#[cfg(target_os = "macos")]
+fn process_exited(pid: u32) -> bool {
+    // SAFETY: info is zeroed and the call writes at most one struct into it.
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: proc_pidinfo only writes into the buffer it is pointed at,
+    // sized by the final argument.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            &mut info as *mut libc::proc_bsdshortinfo as *mut libc::c_void,
+            std::mem::size_of::<libc::proc_bsdshortinfo>() as i32,
+        )
+    };
+    match written > 0 {
+        // The kernel says whether the process exists; SZOMB counts as gone.
+        true => info.pbsi_status == libc::SZOMB,
+        // ESRCH (or any lookup failure) means the process is gone.
+        false => true,
+    }
 }

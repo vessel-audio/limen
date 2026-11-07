@@ -32,33 +32,24 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
         }
     }
     let selector = div().h_flex().gap_2().children(
-        [
-            ("backend-portal", Backend::Portal, "portal".to_string()),
-            (
-                "backend-gnome",
-                Backend::GnomeKeybinding,
-                rust_i18n::t!("shortcuts.gnome_backend").to_string(),
-            ),
-            (
-                "backend-none",
-                Backend::None,
-                rust_i18n::t!("shortcuts.none_backend").to_string(),
-            ),
-        ]
-        .map(|(id, backend, label)| {
-            let button = a11y::button(id).label(label);
-            match backend == view.selected_backend {
-                true => button.primary(),
-                false => button.outline(),
-            }
-            .on_click(cx.listener(move |this, _, _, _| {
-                this.selected_backend = backend;
-                this.backend_selected = true;
-            }))
-        }),
+        backend_options()
+            .into_iter()
+            .map(|(id, backend, label)| {
+                let button = a11y::button(id).label(label);
+                match backend == view.selected_backend {
+                    true => button.primary(),
+                    false => button.outline(),
+                }
+                .on_click(cx.listener(move |this, _, _, _| {
+                    this.selected_backend = backend;
+                    this.backend_selected = true;
+                }))
+            })
+            .collect::<Vec<_>>(),
     );
     let body = match view.selected_backend {
         Backend::Portal => portal(view, cx),
+        Backend::Carbon => carbon(view),
         Backend::GnomeKeybinding => gnome(view, cx),
         Backend::None => div()
             .v_flex()
@@ -138,6 +129,113 @@ pub fn shortcuts(view: &mut AppView, cx: &mut Context<AppView>, window: &mut Win
     view.shortcuts_scroll
         .container(page, ScrollbarMode::Scrolling)
         .flex_1()
+}
+
+/// The backends this platform's daemon can bind, in selector order.
+#[cfg(target_os = "linux")]
+fn backend_options() -> Vec<(&'static str, Backend, String)> {
+    vec![
+        ("backend-portal", Backend::Portal, "portal".to_string()),
+        (
+            "backend-gnome",
+            Backend::GnomeKeybinding,
+            rust_i18n::t!("shortcuts.gnome_backend").to_string(),
+        ),
+        (
+            "backend-none",
+            Backend::None,
+            rust_i18n::t!("shortcuts.none_backend").to_string(),
+        ),
+    ]
+}
+
+/// macOS: Carbon registers the keys with the daemon directly; the GNOME
+/// keybinding backend needs a GNOME session.
+#[cfg(target_os = "macos")]
+fn backend_options() -> Vec<(&'static str, Backend, String)> {
+    vec![
+        (
+            "backend-carbon",
+            Backend::Carbon,
+            rust_i18n::t!("shortcuts.carbon_backend").to_string(),
+        ),
+        (
+            "backend-none",
+            Backend::None,
+            rust_i18n::t!("shortcuts.none_backend").to_string(),
+        ),
+    ]
+}
+
+/// The portal page minus GNOME's settings editor: Carbon registers the
+/// configured keys with the daemon directly.
+#[cfg(target_os = "macos")]
+fn carbon(view: &AppView) -> Div {
+    let status = view.model.snapshot.as_ref().map(|snapshot| {
+        let status = &snapshot.shortcut;
+        div()
+            .v_flex()
+            .gap_1()
+            .child(format!(
+                "{}: {}",
+                rust_i18n::t!("shortcuts.session"),
+                match status.session {
+                    SessionState::Disabled =>
+                        rust_i18n::t!("shortcuts.session_disabled").to_string(),
+                    SessionState::Binding => rust_i18n::t!("shortcuts.session_binding").to_string(),
+                    SessionState::Bound => rust_i18n::t!("shortcuts.session_bound").to_string(),
+                    SessionState::Cancelled =>
+                        rust_i18n::t!("shortcuts.session_cancelled").to_string(),
+                    SessionState::Failed => rust_i18n::t!("shortcuts.session_failed").to_string(),
+                }
+            ))
+            .child(trigger(&status.actual.toggle))
+            .child(trigger(&status.actual.hold))
+            .children(status.last_error.clone())
+            .children(match status.session {
+                SessionState::Failed => Some(
+                    a11y::button("retry-carbon")
+                        .outline()
+                        .label(rust_i18n::t!("shortcuts.retry").to_string())
+                        .on_click({
+                            let commands = view.commands.clone();
+                            let preferred = status.preferred;
+                            move |_, _, _| {
+                                let _ = commands.try_send(BridgeCommand::Shortcut(
+                                    ShortcutRequest::Setup {
+                                        backend: Backend::Carbon,
+                                        keys: Keys {
+                                            toggle: Some(preferred.toggle),
+                                            hold: Some(preferred.hold),
+                                        },
+                                    },
+                                ));
+                            }
+                        }),
+                ),
+                SessionState::Cancelled
+                | SessionState::Disabled
+                | SessionState::Binding
+                | SessionState::Bound => None,
+            })
+    });
+    div()
+        .v_flex()
+        .gap_3()
+        .children(status)
+        .child(rust_i18n::t!("shortcuts.carbon_hint").to_string())
+        .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
+        .child(
+            Input::new(&view.toggle_input)
+                .accessibility_id("toggle-input")
+                .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
+        )
+        .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
+        .child(
+            Input::new(&view.hold_input)
+                .accessibility_id("hold-input")
+                .aria_label(rust_i18n::t!("shortcuts.preferred_hold").to_string()),
+        )
 }
 
 fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
@@ -348,7 +446,7 @@ fn keys_for_backend(
             toggle: Some(toggle),
             hold: None,
         }),
-        Backend::Portal => match (toggle, hold) {
+        Backend::Portal | Backend::Carbon => match (toggle, hold) {
             (Err(error), _) | (_, Err(error)) => Err(error),
             (Ok(toggle), Ok(hold)) => Ok(Keys {
                 toggle: Some(toggle),

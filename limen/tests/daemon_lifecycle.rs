@@ -1,5 +1,9 @@
 //! Real-daemon shutdown coverage with no desktop portal or user state.
+//!
+//! Linux-only: the sandbox fakes `pw-record` on PATH and relies on
+//! XDG_RUNTIME_DIR; macOS capture has no subprocess to fake.
 
+#![cfg(target_os = "linux")]
 use futures_util::TryStreamExt as _;
 use std::fs;
 use std::io::{BufRead, Write};

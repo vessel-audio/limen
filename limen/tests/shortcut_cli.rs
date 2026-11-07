@@ -1,6 +1,9 @@
 //! Command-level coverage for `limen shortcut`, using the real binary
 //! in an isolated HOME. No GNOME settings, portal, or user socket is touched.
+//!
+//! Linux-only: it fakes `gsettings` and exercises the portal/GNOME flows.
 
+#![cfg(target_os = "linux")]
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;

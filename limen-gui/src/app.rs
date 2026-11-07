@@ -153,7 +153,11 @@ impl AppView {
             commands,
             paths,
             page: Page::Dictation,
+            // The platform default until the daemon's snapshot says otherwise.
+            #[cfg(target_os = "linux")]
             selected_backend: Backend::Portal,
+            #[cfg(target_os = "macos")]
+            selected_backend: Backend::Carbon,
             backend_selected: false,
             recorder: RecorderState::Idle { current: None },
             recorder_focus: cx.focus_handle(),
