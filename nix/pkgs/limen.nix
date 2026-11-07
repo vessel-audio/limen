@@ -1,6 +1,7 @@
 {
   withGui ? true,
   lib,
+  stdenv,
   rustPlatform,
   makeWrapper,
   dbus,
@@ -19,6 +20,7 @@
 }:
 
 let
+  inherit (stdenv) isLinux isDarwin;
   launch = if withGui then "gui" else "daemon";
   runtimePipewire =
     if withGui then
@@ -55,7 +57,10 @@ rustPlatform.buildRustPackage {
       ])
       && lib.cleanSourceFilter path type;
   };
-  cargoLock.lockFile = ../../Cargo.lock;
+  cargoLock = {
+    lockFile = ../../Cargo.lock;
+    allowBuiltinFetchGit = true;
+  };
   cargoBuildFlags = [
     "-p"
     "limen"
@@ -76,20 +81,23 @@ rustPlatform.buildRustPackage {
 
   SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
 
-  nativeBuildInputs = [ makeWrapper ] ++ lib.optionals withGui [ pkg-config ];
-  buildInputs = lib.optionals withGui [
+  nativeBuildInputs = [ makeWrapper ] ++ lib.optionals (withGui && isLinux) [ pkg-config ];
+  # GPUI on Linux links X11/freetype directly; on macOS it links the system
+  # frameworks through the SDK and needs nothing here.
+  buildInputs = lib.optionals (withGui && isLinux) [
     fontconfig
     freetype
     libxkbcommon
     libxcb
   ];
-  # The portal tests run a private dbus-daemon.
-  nativeCheckInputs = [ dbus ];
-  nativeInstallCheckInputs = [ desktop-file-utils ];
+  # The portal tests run a private dbus-daemon; macOS has no portal tests.
+  nativeCheckInputs = lib.optionals isLinux [ dbus ];
+  nativeInstallCheckInputs = lib.optionals isLinux [ desktop-file-utils ];
 
   # The GlobalShortcuts portal registers the app only with a desktop entry of
-  # its ID, and GNOME Settings lists the app's shortcuts under it.
-  postInstall = ''
+  # its ID, and GNOME Settings lists the app's shortcuts under it. macOS has
+  # no desktop-entry convention; the daemon registers its hotkeys itself.
+  postInstall = lib.optionalString isLinux ''
     install -Dm644 data/io.github.Emin017.Limen.desktop -t $out/share/applications
     install -Dm644 data/io.github.Emin017.Limen.svg -t $out/share/icons/hicolor/scalable/apps
     substituteInPlace $out/share/applications/io.github.Emin017.Limen.desktop \
@@ -97,16 +105,26 @@ rustPlatform.buildRustPackage {
   '';
 
   doInstallCheck = true;
-  installCheckPhase = ''
-    runHook preInstallCheck
-    entry=$out/share/applications/io.github.Emin017.Limen.desktop
-    desktop-file-validate "$entry"
-    grep -qx "Exec=$out/bin/limen ${launch}" "$entry"
-    test -f $out/share/icons/hicolor/scalable/apps/io.github.Emin017.Limen.svg
-    runHook postInstallCheck
-  '';
+  installCheckPhase =
+    if isLinux then
+      ''
+        runHook preInstallCheck
+        entry=$out/share/applications/io.github.Emin017.Limen.desktop
+        desktop-file-validate "$entry"
+        grep -qx "Exec=$out/bin/limen ${launch}" "$entry"
+        test -f $out/share/icons/hicolor/scalable/apps/io.github.Emin017.Limen.svg
+        runHook postInstallCheck
+      ''
+    else
+      ''
+        runHook preInstallCheck
+        $out/bin/limen --help >/dev/null
+        runHook postInstallCheck
+      '';
 
-  postFixup = ''
+  # Linux runtime deps are external binaries provided on PATH; the macOS
+  # backends (cpal/enigo/osascript) are linked or already on the system PATH.
+  postFixup = lib.optionalString isLinux ''
     wrapProgram $out/bin/limen \
       --prefix PATH : ${
         lib.makeBinPath [
@@ -123,9 +141,9 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "System-wide whole-take voice input for Wayland";
+    description = "System-wide whole-take voice input";
     homepage = "https://github.com/Emin017/limen";
     mainProgram = "limen";
-    platforms = lib.platforms.linux;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
 }
