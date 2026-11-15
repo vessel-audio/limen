@@ -104,7 +104,8 @@ impl AppView {
     ) -> Self {
         // macOS draws its traffic-light buttons over the title bar's top-left;
         // centre them on our 48px bar so the reserved space below lines up.
-        // No-op on other platforms.
+        // GPUI only has this method on macOS.
+        #[cfg(target_os = "macos")]
         window.set_traffic_light_position(point(px(20.0), px(18.0)));
         let toggle_input = cx.new(|cx| {
             InputState::new(window, cx)
