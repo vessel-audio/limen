@@ -89,3 +89,43 @@ jobs:
         run: nix develop --command cmake --build "$RUNNER_TEMP/fcitx5-build" --parallel
       - name: Check packaged executable
         run: nix run . -- --help
+  macos:
+    name: macOS Rust checks
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      - name: Run headless Clippy
+        run: nix develop --command cargo clippy -p limen-core -p limen --all-targets -- -D warnings
+      - name: Run GUI Clippy
+        run: nix develop --command cargo clippy --workspace --all-targets --features limen/gui -- -D warnings
+      - name: Run tests
+        run: nix develop --command cargo test -p limen-core -p limen -p limen-gui
+  macos-nix:
+    name: macOS Nix package
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@84c0677f58dcedf3b91f8223ce36a9ea5b3c84b7 # v15
+      - name: Build packages
+        run: nix build .#limen .#headless --print-build-logs
+      # The package's install check already validates the bundle layout;
+      # this checks what macOS itself will look at when the app launches.
+      # Nix signs the executable ad hoc but cannot seal the bundle, so
+      # `codesign --verify` would fail; arm64 only needs the binary signed.
+      - name: Check app bundle
+        run: |
+          app=result/Applications/Limen.app
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --display "$app/Contents/MacOS/limen"
+          result/bin/limen --help
