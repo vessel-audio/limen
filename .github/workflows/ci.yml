@@ -129,3 +129,39 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           codesign --display "$app/Contents/MacOS/limen"
           result/bin/limen --help
+      # The UI is covered by the GUI tests; this covers what only the macOS
+      # app does: host the daemon and stop it on the way out.
+      - name: Smoke-test the app's daemon and quit
+        run: |
+          # A private home: the app writes its first-run config and binds its socket there.
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          limen="$PWD/result/Applications/Limen.app/Contents/MacOS/limen"
+          socket="$HOME/Library/Caches/dev.limen.limen/run/limen.sock"
+          log="$RUNNER_TEMP/limen-app.log"
+          fail() {
+            echo "::error::$1"
+            cat "$log" "$HOME/Library/Caches/dev.limen.limen/daemon.log" 2>/dev/null || true
+            exit 1
+          }
+          "$limen" >"$log" 2>&1 &
+          pid=$!
+          # The daemon inside the app answers once the window is up.
+          for _ in $(seq 120); do
+            "$limen" status >/dev/null 2>&1 && break
+            kill -0 "$pid" 2>/dev/null || fail "Limen exited during startup"
+            sleep 0.5
+          done
+          "$limen" status || fail "the in-app daemon never answered"
+          # SIGTERM must quit like the menu's Quit: the daemon stops and unlinks
+          # its socket, and the app exits 0 rather than dying of the signal.
+          kill -TERM "$pid"
+          # A quit that hangs is killed, failing with status 137.
+          (sleep 30 && kill -KILL "$pid" 2>/dev/null) &
+          watchdog=$!
+          status=0
+          wait "$pid" || status=$?
+          kill "$watchdog" 2>/dev/null || true
+          [ "$status" -eq 0 ] || fail "Limen exited with status $status after SIGTERM"
+          [ ! -e "$socket" ] || fail "Limen left its socket behind"
+          echo "Limen started its daemon and quit cleanly on SIGTERM"
