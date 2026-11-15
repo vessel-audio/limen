@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::Projection;
 use super::input;
-use super::{DictationActor, Mailboxes};
+use super::{DictationActor, Lifetime, Mailboxes};
 use crate::backend::ModelBackend;
 use crate::config::{Config, Paths};
 use crate::dictation::Event;
@@ -46,7 +46,7 @@ fn run_platform(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Re
     let worker = std::thread::Builder::new()
         .name("limen-runtime".into())
         .spawn(move || {
-            let result = run_runtime(paths, cfg, backend);
+            let result = run_runtime(paths, cfg, backend, Lifetime::Process);
             thread_done.store(true, Ordering::SeqCst);
             result
         })
@@ -59,19 +59,29 @@ fn run_platform(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Re
 
 #[cfg(not(target_os = "macos"))]
 fn run_platform(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
-    run_runtime(paths, cfg, backend)
+    run_runtime(paths, cfg, backend, Lifetime::Process)
 }
 
 /// Build the tokio runtime and block on the daemon.
-fn run_runtime(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+pub(super) fn run_runtime(
+    paths: Paths,
+    cfg: Config,
+    backend: Arc<dyn ModelBackend>,
+    lifetime: Lifetime,
+) -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build the daemon runtime")?
-        .block_on(run_async(paths, cfg, backend))
+        .block_on(run_async(paths, cfg, backend, lifetime))
 }
 
-async fn run_async(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) -> Result<()> {
+async fn run_async(
+    paths: Paths,
+    cfg: Config,
+    backend: Arc<dyn ModelBackend>,
+    lifetime: Lifetime,
+) -> Result<()> {
     let mut socket = ipc::bind(&paths)?;
     let (cmd_tx, commands) = mpsc::channel::<ipc::Command>(8);
     let (polish, polish_rx) = watch::channel(cfg.polish.clone());
@@ -113,6 +123,7 @@ async fn run_async(paths: Paths, cfg: Config, backend: Arc<dyn ModelBackend>) ->
             input_reports,
             session_reports,
             activations,
+            lifetime,
         })
         .await;
     let accept = crate::task::join_task("accept", accept, crate::task::StopMode::Abort).await;

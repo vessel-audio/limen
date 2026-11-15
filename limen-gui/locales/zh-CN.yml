@@ -201,3 +201,6 @@ toast.network_applied: 已应用网络设置
 toast.network_saved: 已保存网络设置，后台服务启动时生效
 transcript.title: 最新识别结果
 transcript.empty: 下一段录音的转写文本将显示在这里
+status_item.toggle: 开始或停止听写
+status_item.open: 打开 Limen
+status_item.quit: 退出 Limen

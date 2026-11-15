@@ -201,3 +201,6 @@ toast.network_applied: Network settings applied
 toast.network_saved: Network settings saved; the daemon uses them when it starts
 transcript.title: Latest transcript
 transcript.empty: The transcript of your next take appears here
+status_item.toggle: Toggle dictation
+status_item.open: Open Limen
+status_item.quit: Quit Limen

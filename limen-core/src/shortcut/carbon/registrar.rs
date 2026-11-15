@@ -71,7 +71,12 @@ pub(crate) type Bindings = Arc<Mutex<HashMap<u32, Action>>>;
 
 /// The main-thread half: owns the manager and pumps the Carbon event loop.
 /// Must be created on the main thread before the tokio runtime starts.
-pub(crate) struct EventPump {
+///
+/// The standalone daemon blocks its main thread in the pump. A frontend that
+/// hosts the daemon already runs an application event loop there, which
+/// dispatches the hotkey events itself; it only calls
+/// [`Self::drain_commands`] from that loop.
+pub struct EventPump {
     /// `None` when the manager could not be created; the pump still drains
     /// the command queue so registrants see their registrar error instead of
     /// a deadlock.
@@ -126,7 +131,9 @@ impl EventPump {
         self.drain_commands();
     }
 
-    fn drain_commands(&mut self) {
+    /// Perform the registrations requested since the last call. Main thread
+    /// only.
+    pub fn drain_commands(&mut self) {
         while let Ok(command) = self.commands.try_recv() {
             match command {
                 Command::Register(hotkeys, done) => {

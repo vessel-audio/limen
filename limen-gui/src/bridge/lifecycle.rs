@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use limen_core::{DaemonTermination, Paths, spawn_daemon, v1};
+use limen_core::{DaemonHost, DaemonTermination, Paths, v1};
 
 // Four bounded task joins plus time for polling the final socket unlink.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(25);
@@ -25,11 +25,11 @@ pub(super) async fn request_with_timeout(
         .map_err(|_| anyhow::anyhow!("daemon request timed out"))?
 }
 
-pub(super) async fn restart(paths: &Paths) -> StartResult {
+pub(super) async fn restart(paths: &Paths, host: &DaemonHost) -> StartResult {
     match request_with_timeout(paths, &v1::Request::Shutdown).await {
         Ok(v1::Reply::Ok) => {
             wait_for_socket_removal(paths).await?;
-            spawn_daemon(paths)
+            host.start(paths)
                 .await
                 .map_err(|error| StartError::Failed(format!("{error:#}")))
         }

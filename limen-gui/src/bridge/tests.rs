@@ -114,6 +114,7 @@ async fn shutdown_waits_for_socket_cleanup_before_reporting_stopped() {
     let env = Env {
         paths: paths.clone(),
         models: Arc::new(NoModels),
+        host: limen_core::DaemonHost::Detached,
         signing: Default::default(),
     };
     handle_command(
@@ -177,7 +178,7 @@ async fn termination_removes_a_stale_socket_after_process_exit() {
 }
 
 #[test]
-fn quit_stops_the_bridge_while_another_sender_is_alive() {
+fn stop_ends_the_bridge_while_another_sender_is_alive() {
     use limen_core::Paths;
     use std::io::{BufRead, Write};
 
@@ -203,23 +204,22 @@ fn quit_stops_the_bridge_while_another_sender_is_alive() {
             .unwrap();
         std::thread::sleep(Duration::from_millis(50));
     });
-    let (commands, mut events, bridge) = super::start(paths, Arc::new(NoModels));
+    let (commands, mut events, bridge) =
+        super::start(paths, Arc::new(NoModels), limen_core::DaemonHost::Detached);
     let retained = commands.clone();
     assert!(matches!(
         events.blocking_recv(),
         Some(super::BridgeEvent::Msg(crate::model::Msg::Hello { .. }))
     ));
 
-    commands.blocking_send(super::BridgeCommand::Quit).unwrap();
-
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = bridge.join();
+        bridge.stop();
         let _ = done.send(());
     });
     assert!(
         finished.recv_timeout(Duration::from_secs(1)).is_ok(),
-        "bridge stayed alive after Quit"
+        "bridge stayed alive after stop"
     );
     drop(retained);
     server.join().unwrap();
@@ -294,10 +294,10 @@ fn hello_protocol_mismatch_offers_termination_without_keeping_the_stream() {
             .unwrap();
         std::thread::sleep(Duration::from_millis(50));
     });
-    let (commands, mut events, bridge) = super::start(paths, Arc::new(NoModels));
+    let (_commands, mut events, bridge) =
+        super::start(paths, Arc::new(NoModels), limen_core::DaemonHost::Detached);
     let first = events.blocking_recv();
-    commands.blocking_send(super::BridgeCommand::Quit).unwrap();
-    let _ = bridge.join();
+    bridge.stop();
     server.join().unwrap();
 
     assert!(matches!(
@@ -340,4 +340,54 @@ async fn shutdown_waits_for_the_full_cleanup_budget() {
 
     assert!(!paths.socket.exists());
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn stop_returns_while_the_event_queue_is_full() {
+    use limen_core::Paths;
+    use std::io::{BufRead, Read, Write};
+
+    let root = std::env::temp_dir().join(format!("limen-bridge-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let paths = Paths {
+        config_file: root.join("config.toml"),
+        socket: root.join("limen.sock"),
+        log_file: root.join("daemon.log"),
+        cache_dir: root.join("cache"),
+    };
+    let listener = std::os::unix::net::UnixListener::bind(&paths.socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = String::new();
+        std::io::BufReader::new(&mut stream)
+            .read_line(&mut request)
+            .unwrap();
+        stream
+            .write_all(b"{\"type\":\"hello\",\"protocol\":1,\"daemon_version\":\"test\"}\n")
+            .unwrap();
+        // More pushes than the event queue holds, so the bridge blocks on it.
+        for _ in 0..200 {
+            stream
+                .write_all(b"{\"type\":\"level\",\"rms\":0.1,\"dbfs\":-20.0}\n")
+                .unwrap();
+        }
+        // Hold the connection until the bridge drops it.
+        let _ = stream.read(&mut [0; 1]);
+    });
+    let (_commands, _events, bridge) =
+        super::start(paths, Arc::new(NoModels), limen_core::DaemonHost::Detached);
+    std::thread::sleep(Duration::from_millis(200));
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        bridge.stop();
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(Duration::from_secs(1)).is_ok(),
+        "bridge blocked on the full event queue ignored stop"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }

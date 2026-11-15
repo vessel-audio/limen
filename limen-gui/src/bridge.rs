@@ -11,12 +11,12 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{Stream, TryStreamExt};
 use limen_core::{
-    Action as ShortcutAction, Backend, Balance, ConfigChange, DaemonNotRunning, Delivery,
-    KeySource, Keys, Launch, Ledger, ModelBackend, ModelRole, Paths, Provider, Push, Report,
-    Service, SetupError, Shortcut, SignInStep, Subscription, clear, daemon_peer_pid, edit, set,
-    setup, spawn_daemon, subscribe, terminate_daemon, v1,
+    Action as ShortcutAction, Backend, Balance, ConfigChange, DaemonHost, DaemonNotRunning,
+    Delivery, KeySource, Keys, Launch, Ledger, ModelBackend, ModelRole, Paths, Provider, Push,
+    Report, Service, SetupError, Shortcut, SignInStep, Subscription, clear, daemon_peer_pid, edit,
+    set, setup, subscribe, terminate_daemon, v1,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::model::{Msg, Toast};
@@ -30,8 +30,6 @@ pub use network::NetworkRequest;
 /// Commands sent from the GPUI thread to the bridge.
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
-    /// Stop the bridge even if GPUI tasks still retain command senders.
-    Quit,
     Start,
     Stop,
     ClearHistory,
@@ -141,20 +139,41 @@ type ShortcutTasks = JoinSet<Result<Report, ShortcutFailure>>;
 pub(crate) struct Env {
     pub(crate) paths: Paths,
     pub(crate) models: Arc<dyn ModelBackend>,
+    /// Where the daemon this bridge starts runs.
+    pub(crate) host: DaemonHost,
     /// The sign-in under way, which another sign-in or a cancel abandons.
     pub(crate) signing: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+/// The bridge thread, stopped over a line of its own: the command queue
+/// may sit unread while the bridge waits for room in the event queue, which
+/// the GPUI thread stops draining once it blocks on [`Self::stop`].
+pub struct BridgeThread {
+    quit: oneshot::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl BridgeThread {
+    /// Stop the bridge, then the daemon this process hosts; blocks until
+    /// both are gone, even if GPUI tasks still hold command senders.
+    pub fn stop(self) {
+        let _ = self.quit.send(());
+        let _ = self.thread.join();
+    }
 }
 
 pub fn start(
     paths: Paths,
     models: Arc<dyn ModelBackend>,
+    host: DaemonHost,
 ) -> (
     mpsc::Sender<BridgeCommand>,
     mpsc::Receiver<BridgeEvent>,
-    std::thread::JoinHandle<()>,
+    BridgeThread,
 ) {
     let (commands, command_rx) = mpsc::channel(32);
     let (events, event_rx) = mpsc::channel(64);
+    let (quit, quit_rx) = oneshot::channel();
     let thread = std::thread::Builder::new()
         .name("limen-bridge".to_string())
         .spawn(move || {
@@ -165,12 +184,25 @@ pub fn start(
             let env = Env {
                 paths,
                 models,
+                host,
                 signing: Default::default(),
             };
-            runtime.block_on(run(env, events, command_rx));
+            runtime.block_on(async {
+                // Dropping `run` wherever it waits also drops its spawn gate,
+                // which aborts a start or restart still under way.
+                tokio::select! {
+                    () = run(&env, events, command_rx) => {}
+                    _ = quit_rx => {}
+                }
+                // A daemon this process hosts must unlink its socket before
+                // the process goes away.
+                if let Err(error) = env.host.stop(&env.paths).await {
+                    tracing::warn!(error = %format!("{error:#}"), "daemon did not stop");
+                }
+            });
         })
         .expect("failed to spawn bridge thread");
-    (commands, event_rx, thread)
+    (commands, event_rx, BridgeThread { quit, thread })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,18 +232,30 @@ struct SpawnGate {
     task: Option<JoinHandle<StartResult>>,
 }
 
+/// A start the bridge no longer waits for must not finish behind its back:
+/// it could bring up a daemon after the host was told to stop.
+impl Drop for SpawnGate {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
 impl SpawnGate {
-    fn start(&mut self, paths: &Paths, mode: StartMode) -> bool {
+    fn start(&mut self, env: &Env, mode: StartMode) -> bool {
         if self.task.is_some() {
             return false;
         }
-        let paths = paths.clone();
+        let paths = env.paths.clone();
+        let host = env.host.clone();
         self.task = Some(tokio::spawn(async move {
             match mode {
-                StartMode::Spawn => spawn_daemon(&paths)
+                StartMode::Spawn => host
+                    .start(&paths)
                     .await
                     .map_err(|error| StartError::Failed(format!("{error:#}"))),
-                StartMode::Restart => restart(&paths).await,
+                StartMode::Restart => restart(&paths, &host).await,
             }
         }));
         true
@@ -230,7 +274,7 @@ impl SpawnGate {
 
 #[tracing::instrument(skip_all)]
 async fn run(
-    env: Env,
+    env: &Env,
     events: mpsc::Sender<BridgeEvent>,
     mut commands: mpsc::Receiver<BridgeCommand>,
 ) {
@@ -243,11 +287,10 @@ async fn run(
     loop {
         tokio::select! {
             command = commands.recv() => {
-                let Some(command) = command else { return; };
                 match command {
-                    BridgeCommand::Quit => return,
-                    command => handle_command(
-                        &env,
+                    None => return,
+                    Some(command) => handle_command(
+                        env,
                         &events,
                         command,
                         &mut stream,
@@ -331,7 +374,7 @@ async fn run(
                     Err(error) => {
                         if error.downcast_ref::<DaemonNotRunning>().is_some() && spawn.task.is_none() {
                             let _ = events.send(BridgeEvent::Msg(Msg::NotRunning)).await;
-                            spawn.start(&env.paths, StartMode::Spawn);
+                            spawn.start(env, StartMode::Spawn);
                         } else {
                             let _ = events.send(BridgeEvent::Msg(Msg::Disconnected { reason: format!("{error:#}") })).await;
                             next_connect = tokio::time::Instant::now() + backoff.next();
@@ -482,11 +525,11 @@ async fn handle_command(
         }
         BridgeCommand::SpawnDaemon => {
             *stopped = false;
-            spawn.start(paths, StartMode::Spawn);
+            spawn.start(env, StartMode::Spawn);
         }
         BridgeCommand::RestartDaemon => {
             *stopped = false;
-            spawn.start(paths, StartMode::Restart);
+            spawn.start(env, StartMode::Restart);
         }
         BridgeCommand::ShutdownDaemon => {
             match request_with_timeout(paths, &v1::Request::Shutdown).await {
@@ -551,7 +594,6 @@ async fn handle_command(
         }
         BridgeCommand::Model(request) => models::handle(env, events, request),
         BridgeCommand::Network(request) => network::handle(env, events, request),
-        BridgeCommand::Quit => unreachable!("quit is handled by the bridge loop"),
     }
 }
 

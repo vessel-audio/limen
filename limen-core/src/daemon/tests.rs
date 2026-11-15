@@ -82,6 +82,7 @@ pub(super) fn mailboxes() -> (Mailboxes, Senders) {
             input_reports,
             session_reports,
             activations,
+            lifetime: super::Lifetime::Process,
         },
         Senders {
             commands: commands_tx,
