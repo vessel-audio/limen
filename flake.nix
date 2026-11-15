@@ -57,8 +57,10 @@
             program = "${self'.packages.default}/bin/limen";
           };
 
-          devShells.default =
-            pkgs.mkShell {
+          # The Linux-only variables join mkShell's argument; merged onto the
+          # shell derivation instead, they would never reach its environment.
+          devShells.default = pkgs.mkShell (
+            {
               inputsFrom = [ self'.packages.default ];
               packages =
                 builtins.attrValues {
@@ -114,7 +116,8 @@
                 pkgs.vulkan-loader
                 pkgs.libGL
               ];
-            };
+            }
+          );
 
           formatter = treefmtEval.config.build.wrapper;
           checks = {
