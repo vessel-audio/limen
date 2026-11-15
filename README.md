@@ -31,6 +31,10 @@ cargo build --release
 With Nix: `nix build` then `nix run . -- daemon`; `nix develop` enters the
 dev shell. The GUI has desktop end-to-end tests on Linux: `cargo gui-e2e`.
 
+On macOS, `nix build .#limen` produces `result/Applications/Limen.app`
+(`result/bin/limen` links into it). Copy or link it into `/Applications` and
+launch it from Finder or Spotlight.
+
 ## Setup
 
 1. **ASR.** First run writes an annotated config (`$XDG_CONFIG_HOME/limen/config.toml` on Linux,
@@ -48,20 +52,25 @@ dev shell. The GUI has desktop end-to-end tests on Linux: `cargo gui-e2e`.
    ```bash
    limen daemon
    ```
+   On macOS, launch Limen.app instead: it hosts the daemon in its own
+   process, and quitting the app stops it.
 4. **Shortcut.**
    - Linux: `limen shortcut setup portal` (GNOME confirms once; supports
      hold-to-talk) or `setup gnome-keybinding` (toggle only), or bind
      `limen toggle` in your desktop settings yourself. `limen shortcut
      status` shows what is bound.
-   - macOS: **global hotkeys are broken for now** — a CLI process never
-     receives Carbon hotkey events. Bind `limen toggle` in a launcher
+   - macOS: global hotkeys should work when the daemon runs inside
+     Limen.app, whose event loop dispatches them (unverified). A standalone
+     `limen daemon` never receives Carbon hotkey events — a CLI process runs
+     no application event loop — so bind `limen toggle` in a launcher
      (Raycast, Hammerspoon, Keyboard Maestro); Hammerspoon can map key
      down/up to `limen hold press` / `limen hold release` for
      hold-to-talk.
 
-macOS asks for two permissions, attributed to the hosting terminal app:
-**Microphone** on the first take and **Accessibility** on the first text
-commit. `brew install terminal-notifier` gives native-looking
+macOS asks for two permissions: **Microphone** on the first take and
+**Accessibility** on the first text commit. They are attributed to Limen.app
+when launched as the app (Finder, `open`), and to the hosting terminal when
+run from one. `brew install terminal-notifier` gives native-looking
 notifications.
 
 ## Usage
@@ -72,16 +81,21 @@ dropped as accidental, one over 60 s is stopped for you.
 
 ## GUI control panel
 
-`limen gui` opens the control panel: live dictation state, level meter and
-history, ASR/polish provider setup (including ChatGPT and Copilot sign-in),
-proxy settings, and the shortcut page. Closing the window never stops the
-daemon. API keys and the proxy password are saved in `keys.toml` (mode
-0600), never in `config.toml`. `nix run .#headless -- daemon` runs without
-the GUI.
+`limen` (or `limen gui`) opens the control panel: live dictation state,
+level meter and history, ASR/polish provider setup (including ChatGPT and
+Copilot sign-in), proxy settings, and the shortcut page. Closing the window
+never stops the daemon. API keys and the proxy password are saved in
+`keys.toml` (mode 0600), never in `config.toml`. `nix run .#headless -- daemon`
+runs without the GUI.
+
+On macOS the GUI hosts the daemon itself rather than spawning `limen daemon`,
+and lives in the menu bar: the icon follows the dictation state, and the
+menu toggles dictation, opens the window, or quits. Closing the window keeps
+Limen in the menu bar; quitting stops the daemon.
 
 ## Commands
 
-- `limen gui` — control panel (GUI-enabled builds)
+- `limen` / `limen gui` — control panel (GUI-enabled builds)
 - `limen daemon` — resident process (capture, ASR, text input, shortcuts)
 - `limen toggle` — start/stop dictation
 - `limen hold press|release` — hold-to-talk key edges (for key-release bindings)
