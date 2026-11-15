@@ -2,6 +2,8 @@
 
 mod a11y;
 mod app;
+#[cfg(target_os = "macos")]
+mod app_menu;
 mod assets;
 mod bridge;
 mod chrome;
@@ -76,6 +78,8 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
         gpui_kit::init(cx);
         gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
         palette::apply(cx);
+        #[cfg(target_os = "macos")]
+        app_menu::install(cx);
         // Registered before anything can quit, so the daemon this process
         // hosts is stopped on every way out.
         #[cfg(target_os = "macos")]

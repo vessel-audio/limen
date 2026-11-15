@@ -204,3 +204,25 @@ transcript.empty: The transcript of your next take appears here
 status_item.toggle: Toggle dictation
 status_item.open: Open Limen
 status_item.quit: Quit Limen
+app_menu.about: About Limen
+app_menu.services: Services
+app_menu.hide: Hide Limen
+app_menu.hide_others: Hide Others
+app_menu.show_all: Show All
+app_menu.file: File
+app_menu.close: Close Window
+app_menu.edit: Edit
+app_menu.undo: Undo
+app_menu.redo: Redo
+app_menu.cut: Cut
+app_menu.copy: Copy
+app_menu.paste: Paste
+app_menu.select_all: Select All
+app_menu.view: View
+app_menu.full_screen: Toggle Full Screen
+app_menu.window: Window
+app_menu.minimize: Minimize
+app_menu.zoom: Zoom
+app_menu.bring_all_to_front: Bring All to Front
+app_menu.help: Help
+app_menu.limen_help: Limen Help

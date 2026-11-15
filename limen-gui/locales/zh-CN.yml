@@ -204,3 +204,25 @@ transcript.empty: 下一段录音的转写文本将显示在这里
 status_item.toggle: 开始或停止听写
 status_item.open: 打开 Limen
 status_item.quit: 退出 Limen
+app_menu.about: 关于 Limen
+app_menu.services: 服务
+app_menu.hide: 隐藏 Limen
+app_menu.hide_others: 隐藏其他
+app_menu.show_all: 全部显示
+app_menu.file: 文件
+app_menu.close: 关闭窗口
+app_menu.edit: 编辑
+app_menu.undo: 撤销
+app_menu.redo: 重做
+app_menu.cut: 剪切
+app_menu.copy: 拷贝
+app_menu.paste: 粘贴
+app_menu.select_all: 全选
+app_menu.view: 显示
+app_menu.full_screen: 切换全屏幕
+app_menu.window: 窗口
+app_menu.minimize: 最小化
+app_menu.zoom: 缩放
+app_menu.bring_all_to_front: 前置全部窗口
+app_menu.help: 帮助
+app_menu.limen_help: Limen 帮助
