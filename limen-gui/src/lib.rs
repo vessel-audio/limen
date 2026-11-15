@@ -21,6 +21,8 @@ mod sidebar;
 mod smooth_scroll;
 #[cfg(target_os = "macos")]
 mod status_item;
+#[cfg(unix)]
+mod termination;
 
 pub use bridge::{BridgeCommand, BridgeEvent, ModelRequest, ShortcutRequest};
 pub use model::{
@@ -51,6 +53,12 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
         None => return Ok(()),
     };
     locale::initialize();
+    #[cfg(unix)]
+    let terminated = termination::listen()
+        .inspect_err(|error| {
+            tracing::warn!(error = %format!("{error:#}"), "termination signals end the process abruptly");
+        })
+        .ok();
     #[cfg(target_os = "macos")]
     let (host, pump) = {
         let (host, pump) = DaemonHost::embedded(models.clone());
@@ -91,6 +99,15 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
             async {}
         })
         .detach();
+        #[cfg(unix)]
+        if let Some(terminated) = terminated {
+            cx.spawn(async move |cx| {
+                if terminated.await.is_ok() {
+                    cx.update(|cx| cx.quit());
+                }
+            })
+            .detach();
+        }
         match gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
