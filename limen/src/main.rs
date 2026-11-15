@@ -21,8 +21,10 @@ use limen_core::{Config, HoldEdge, Paths};
     about = "System-wide voice input: mic -> ASR -> type into focused window"
 )]
 struct Cli {
+    /// Without one, open the graphical control panel; this is how the macOS
+    /// app bundle starts.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -63,7 +65,18 @@ fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let paths = Paths::discover()?;
 
-    match cli.command {
+    let command = match cli.command {
+        Some(command) => command,
+        #[cfg(feature = "gui")]
+        None => Command::Gui,
+        #[cfg(not(feature = "gui"))]
+        None => {
+            <Cli as clap::CommandFactory>::command().print_help()?;
+            return Ok(ExitCode::from(2));
+        }
+    };
+
+    match command {
         #[cfg(feature = "gui")]
         Command::Gui => {
             let backend = Arc::new(backend::Backends::new(paths.sign_ins()));
