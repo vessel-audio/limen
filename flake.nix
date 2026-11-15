@@ -57,63 +57,67 @@
             program = "${self'.packages.default}/bin/limen";
           };
 
-          devShells.default = pkgs.mkShell {
-            inputsFrom = [ self'.packages.default ];
-            packages =
-              builtins.attrValues {
-                inherit (pkgs)
-                  cargo
-                  rustc
-                  rustfmt
-                  clippy
-                  rust-analyzer
-                  cmake
-                  pkg-config
-                  gnumake
-                  coreutils
-                  pre-commit
-                  ;
-              }
-              # gcc and the desktop stack are Linux-only: macOS builds against
-              # the system SDK, and there is no D-Bus/Fcitx/PipeWire there.
-              ++ linuxOnly (
+          # The Linux-only variables join mkShell's argument; merged onto the
+          # shell derivation instead, they would never reach its environment.
+          devShells.default = pkgs.mkShell (
+            {
+              inputsFrom = [ self'.packages.default ];
+              packages =
                 builtins.attrValues {
                   inherit (pkgs)
-                    gcc
-                    dbus
-                    desktop-file-utils
-                    fcitx5
-                    pipewire
-                    libnotify
-                    # Desktop E2E: a headless X server for `cargo gui-e2e`.
-                    xvfb
+                    cargo
+                    rustc
+                    rustfmt
+                    clippy
+                    rust-analyzer
+                    cmake
+                    pkg-config
+                    gnumake
+                    coreutils
+                    pre-commit
                     ;
                 }
-                # Desktop E2E: real `gsettings` over a keyfile backend.
-                ++ [
-                  pkgs.glib.bin
-                  pkgs.glib.dev
-                ]
-              );
-            RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
-          }
-          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-            # Desktop E2E renders with Mesa's software Vulkan driver, registers
-            # with a private AT-SPI registry, and sees only the fonts in
-            # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
-            LIMEN_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
-            LIMEN_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
-            LIMEN_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
-              ibmPlex = pkgs.ibm-plex;
-              dejavu = pkgs.dejavu_fonts;
-              wqyMicrohei = pkgs.wqy_microhei;
-            };
-            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-              pkgs.wayland
-              pkgs.vulkan-loader
-              pkgs.libGL
-            ];
-          };
+                # gcc and the desktop stack are Linux-only: macOS builds against
+                # the system SDK, and there is no D-Bus/Fcitx/PipeWire there.
+                ++ linuxOnly (
+                  builtins.attrValues {
+                    inherit (pkgs)
+                      gcc
+                      dbus
+                      desktop-file-utils
+                      fcitx5
+                      pipewire
+                      libnotify
+                      # Desktop E2E: a headless X server for `cargo gui-e2e`.
+                      xvfb
+                      ;
+                  }
+                  # Desktop E2E: real `gsettings` over a keyfile backend.
+                  ++ [
+                    pkgs.glib.bin
+                    pkgs.glib.dev
+                  ]
+                );
+              RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
+            }
+            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              # Desktop E2E renders with Mesa's software Vulkan driver, registers
+              # with a private AT-SPI registry, and sees only the fonts in
+              # nix/gui-e2e/fonts.conf; `makeFontsConf` would add the host's.
+              LIMEN_E2E_REGISTRYD = "${pkgs.at-spi2-core}/libexec/at-spi2-registryd";
+              LIMEN_E2E_VK_ICD = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
+              LIMEN_E2E_FONTCONFIG = pkgs.replaceVars ./nix/gui-e2e/fonts.conf {
+                ibmPlex = pkgs.ibm-plex;
+                dejavu = pkgs.dejavu_fonts;
+                wqyMicrohei = pkgs.wqy_microhei;
+              };
+              LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+                pkgs.wayland
+                pkgs.vulkan-loader
+                pkgs.libGL
+              ];
+            }
+          );
 
           formatter = treefmtEval.config.build.wrapper;
           checks = {

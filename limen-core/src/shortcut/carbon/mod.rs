@@ -21,6 +21,7 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+pub use registrar::EventPump;
 pub(crate) use registrar::install_event_pump;
 
 use crate::config::ShortcutConfig;

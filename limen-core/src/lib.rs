@@ -32,12 +32,14 @@ pub use config::{
     ApiKey, ChatApi, Config, Format, KeyChange, Paths, ProviderOptions, Proxy, ProxyLogin,
     ProxyMode, Service, ShortcutConfig,
 };
+#[cfg(target_os = "macos")]
+pub use daemon::EmbeddedDaemon;
 pub use daemon::run as run_daemon;
 pub use daemon::snapshot::{
     ConfigSummary, DictationStatus, ErrorEntry, HistoryEntry, HistoryOutcome, RequestEntry,
     RequestOutcome, StateSnapshot,
 };
-pub use daemon::{DaemonTermination, daemon_peer_pid, spawn_daemon, terminate_daemon};
+pub use daemon::{DaemonHost, DaemonTermination, daemon_peer_pid, terminate_daemon};
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
@@ -50,6 +52,8 @@ pub use network::{Network, ProxyPassword, configured_proxy, load_network, save_n
 pub use provider::probe;
 pub use reload::ConfigChange;
 pub use shortcut::Launch;
+#[cfg(target_os = "macos")]
+pub use shortcut::carbon::EventPump;
 #[cfg(target_os = "linux")]
 pub use shortcut::desktop_entry::APP_ID;
 pub use shortcut::program::Program;

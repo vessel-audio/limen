@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::TryStreamExt;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 
 use crate::config::Paths;
 use crate::ipc::{SocketIdentity, subscribe, wire::Push};
@@ -65,7 +65,13 @@ async fn spawn_with_program(
         .spawn()
         .with_context(|| format!("failed to start {}", program.display()))?;
     let pid = child.id().context("daemon process has no ID")?;
-    let result = wait_for_hello(paths, &mut child).await;
+    let result = wait_for_hello(paths, || {
+        match child.try_wait().context("failed to wait for daemon")? {
+            Some(status) => bail!("daemon exited with {status}"),
+            None => Ok(()),
+        }
+    })
+    .await;
     match result {
         Ok(()) => Ok(pid),
         Err(error) => {
@@ -79,12 +85,15 @@ async fn spawn_with_program(
     }
 }
 
-async fn wait_for_hello(paths: &Paths, child: &mut Child) -> Result<()> {
+/// Wait until the daemon greets a subscriber; `still_running` fails once
+/// the daemon being started is known to have exited.
+pub(super) async fn wait_for_hello(
+    paths: &Paths,
+    mut still_running: impl FnMut() -> Result<()>,
+) -> Result<()> {
     tokio::time::timeout(READY_TIMEOUT, async {
         loop {
-            if let Some(status) = child.try_wait().context("failed to wait for daemon")? {
-                bail!("daemon exited with {status}");
-            }
+            still_running()?;
             let error = match subscribe(paths).await {
                 Ok(mut stream) => match stream.try_next().await {
                     Ok(Some(Push::Hello { .. })) => return Ok(()),

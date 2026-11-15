@@ -55,6 +55,30 @@ enigo = { version = "0.6", default-features = false }
 global-hotkey = "0.7"
 core-foundation = "0.10"
 crossbeam-channel = "0.5"
+# AppKit bindings for the menu-bar status item and the main menu's system
+# items (limen-gui); GPUI has no tray API. Versions match what GPUI already
+# locks.
+objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "objc2-core-foundation",
+  "NSApplication",
+  "NSButton",
+  "NSControl",
+  "NSImage",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSStatusBar",
+  "NSStatusBarButton",
+  "NSStatusItem",
+  "NSView",
+  "NSWindow",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSString",
+] }
 # Shared mic capture, published from its own repository; pinned to a commit
 # for reproducible nix builds (the lock vendoring hashes it).
 vessel-capture = { git = "https://github.com/vessel-audio/vessel-capture", rev = "9fc07ab2ed58ab6a0e5cbb9d81846ba0a881fc31" }

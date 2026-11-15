@@ -12,6 +12,7 @@
 //! Their outcomes come back as events, so the loop stays responsive to IPC
 //! even while pw-record is being reaped or a take is being finalized.
 
+mod host;
 mod input;
 mod lifecycle;
 mod projection;
@@ -19,8 +20,11 @@ mod reload;
 pub(crate) mod snapshot;
 mod spawn;
 
+pub use host::DaemonHost;
+#[cfg(target_os = "macos")]
+pub use host::EmbeddedDaemon;
 pub use lifecycle::run;
-pub use spawn::{DaemonTermination, daemon_peer_pid, spawn_daemon, terminate_daemon};
+pub use spawn::{DaemonTermination, daemon_peer_pid, terminate_daemon};
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -88,6 +92,18 @@ struct Mailboxes {
     input_reports: mpsc::UnboundedReceiver<InputReport>,
     session_reports: mpsc::UnboundedReceiver<Event>,
     activations: mpsc::UnboundedReceiver<ActivationReceipt>,
+    lifetime: Lifetime,
+}
+
+/// Who owns the process the actor runs in, and so whether its termination
+/// signals are the actor's to take.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Lifetime {
+    /// The daemon is the process: SIGTERM and SIGINT end the loop.
+    Process,
+    /// A frontend hosts the daemon and keeps the signals for itself.
+    #[cfg(target_os = "macos")]
+    Hosted,
 }
 
 impl DictationActor {
@@ -360,14 +376,25 @@ impl DictationActor {
 
     /// Message loop: handle one message at a time until a mailbox closes.
     async fn run_inner(&mut self, mailboxes: &mut Mailboxes) -> Result<()> {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let mut interrupt =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+        let mut signalled: Pin<Box<dyn Future<Output = ()> + Send>> = match mailboxes.lifetime {
+            Lifetime::Process => {
+                let mut terminate =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+                let mut interrupt =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+                Box::pin(async move {
+                    tokio::select! {
+                        _ = terminate.recv() => {}
+                        _ = interrupt.recv() => {}
+                    }
+                })
+            }
+            #[cfg(target_os = "macos")]
+            Lifetime::Hosted => Box::pin(std::future::pending()),
+        };
         loop {
             tokio::select! {
-                _ = terminate.recv() => return Ok(()),
-                _ = interrupt.recv() => return Ok(()),
+                _ = &mut signalled => return Ok(()),
                 cmd = mailboxes.commands.recv() => {
                     let Some(cmd) = cmd else { anyhow::bail!("ipc accept loop died") };
                     match cmd {
