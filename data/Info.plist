@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.Emin017.Limen</string>
+	<key>CFBundleName</key>
+	<string>Limen</string>
+	<key>CFBundleDisplayName</key>
+	<string>Limen</string>
+	<key>CFBundleExecutable</key>
+	<string>limen</string>
+	<key>CFBundleIconFile</key>
+	<string>Limen</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@version@</string>
+	<key>CFBundleVersion</key>
+	<string>@version@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>@minimumSystemVersion@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Limen records the microphone to transcribe your dictation.</string>
+</dict>
+</plist>
