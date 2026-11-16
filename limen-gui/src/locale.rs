@@ -70,10 +70,14 @@ mod tests {
 
     #[test]
     fn application_translations_resolve_at_runtime() {
-        rust_i18n::set_locale("en");
-        assert_eq!(rust_i18n::t!("status.idle"), "Idle");
-        rust_i18n::set_locale("zh-CN");
-        assert_eq!(rust_i18n::t!("status.idle"), "空闲");
+        // Named locales, since the UI tests share the process-wide one.
+        assert_eq!(
+            (
+                rust_i18n::t!("status.idle", locale = Locale::En.as_str()),
+                rust_i18n::t!("status.idle", locale = Locale::ZhCn.as_str()),
+            ),
+            ("Idle".into(), "空闲".into())
+        );
     }
 
     #[test]

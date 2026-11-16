@@ -2,6 +2,7 @@
 //! rate it was used at, its daily use as a chart, and each of its models.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt};
 use gpui_kit::*;
 use limen_core::{Balance, ModelRole, ProviderUsage, Tally, UsageRow};
@@ -14,7 +15,7 @@ pub(super) fn card(
     balance: Option<&Result<Balance, String>>,
     first_day: i64,
     cx: &App,
-) -> Stateful<Div> {
+) -> ObservedElement<Stateful<Div>> {
     let theme = cx.theme();
     let service = provider.service;
     let prefix = format!("usage-{}", service.as_str());
@@ -75,6 +76,7 @@ pub(super) fn card(
             .child(
                 div()
                     .id(SharedString::from(id.clone()))
+                    .test_support()
                     .accessibility_id(id)
                     .role(Role::Status)
                     .aria_label(value.clone())
@@ -94,6 +96,7 @@ pub(super) fn card(
     let id = SharedString::from(format!("usage-card-{}", service.as_str()));
     div()
         .id(id.clone())
+        .test_support()
         .accessibility_id(id)
         .role(Role::Group)
         .aria_label(service_label(service).to_string())
@@ -182,7 +185,12 @@ pub(super) fn card(
 
 /// One model's lines: its role, name, and cost, then its requests and what
 /// it used, so a narrow card never squeezes the name out.
-fn model_row(row: &UsageRow, prefix: &str, index: usize, cx: &App) -> Stateful<Div> {
+fn model_row(
+    row: &UsageRow,
+    prefix: &str,
+    index: usize,
+    cx: &App,
+) -> ObservedElement<Stateful<Div>> {
     let theme = cx.theme();
     let tally = &row.tally;
     let (role, used) = match row.role {
@@ -212,6 +220,7 @@ fn model_row(row: &UsageRow, prefix: &str, index: usize, cx: &App) -> Stateful<D
     );
     div()
         .id(id.clone())
+        .test_support()
         .accessibility_id(id)
         .role(Role::ListItem)
         .aria_label(label)

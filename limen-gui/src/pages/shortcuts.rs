@@ -234,6 +234,7 @@ fn carbon(view: &AppView) -> Div {
         .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
         .child(
             Input::new(&view.hold_input)
+                .id("hold-input")
                 .accessibility_id("hold-input")
                 .aria_label(rust_i18n::t!("shortcuts.preferred_hold").to_string()),
         )
@@ -311,6 +312,7 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         .child(rust_i18n::t!("shortcuts.preferred_hold").to_string())
         .child(
             Input::new(&view.hold_input)
+                .id("hold-input")
                 .accessibility_id("hold-input")
                 .aria_label(rust_i18n::t!("shortcuts.preferred_hold").to_string()),
         )

@@ -251,7 +251,10 @@ impl AppView {
             .collect()
     }
 
-    pub(crate) fn connection_overlay(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(crate) fn connection_overlay(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<ObservedElement<Stateful<Div>>> {
         let (message, log) = match &self.model.connection {
             Connection::Connecting | Connection::Spawning => {
                 (rust_i18n::t!("connection.starting").to_string(), None)
@@ -267,6 +270,7 @@ impl AppView {
         };
         let overlay = div()
             .id("connection-overlay")
+            .test_support()
             .accessibility_id("connection-overlay")
             .role(Role::Dialog)
             .aria_label(message.clone());

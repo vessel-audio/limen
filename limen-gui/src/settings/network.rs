@@ -239,6 +239,7 @@ pub fn network(view: &AppView, cx: &mut Context<AppView>) -> Div {
     );
     let input = |input: &Entity<InputState>, id: &'static str, key: &str| {
         Input::new(input)
+            .id(id)
             .accessibility_id(id)
             .aria_label(rust_i18n::t!(key).to_string())
     };

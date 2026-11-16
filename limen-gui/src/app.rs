@@ -1,5 +1,6 @@
 //! Root GPUI view and connection/status presentation.
 
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{ActiveTheme, StyledExt, Theme, ThemeMode, button::ButtonVariants};
 use gpui_kit::*;
 use std::time::Instant;
@@ -226,6 +227,20 @@ impl AppView {
         });
     }
 
+    /// Apply one bridge event and carry out the side effects it asks for.
+    pub(crate) fn receive(&mut self, event: BridgeEvent, cx: &mut Context<Self>) {
+        for action in self.apply_bridge_event(event) {
+            match action {
+                Action::CopyToClipboard(text) => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                Action::Reconnect => {}
+                Action::Toast(toast) => self.show_toast(toast),
+            }
+        }
+        cx.notify();
+    }
+
     /// Apply one bridge event and return GUI-only side effects.
     pub fn apply_bridge_event(&mut self, event: BridgeEvent) -> Vec<Action> {
         let level_event = matches!(event, BridgeEvent::Msg(Msg::Level(_)));
@@ -340,7 +355,7 @@ impl AppView {
 }
 
 impl AppView {
-    fn shutdown_overlay(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    fn shutdown_overlay(&self, cx: &mut Context<Self>) -> Option<ObservedElement<Stateful<Div>>> {
         let action = self.confirm_shutdown?;
         let (message, command) = match action {
             ShutdownAction::Stop => (
@@ -355,6 +370,7 @@ impl AppView {
         Some(
             div()
                 .id("shutdown-confirmation")
+                .test_support()
                 .accessibility_id("shutdown-confirmation")
                 .role(Role::AlertDialog)
                 .aria_label(message.clone())

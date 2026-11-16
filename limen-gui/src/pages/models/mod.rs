@@ -2,6 +2,7 @@
 //! provider that transcribes, one for the provider that polishes. Each
 //! offers its services as cards; a card opens the dialog that sets it up.
 
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, scroll::ScrollbarMode};
 use gpui_kit::*;
@@ -22,7 +23,11 @@ use form::set_polishing;
 
 /// The Providers page: a section for the ASR provider, then one for the
 /// polishing provider, whose switch heads it.
-pub fn providers(view: &AppView, window: &Window, cx: &mut Context<AppView>) -> Div {
+pub fn providers(
+    view: &AppView,
+    window: &Window,
+    cx: &mut Context<AppView>,
+) -> ObservedElement<Stateful<Div>> {
     let scroll = &view.providers_scroll;
     // The window less the sidebar, the main area's margin and border, and
     // the page's padding.
@@ -49,6 +54,9 @@ pub fn providers(view: &AppView, window: &Window, cx: &mut Context<AppView>) -> 
             ScrollbarMode::Scrolling,
         )
         .flex_1()
+        // The area the content scrolls within, which the UI tests measure.
+        .id("providers-viewport")
+        .test_support()
 }
 
 /// One role's section: its heading, its provider cards, and its error.

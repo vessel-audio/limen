@@ -114,16 +114,7 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
                 cx.spawn(async move |this, cx| {
                     while let Some(event) = events.recv().await {
                         let _ = this.update(cx, |window: &mut app::AppView, cx| {
-                            for action in window.apply_bridge_event(event) {
-                                match action {
-                                    Action::CopyToClipboard(text) => {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                    }
-                                    Action::Reconnect => {}
-                                    Action::Toast(toast) => window.show_toast(toast),
-                                }
-                            }
-                            cx.notify();
+                            window.receive(event, cx)
                         });
                     }
                 })

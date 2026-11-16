@@ -1,4 +1,8 @@
-//! Network settings: the proxy requests to model services go through.
+//! Network settings: the proxy requests to model services go through. One
+//! manual proxy is saved through a real daemon onto disk: the config file, the
+//! private file the password goes to, and the reloads the daemon is asked for
+//! are what only the whole chain shows. The page itself, and the requests it
+//! sends, are tested in-process in limen-gui's UI tests.
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -54,29 +58,6 @@ pub fn a_manual_proxy_is_saved_and_applied() -> Result<()> {
             reloads(&session, &v1::Request::PolishReload)?
         ) == (1, 1),
         "the daemon was not asked to reload each role once"
-    );
-    Ok(())
-}
-
-/// A proxy URL holding a login is refused with the reason, and nothing is
-/// saved.
-pub fn a_proxy_url_with_a_login_is_refused() -> Result<()> {
-    let session = Session::fake(Scenario::default())?;
-    session.click("settings-page")?;
-    session.click("settings-tab-network")?;
-    session.click("proxy-manual")?;
-    retype(&session, "proxy-url", "http://me:secret@proxy:8080")?;
-    session.click("save-network")?;
-    let error = session.node("network-error")?;
-    ensure!(
-        error.name.contains("cannot hold a login"),
-        "the page says {:?}",
-        error.name
-    );
-    let config_file = &session.paths().config_file;
-    ensure!(
-        !config_file.exists() && !config_file.with_file_name("keys.toml").exists(),
-        "the refused proxy was written"
     );
     Ok(())
 }

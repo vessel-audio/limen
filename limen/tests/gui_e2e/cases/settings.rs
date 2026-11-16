@@ -1,31 +1,16 @@
-//! General and About settings: appearance, language, typography, and
-//! lightweight mode.
+//! General settings that need the real desktop: that its dark preference
+//! reaches the window and is painted, that its locale picks the interface
+//! language at launch, that a chosen font changes how text sets, and that
+//! Lightweight mode skips the sidebar's motion. The rest of the settings,
+//! including the choices themselves, are tested in-process in limen-gui's UI
+//! tests.
 
 use anyhow::{Context, Result, ensure};
 use atspi::{Role, State};
 
 use crate::daemon::Scenario;
-use crate::desktop::{Key, SystemScheme, viewport};
+use crate::desktop::{Key, SystemScheme};
 use crate::session::{Launch, Session};
-
-/// The tabs switch between the General controls and the About card.
-pub fn settings_tabs_switch_between_general_and_about() -> Result<()> {
-    let session = Session::fake(Scenario::default())?;
-    session.click("settings-page")?;
-    session.click("settings-tab-about")?;
-    session.state("settings-tab-about", State::Selected, true)?;
-    session.named("current-page", "About")?;
-    session.named(
-        "about-version",
-        &format!("Version {}", env!("CARGO_PKG_VERSION")),
-    )?;
-    session.absent("appearance-dark")?;
-    session.click("settings-tab-general")?;
-    session.named("current-page", "General")?;
-    session.node("appearance-dark")?;
-    session.absent("about-version")?;
-    Ok(())
-}
 
 /// Whether the content panel is painted dark, sampled beside the title.
 fn dark(session: &Session) -> Result<bool> {
@@ -34,21 +19,16 @@ fn dark(session: &Session) -> Result<bool> {
     Ok(u32::from(red) + u32::from(green) + u32::from(blue) < 300)
 }
 
-/// Light and Dark override the desktop's preference; Follow system, the
-/// default, takes the desktop's dark preference from its settings portal.
-pub fn appearance_follows_the_choice_and_the_system() -> Result<()> {
+/// The desktop's dark preference, which comes through its settings portal,
+/// is painted by default; Light overrides it, and Follow system goes back.
+pub fn appearance_follows_the_desktops_dark_preference() -> Result<()> {
     let session = Session::launch(Launch {
         scheme: SystemScheme::PreferDark,
         ..Launch::default()
     })?;
     session.click("settings-page")?;
     session.until("the system's dark scheme", || dark(&session))?;
-    for (choice, wanted) in [
-        ("appearance-light", false),
-        ("appearance-dark", true),
-        ("appearance-light", false),
-        ("appearance-system", true),
-    ] {
+    for (choice, wanted) in [("appearance-light", false), ("appearance-system", true)] {
         session.click(choice)?;
         session.until(&format!("{choice} to paint"), || {
             Ok(dark(&session)? == wanted)
@@ -57,52 +37,14 @@ pub fn appearance_follows_the_choice_and_the_system() -> Result<()> {
     Ok(())
 }
 
-/// English and Chinese override the system language; Follow system goes
-/// back to the locale the session started with.
-pub fn language_choice_renames_the_interface() -> Result<()> {
+/// The interface opens in the language of the locale the desktop launches
+/// it with.
+pub fn the_interface_starts_in_the_system_language() -> Result<()> {
     let session = Session::launch(Launch {
         lang: "zh_CN.UTF-8",
         ..Launch::default()
     })?;
     session.named("settings-page", "设置")?;
-    session.click("settings-page")?;
-    for (choice, settings, dictation) in [
-        ("language-english", "Settings", "Dictation"),
-        ("language-chinese", "设置", "听写"),
-        ("language-english", "Settings", "Dictation"),
-        ("language-system", "设置", "听写"),
-    ] {
-        session.click(choice)?;
-        session.named("settings-page", settings)?;
-        session.named("dictation-page", dictation)?;
-    }
-    Ok(())
-}
-
-/// The text size is one choice among scales: choosing one checks it alone,
-/// 125% makes text taller, and 100% restores it.
-pub fn the_text_scale_resizes_the_interface() -> Result<()> {
-    let session = Session::fake(Scenario::default())?;
-    session.click("settings-page")?;
-    session.state("font-scale-100", State::Checked, true)?;
-    let height = || -> Result<i32> {
-        Ok(session
-            .settled("page-title")?
-            .bounds
-            .context("no title")?
-            .height)
-    };
-    let normal = height()?;
-    session.reveal("font-scale-125")?;
-    session.click("font-scale-125")?;
-    session.state("font-scale-125", State::Checked, true)?;
-    session.state("font-scale-100", State::Checked, false)?;
-    ensure!(height()? > normal, "text did not grow");
-    // Larger text pushes the row below the window's edge.
-    session.reveal("font-scale-100")?;
-    session.click("font-scale-100")?;
-    session.state("font-scale-100", State::Checked, true)?;
-    ensure!(height()? == normal, "text did not return to its size");
     Ok(())
 }
 
@@ -142,8 +84,8 @@ pub fn the_font_select_applies_a_family() -> Result<()> {
     Ok(())
 }
 
-/// Lightweight mode turns on and off, and while on, motion is skipped: the
-/// sidebar collapses at once instead of springing.
+/// While Lightweight mode is on, motion is skipped: the sidebar collapses at
+/// once instead of springing.
 pub fn lightweight_mode_skips_motion() -> Result<()> {
     let session = Session::fake(Scenario::default())?;
     session.click("settings-page")?;
@@ -168,41 +110,6 @@ pub fn lightweight_mode_skips_motion() -> Result<()> {
         first * 3 < expanded.width,
         "the sidebar animated: {} then {first}",
         expanded.width
-    );
-    session.reveal("lightweight-off")?;
-    session.click("lightweight-off")?;
-    session.state("lightweight-off", State::Checked, true)?;
-    Ok(())
-}
-
-/// Dragging the always-visible scrollbar scrolls General settings to the
-/// service controls at the bottom. Larger text pushes them below the view.
-pub fn the_scrollbar_drags_the_settings_page() -> Result<()> {
-    let session = Session::fake(Scenario::default())?;
-    session.click("settings-page")?;
-    session.click("font-scale-150")?;
-    session.state("font-scale-150", State::Checked, true)?;
-    let view = session.wait("the settings scroll view", |nodes| {
-        let index = nodes.iter().position(|node| node.id == "appearance-dark")?;
-        viewport(nodes, index)
-    })?;
-    let before = session.settled("page-title")?.bounds.context("no title")?;
-    let x = view.x + view.width - 4;
-    session
-        .x11()
-        .drag((x, view.y + 12), (x, view.bottom() - 4))?;
-    let after = session.settled("page-title")?.bounds.context("no title")?;
-    ensure!(
-        after.y + 50 < before.y,
-        "the page did not scroll: {before:?} then {after:?}"
-    );
-    let stop = session
-        .settled("stop-daemon")?
-        .bounds
-        .context("no button")?;
-    ensure!(
-        stop.bottom() <= view.bottom(),
-        "the service controls stay below the view"
     );
     Ok(())
 }
