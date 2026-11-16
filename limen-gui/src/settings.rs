@@ -1,5 +1,6 @@
 //! User-interface preferences and the settings subpages.
 
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt, scroll::ScrollbarMode,
     searchable_list::SearchableListItem, select::Select,
@@ -340,6 +341,7 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     .map(|(id, label, page)| {
                         let tab = div()
                             .id(id)
+                            .test_support()
                             .role(Role::Tab)
                             .accessibility_id(id)
                             .aria_label(label.to_string())

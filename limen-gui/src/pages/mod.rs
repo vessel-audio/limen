@@ -1,5 +1,6 @@
 //! GPUI pages rendered from the pure GUI model.
 
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::*;
 
@@ -17,10 +18,11 @@ pub use transcript::{TranscriptState, follow as follow_transcript};
 pub use usage::{UsageState, follow as follow_usage, usage};
 
 /// Serif page heading shared by every non-dictation page.
-pub fn title(text: impl Into<SharedString>) -> Stateful<Div> {
+pub fn title(text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
     let text = text.into();
     div()
         .id("page-title")
+        .test_support()
         .accessibility_id("page-title")
         .role(Role::Heading)
         .aria_label(text.clone())

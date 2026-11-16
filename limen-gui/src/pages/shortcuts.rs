@@ -227,6 +227,7 @@ fn carbon(view: &AppView) -> Div {
         .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
         .child(
             Input::new(&view.toggle_input)
+                .id("toggle-input")
                 .accessibility_id("toggle-input")
                 .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
         )
@@ -303,6 +304,7 @@ fn portal(view: &AppView, _: &mut Context<AppView>) -> Div {
         .child(rust_i18n::t!("shortcuts.preferred_toggle").to_string())
         .child(
             Input::new(&view.toggle_input)
+                .id("toggle-input")
                 .accessibility_id("toggle-input")
                 .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
         )
@@ -366,6 +368,7 @@ fn gnome(view: &mut AppView, cx: &mut Context<AppView>) -> Div {
         )
         .child(
             Input::new(&view.toggle_input)
+                .id("toggle-input")
                 .accessibility_id("toggle-input")
                 .aria_label(rust_i18n::t!("shortcuts.preferred_toggle").to_string()),
         )

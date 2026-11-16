@@ -23,6 +23,8 @@ mod smooth_scroll;
 mod status_item;
 #[cfg(unix)]
 mod termination;
+#[cfg(test)]
+mod ui_tests;
 
 pub use bridge::{BridgeCommand, BridgeEvent, ModelRequest, ShortcutRequest};
 pub use model::{
@@ -83,9 +85,7 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
         });
     }
     application.run(move |cx| {
-        gpui_kit::init(cx);
-        gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
-        palette::apply(cx);
+        init(cx);
         #[cfg(target_os = "macos")]
         app_menu::install(cx);
         // Registered before anything can quit, so the daemon this process
@@ -108,50 +108,38 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
             })
             .detach();
         }
-        match gpui_kit::open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: size(px(980.0), px(660.0)),
-                })),
-                window_min_size: Some(size(px(600.0), px(440.0))),
-                app_id: Some("io.github.Emin017.Limen".to_string()),
-                ..TitleBar::window_options()
-            },
-            cx,
-            |window, cx| {
-                cx.new(|cx| {
-                    let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
-                    cx.spawn(async move |this, cx| {
-                        while let Some(event) = events.recv().await {
-                            let _ = this.update(cx, |window: &mut app::AppView, cx| {
-                                for action in window.apply_bridge_event(event) {
-                                    match action {
-                                        Action::CopyToClipboard(text) => {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                        }
-                                        Action::Reconnect => {}
-                                        Action::Toast(toast) => window.show_toast(toast),
+        match gpui_kit::open_window(window_options(), cx, |window, cx| {
+            cx.new(|cx| {
+                let app = app::AppView::new(paths.clone(), commands.clone(), window, cx);
+                cx.spawn(async move |this, cx| {
+                    while let Some(event) = events.recv().await {
+                        let _ = this.update(cx, |window: &mut app::AppView, cx| {
+                            for action in window.apply_bridge_event(event) {
+                                match action {
+                                    Action::CopyToClipboard(text) => {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(text));
                                     }
+                                    Action::Reconnect => {}
+                                    Action::Toast(toast) => window.show_toast(toast),
                                 }
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .detach();
-                    cx.spawn(async move |this, cx| {
-                        loop {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(200))
-                                .await;
-                            let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
-                        }
-                    })
-                    .detach();
-                    app
+                            }
+                            cx.notify();
+                        });
+                    }
                 })
-            },
-        ) {
+                .detach();
+                cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(200))
+                            .await;
+                        let _ = this.update(cx, |_: &mut app::AppView, cx| cx.notify());
+                    }
+                })
+                .detach();
+                app
+            })
+        }) {
             Ok((window, view)) => {
                 main_window.set(Some(window));
                 #[cfg(target_os = "macos")]
@@ -175,6 +163,27 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
     match opened.borrow_mut().take() {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// Set up GPUI's components and Limen's theme, as the in-process UI tests
+/// do too.
+fn init(cx: &mut App) {
+    gpui_kit::init(cx);
+    gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
+    palette::apply(cx);
+}
+
+/// The control panel's window, which the in-process UI tests open too.
+fn window_options() -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(980.0), px(660.0)),
+        })),
+        window_min_size: Some(size(px(600.0), px(440.0))),
+        app_id: Some("io.github.Emin017.Limen".to_string()),
+        ..TitleBar::window_options()
     }
 }
 

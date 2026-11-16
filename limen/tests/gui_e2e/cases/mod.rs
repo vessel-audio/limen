@@ -25,13 +25,8 @@ macro_rules! cases {
 }
 
 pub const ALL: &[Case] = cases![
-    navigation::sidebar_switches_pages,
-    navigation::sidebar_collapses_to_icons_and_back,
-    navigation::dragging_the_sidebar_edge_resizes_and_collapses_it,
     navigation::the_sidebar_toggle_shows_a_tooltip,
-    navigation::settings_unfold_their_subpages_in_the_sidebar,
-    navigation::a_collapsed_sidebar_moves_the_settings_subpages_atop_the_page,
-    navigation::the_keyboard_reaches_and_presses_controls,
+    navigation::collapsed_tabs_name_themselves_in_tooltips,
     window::dragging_the_title_bar_moves_the_window,
     window::double_clicking_the_title_bar_toggles_maximize,
     window::closing_the_window_keeps_the_daemon_running,

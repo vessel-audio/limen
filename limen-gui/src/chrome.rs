@@ -1,6 +1,7 @@
 //! Window chrome: brand, connection banners, and status footer.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt, TitleBar, button::ButtonVariants,
 };
@@ -157,6 +158,7 @@ impl AppView {
                             .child(
                                 div()
                                     .id("current-page")
+                                    .test_support()
                                     .accessibility_id("current-page")
                                     .role(Role::Heading)
                                     .aria_label(page.clone())
@@ -186,7 +188,7 @@ impl AppView {
             )
     }
 
-    pub(crate) fn banners(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    pub(crate) fn banners(&self, cx: &mut Context<Self>) -> Vec<ObservedElement<Stateful<Div>>> {
         let banner = |id: &'static str, text: String| a11y::status(id, text.clone()).child(text);
         let mut banners = Vec::new();
         match &self.model.connection {

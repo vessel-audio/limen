@@ -8,6 +8,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::ObservedElement;
 use gpui_kit::component::{ActiveTheme, Sizable, button::ButtonVariants};
 use gpui_kit::*;
 use limen_core::DictationState;
@@ -116,7 +117,11 @@ pub fn follow(view: &mut AppView, cx: &App) {
 
 /// The transcript card: the text as far as it is revealed, dimmed while a
 /// newer take is under way, and a button that copies all of it.
-pub fn transcript(view: &AppView, window: &mut Window, cx: &mut Context<AppView>) -> Stateful<Div> {
+pub fn transcript(
+    view: &AppView,
+    window: &mut Window,
+    cx: &mut Context<AppView>,
+) -> ObservedElement<Stateful<Div>> {
     let state = &view.transcript;
     let snapshot = view.model.snapshot.as_ref();
     let card = div()

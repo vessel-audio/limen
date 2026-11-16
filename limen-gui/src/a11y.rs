@@ -3,7 +3,8 @@
 //! Controls and the status they report expose their element ID as their
 //! accessible ID (AT-SPI `AccessibleId`), so assistive technology and the
 //! desktop E2E suite can address them independently of the interface
-//! language. The font select is the exception: its component builds the
+//! language, and register with GPUI's test observer under the same ID so
+//! the in-process UI tests find them too (a no-op outside tests). The font select is the exception: its component builds the
 //! semantic node internally without an ID hook, and it is the only combo box
 //! in the settings.
 //!
@@ -11,6 +12,7 @@
 //! without the user moving focus to it.
 
 use gpui_kit::accesskit::Live;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::button::Button;
 use gpui_kit::*;
 
@@ -21,18 +23,24 @@ pub fn button(id: impl Into<SharedString>) -> Button {
 }
 
 /// Status text announced politely when it changes.
-pub fn status(id: &'static str, text: impl Into<SharedString>) -> Stateful<Div> {
+pub fn status(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
     live(id, Role::Status, text.into(), Live::Polite)
 }
 
 /// Urgent text announced as soon as it appears.
-pub fn alert(id: &'static str, text: impl Into<SharedString>) -> Stateful<Div> {
+pub fn alert(id: &'static str, text: impl Into<SharedString>) -> ObservedElement<Stateful<Div>> {
     live(id, Role::Alert, text.into(), Live::Assertive)
 }
 
-fn live(id: &'static str, role: Role, text: SharedString, politeness: Live) -> Stateful<Div> {
+fn live(
+    id: &'static str,
+    role: Role,
+    text: SharedString,
+    politeness: Live,
+) -> ObservedElement<Stateful<Div>> {
     div()
         .id(id)
+        .test_support()
         .role(role)
         .accessibility_id(id)
         .aria_label(text)
