@@ -28,7 +28,6 @@ pub struct Key(pub u32);
 
 impl Key {
     pub const BACKSPACE: Self = Self(0xff08);
-    pub const TAB: Self = Self(0xff09);
     pub const RETURN: Self = Self(0xff0d);
     pub const ESCAPE: Self = Self(0xff1b);
     pub const SHIFT: Self = Self(0xffe1);

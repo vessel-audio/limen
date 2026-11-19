@@ -19,4 +19,6 @@ objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
 
 [dev-dependencies]
+# Headless GPUI windows and element observation for the in-process UI tests.
+gpui-kit = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

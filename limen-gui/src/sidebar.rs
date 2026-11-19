@@ -8,6 +8,7 @@
 //! dragged to, which the toggle and a drag back out both reopen it at. Settings sit at the sidebar's foot.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{ActiveTheme, Icon, StyledExt, tooltip::Tooltip};
 use gpui_kit::*;
 
@@ -353,7 +354,11 @@ impl AppView {
     }
 
     /// One destination's row, selected while its page is shown.
-    fn row(&self, destination: Destination, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn row(
+        &self,
+        destination: Destination,
+        cx: &mut Context<Self>,
+    ) -> ObservedElement<Stateful<Div>> {
         let page = destination.page;
         let label = destination.label.clone();
         let lead = match destination.lead {
@@ -365,6 +370,7 @@ impl AppView {
         };
         let row = div()
             .id(destination.id)
+            .test_support()
             .role(Role::Tab)
             .accessibility_id(destination.id)
             .aria_label(label.clone())

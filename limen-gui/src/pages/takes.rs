@@ -4,6 +4,7 @@
 //! show without a duration.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, Sizable, StyledExt, WindowExt, button::ButtonVariants, scroll::ScrollbarMode,
 };
@@ -218,7 +219,7 @@ pub fn takes(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .child(
             view.takes_scroll
                 .container(
-                    div().id("takes").child(
+                    div().id("takes").test_support().child(
                         div()
                             .v_flex()
                             .on_scroll(view.takes_scroll.on_scroll())
@@ -304,6 +305,7 @@ fn failure(view: &AppView, request: &RequestEntry, error: &str, cx: &mut Context
     div().child(
         div()
             .id(SharedString::from(format!("request-{id}")))
+            .test_support()
             .role(Role::Button)
             .accessibility_id(format!("request-{id}"))
             .aria_label(rust_i18n::t!("requests.failed_status").to_string())

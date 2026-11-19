@@ -3,6 +3,7 @@
 //! and the model, which can be detected and tested before saving.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::button::ButtonVariants;
 use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::{Dialog, DialogEntrance};
@@ -79,6 +80,7 @@ fn body(
         (
             rust_i18n::t!("models.url").to_string(),
             Input::new(&form.url)
+                .id(SharedString::from(format!("{prefix}-url")))
                 .accessibility_id(format!("{prefix}-url"))
                 .aria_label(rust_i18n::t!("models.url").to_string())
                 .into_any_element(),
@@ -113,6 +115,7 @@ fn body(
         .child(
             div().flex_1().min_w_0().child(
                 Input::new(&form.key)
+                    .id(SharedString::from(format!("{prefix}-key")))
                     .mask_toggle()
                     .accessibility_id(format!("{prefix}-key"))
                     .aria_label(rust_i18n::t!("models.key").to_string()),
@@ -202,6 +205,7 @@ fn body(
             (
                 rust_i18n::t!(label).to_string(),
                 Input::new(input)
+                    .id(SharedString::from(format!("{prefix}-{id}")))
                     .accessibility_id(format!("{prefix}-{id}"))
                     .aria_label(rust_i18n::t!(label).to_string())
                     .into_any_element(),
@@ -233,6 +237,7 @@ fn body(
         let id = SharedString::from(format!("{prefix}-advanced"));
         div()
             .id(id.clone())
+            .test_support()
             .accessibility_id(id.clone())
             .role(Role::Button)
             .aria_label(rust_i18n::t!("models.advanced").to_string())

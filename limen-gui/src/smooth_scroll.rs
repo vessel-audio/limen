@@ -129,7 +129,11 @@ impl SmoothScroll {
     ///
     /// The scrollbar is the area's sibling: inside the area it would scroll
     /// away with the content and misreport the position.
-    pub fn container(&self, area: Stateful<Div>, mode: ScrollbarMode) -> Div {
+    pub fn container(
+        &self,
+        area: impl StatefulInteractiveElement + Styled + IntoElement,
+        mode: ScrollbarMode,
+    ) -> Div {
         div()
             .relative()
             .flex()

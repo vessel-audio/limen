@@ -7,7 +7,7 @@ use super::{BridgeEvent, Env};
 
 /// A request from the Network page; `id` comes back in the reply so an
 /// older one cannot replace a newer one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NetworkRequest {
     /// Read the proxy settings from the config file.
     Load { id: u64 },

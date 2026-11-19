@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use super::{BridgeEvent, Env};
 
 /// A request from a model provider page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ModelRequest {
     /// Read a provider's settings from the config file; `id` identifies the
     /// request in the reply so an older read cannot replace a newer one.

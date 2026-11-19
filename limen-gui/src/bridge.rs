@@ -28,7 +28,7 @@ pub use models::ModelRequest;
 pub use network::NetworkRequest;
 
 /// Commands sent from the GPUI thread to the bridge.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BridgeCommand {
     Start,
     Stop,
@@ -43,7 +43,7 @@ pub enum BridgeCommand {
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ShortcutRequest {
     Setup {
         backend: Backend,

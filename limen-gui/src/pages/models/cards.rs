@@ -4,6 +4,7 @@
 //! opens the dialog that sets its service up.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::{ObservedElement, TestSupportExt};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt};
 use gpui_kit::*;
 use limen_core::{ModelRole, Service};
@@ -48,7 +49,7 @@ pub fn grid(view: &AppView, role: ModelRole, width: Pixels, cx: &mut Context<App
         .max(1.) as u16;
     // Cards show no edges until lifted, so their contents line up with the
     // heading, the cards reaching into the page's margin.
-    let row = |cards: Vec<AnimationElement<Stateful<Div>>>| {
+    let row = |cards: Vec<AnimationElement<ObservedElement<Stateful<Div>>>>| {
         div()
             .grid()
             .grid_cols(columns)
@@ -56,7 +57,8 @@ pub fn grid(view: &AppView, role: ModelRole, width: Pixels, cx: &mut Context<App
             .ml(-CARD_PADDING)
             .children(cards)
     };
-    let group = |title: SharedString, cards: Vec<AnimationElement<Stateful<Div>>>| {
+    let group = |title: SharedString,
+                 cards: Vec<AnimationElement<ObservedElement<Stateful<Div>>>>| {
         div()
             .v_flex()
             .gap_3()
@@ -76,6 +78,7 @@ pub fn grid(view: &AppView, role: ModelRole, width: Pixels, cx: &mut Context<App
             let marked = active == Some(service);
             div()
                 .id(id.clone())
+                .test_support()
                 .accessibility_id(id.clone())
                 .role(Role::Button)
                 .aria_label(label.clone())
@@ -168,6 +171,7 @@ pub fn grid(view: &AppView, role: ModelRole, width: Pixels, cx: &mut Context<App
             let id = SharedString::from(format!("{prefix}-others"));
             let toggle = div()
                 .id(id.clone())
+                .test_support()
                 .accessibility_id(id.clone())
                 .role(Role::Button)
                 .aria_label(rust_i18n::t!("models.others").to_string())

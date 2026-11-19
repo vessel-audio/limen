@@ -3,6 +3,7 @@
 //! group.
 
 use gpui_kit::accesskit::Toggled;
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::*;
 
@@ -67,6 +68,7 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
             let chosen = segment.value == selected;
             let option = div()
                 .id(segment.id.clone())
+                .test_support()
                 .accessibility_id(segment.id)
                 .role(Role::RadioButton)
                 .aria_label(segment.label.clone())

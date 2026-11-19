@@ -1,5 +1,6 @@
 //! User-interface preferences and the settings subpages.
 
+use gpui_kit::base::TestSupportExt;
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt, scroll::ScrollbarMode,
     searchable_list::SearchableListItem, select::Select,
@@ -204,6 +205,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     "settings.interface_font",
                     div().w(px(220.)).child(
                         Select::new(&view.font_select)
+                            .id("font-select")
                             .accessibility_label(
                                 rust_i18n::t!("settings.interface_font").to_string(),
                             )
@@ -246,7 +248,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
         ));
     scroll
         .container(
-            div().id("settings-general").child(content),
+            div().id("settings-general").test_support().child(content),
             ScrollbarMode::Always,
         )
         .flex_1()
@@ -283,6 +285,7 @@ pub fn about(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
             );
             div()
                 .id("about-version")
+                .test_support()
                 .accessibility_id("about-version")
                 .role(Role::Label)
                 .aria_value(version.clone())
@@ -340,6 +343,7 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                     .map(|(id, label, page)| {
                         let tab = div()
                             .id(id)
+                            .test_support()
                             .role(Role::Tab)
                             .accessibility_id(id)
                             .aria_label(label.to_string())

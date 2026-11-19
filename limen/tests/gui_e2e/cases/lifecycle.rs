@@ -1,11 +1,14 @@
-//! Starting, stopping, restarting, and replacing the daemon, with the real
-//! daemon wherever the control panel starts one.
-
-use std::os::unix::process::ExitStatusExt;
+//! The lifecycle cases that need a real daemon process or desktop: stopping
+//! the daemon and starting it again, restarting it into a new process, and
+//! a start that fails on a broken
+//! config, whose log then opens in the desktop's handler, which the test
+//! platform of limen-gui's UI tests cannot do. The rest is tested in-process
+//! in those tests, which replay what the bridge reports: the confirmations,
+//! the commands the window sends, the overlays and banners, and the forms
+//! reset when a daemon is replaced.
 
 use anyhow::{Result, ensure};
 
-use crate::daemon::Scenario;
 use crate::session::{Daemon, Launch, Session};
 
 const READY: &str = "Service ready";
@@ -70,50 +73,5 @@ pub fn a_failed_start_offers_the_log() -> Result<()> {
     })?;
     session.click("start-daemon")?;
     session.named("connection-overlay", "Background service failed to start")?;
-    Ok(())
-}
-
-/// An outdated daemon can be terminated after confirmation; cancelling
-/// leaves it running.
-pub fn an_outdated_daemon_can_be_terminated() -> Result<()> {
-    let mut session = Session::fake(Scenario {
-        outdated: true,
-        ..Scenario::default()
-    })?;
-    session.node("outdated-banner")?;
-    session.click("terminate-daemon")?;
-    session.named(
-        "shutdown-confirmation",
-        "Terminate the outdated background service?",
-    )?;
-    session.click("cancel-shutdown")?;
-    session.absent("shutdown-confirmation")?;
-    ensure!(
-        session.fake_daemon()?.exit_status()?.is_none(),
-        "cancelling terminated the daemon"
-    );
-    session.click("terminate-daemon")?;
-    session.click("confirm-shutdown")?;
-    session.named("connection-overlay", "Background service is not running")?;
-    let status = session.fake_daemon()?.exit_status()?;
-    ensure!(
-        status.and_then(|status| status.signal()) == Some(libc::SIGTERM),
-        "the daemon ended with {status:?}"
-    );
-    Ok(())
-}
-
-/// A daemon of another version is named in a banner.
-pub fn a_mismatched_daemon_version_is_named() -> Result<()> {
-    let session = Session::fake(Scenario {
-        version: "0.0.1".to_string(),
-        ..Scenario::default()
-    })?;
-    let banner = session.node("version-banner")?;
-    ensure!(
-        banner.name.contains("0.0.1") && banner.name.contains(env!("CARGO_PKG_VERSION")),
-        "the banner says {:?}",
-        banner.name
-    );
     Ok(())
 }

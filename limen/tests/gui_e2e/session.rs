@@ -360,29 +360,6 @@ impl Session {
         Ok(node)
     }
 
-    /// Click a control that only shows, or only takes the press, while
-    /// hovered: rest on it until hovering stops moving it, then press there.
-    pub fn click_hovered(&self, what: &str, find: impl Fn(&[Node]) -> Option<Node>) -> Result<()> {
-        for _ in 0..10 {
-            let (x, y) = self
-                .settled_by(what, &find)?
-                .bounds
-                .with_context(|| format!("{what} is off screen"))?
-                .center();
-            self.x11().move_to(x, y)?;
-            std::thread::sleep(Duration::from_millis(300));
-            let hovered = self
-                .settled_by(what, &find)?
-                .bounds
-                .map(|bounds| bounds.center());
-            if hovered == Some((x, y)) {
-                self.x11().press(Button::Left)?;
-                return self.x11().release(Button::Left);
-            }
-        }
-        bail!("{what} kept moving under the pointer")
-    }
-
     pub fn click_node(&self, node: &Node) -> Result<()> {
         let (x, y) = node
             .bounds

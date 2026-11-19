@@ -1,11 +1,10 @@
-//! The dictation control strip and the request list below it.
+//! A take run through the daemon onto the desktop's clipboard. The rest of
+//! the dictation page is tested in-process in `limen-gui`'s UI tests.
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use limen_core::{Delivery, v1};
 
-use super::{failed_request, kept};
 use crate::daemon::Scenario;
-use crate::desktop::Button;
 use crate::session::Session;
 
 /// Starting records; stopping transcribes and keeps the text, which lands
@@ -29,135 +28,6 @@ pub fn start_and_stop_copy_the_transcript() -> Result<()> {
                 }
             ],
         "unexpected requests"
-    );
-    Ok(())
-}
-
-/// The newest transcript shows below the strip, the one the window opens
-/// on at once, and copies whole; a new take's replaces it.
-pub fn the_newest_transcript_shows_and_copies() -> Result<()> {
-    let session = Session::fake(Scenario {
-        history: vec![kept(1, "an earlier take")],
-        ..Scenario::default()
-    })?;
-    session.named("transcript", "an earlier take")?;
-    session.click("copy-transcript")?;
-    session.clipboard("an earlier take")?;
-    session.named("toast", "Copied to clipboard")?;
-    session.click("dictation-primary")?;
-    session.named("dictation-status", "Recording")?;
-    session.click("dictation-primary")?;
-    session.named("transcript", "e2e transcript 2")?;
-    Ok(())
-}
-
-/// An error long enough to need several lines once unfolded.
-const LONG_ERROR: &str = "provider returned 503: the upstream speech service is overloaded \
-     and refused the request; retry after the queue drains or switch to another \
-     endpoint in the configuration file";
-
-/// The height of a node once it has settled.
-fn height(session: &Session, id: &str) -> Result<i32> {
-    Ok(session.settled(id)?.bounds.context("no bounds")?.height)
-}
-
-/// A failed request shows one line of its error until pressed, then all of
-/// it; pressing again folds it back. AccessKit's AT-SPI adapter drops the
-/// expanded state, so the row's height tells.
-pub fn failed_requests_expand_to_the_full_error() -> Result<()> {
-    let request = failed_request(1, LONG_ERROR);
-    let id = format!("request-1-{}", request.started_ms);
-    let session = Session::fake(Scenario {
-        requests: vec![request],
-        ..Scenario::default()
-    })?;
-    let row = session.node(id.as_str())?;
-    ensure!(
-        row.description == LONG_ERROR,
-        "the row describes {:?}",
-        row.description
-    );
-    let folded = height(&session, &id)?;
-    session.click(id.as_str())?;
-    let unfolded = height(&session, &id)?;
-    ensure!(
-        unfolded > folded + 20,
-        "the row grew from {folded}px to {unfolded}px"
-    );
-    session.click(id.as_str())?;
-    ensure!(height(&session, &id)? == folded, "the row did not fold");
-    Ok(())
-}
-
-/// The wheel scrolls a long request list, bringing the oldest into view.
-pub fn the_request_list_scrolls_with_the_wheel() -> Result<()> {
-    let requests = (1..=20)
-        .map(|take| failed_request(take, LONG_ERROR))
-        .collect::<Vec<_>>();
-    let (newest, oldest) = (
-        format!("request-20-{}", requests[19].started_ms),
-        format!("request-1-{}", requests[0].started_ms),
-    );
-    let session = Session::fake(Scenario {
-        requests,
-        ..Scenario::default()
-    })?;
-    let before = session
-        .settled(oldest.as_str())?
-        .bounds
-        .context("no bounds")?;
-    let (x, y) = session
-        .settled(newest.as_str())?
-        .bounds
-        .context("no bounds")?
-        .center();
-    session.x11().scroll(x, y, Button::WheelDown, 10)?;
-    let after = session
-        .settled(oldest.as_str())?
-        .bounds
-        .context("no bounds")?;
-    ensure!(
-        after.y + 200 < before.y,
-        "the list did not scroll: {before:?} then {after:?}"
-    );
-    let folded = height(&session, &oldest)?;
-    session.click(oldest.as_str())?;
-    ensure!(
-        height(&session, &oldest)? > folded + 20,
-        "the oldest request did not unfold"
-    );
-    Ok(())
-}
-
-/// While a take transcribes, the button records another after it: the
-/// request queues a take, the button waits, and recording resumes once
-/// the first transcript lands. Transcription lasts long enough that the
-/// press on the waiting button cannot land after it ends.
-pub fn recording_another_take_queues_it() -> Result<()> {
-    let session = Session::fake(Scenario {
-        transcribe_ms: 10_000,
-        ..Scenario::default()
-    })?;
-    session.click("dictation-primary")?;
-    session.named("dictation-status", "Recording")?;
-    session.click("dictation-primary")?;
-    session.named("dictation-status", "Transcribing…")?;
-    session.named("dictation-primary", "Record another after this take")?;
-    session.click("dictation-primary")?;
-    session.named("dictation-primary", "Another take queued")?;
-    session.click("dictation-primary")?;
-    session.named("dictation-status", "Recording")?;
-    session.clipboard("e2e transcript 1")?;
-    ensure!(
-        session.requests()?
-            == [
-                v1::Request::Start,
-                v1::Request::Stop {
-                    delivery: Delivery::Keep
-                },
-                v1::Request::Start,
-            ],
-        "the queued button sent a request"
     );
     Ok(())
 }
