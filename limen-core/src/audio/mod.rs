@@ -146,10 +146,6 @@ pub(crate) async fn capture_loop(
 /// dropped, as when the recognizer lags.
 const CHAIN_QUEUE: usize = 64;
 
-/// How many times, 20 ms apart, the end of a take waits for room in a full
-/// chain queue.
-const CHAIN_TAIL_TRIES: usize = 100;
-
 /// Capture the microphone through `chain` until `stop` fires (or is dropped)
 /// or capture ends. The chain runs on a thread of its own, because a plugin
 /// may take milliseconds to answer and no async worker should wait for it.
@@ -192,11 +188,10 @@ pub(crate) async fn chain_capture_loop(
         // What the capture holds when the take stops is the end of the speech.
         let mut rest = capture.drain().await;
         // The queue may be full of audio the chain has not got to yet; wait
-        // for room rather than drop the end of the speech.
-        for _ in 0..CHAIN_TAIL_TRIES {
-            if rest.is_empty() {
-                break;
-            }
+        // for room rather than drop the end of the speech. A chain that never
+        // makes room is given up on by whoever stopped the capture, which
+        // aborts this task.
+        while !rest.is_empty() {
             match feed.try_send(rest) {
                 Ok(()) | Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
                 Err(std::sync::mpsc::TrySendError::Full(back)) => {

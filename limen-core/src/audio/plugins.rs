@@ -622,10 +622,6 @@ impl PluginChains {
             }
         };
         drop(trial);
-        for (node, loaded) in state.loaded.iter_mut() {
-            let identity = loaded.key.identity();
-            self.save_state(*node, &identity, &mut loaded.control);
-        }
         let before = load_audio_graph(&self.paths).unwrap_or_else(|_| GraphSpec::passthrough());
         if let Err(error) = save_audio_graph(&self.paths, &graph) {
             rollback(&mut state);
@@ -633,6 +629,13 @@ impl PluginChains {
             return Err(format!("{error:#}"));
         }
         state.retired.clear();
+        // Only now, with the graph committed, is it safe to write the plugins'
+        // settings: a plugin that replaced another under the same node id must
+        // not overwrite the old one's settings if the graph could not be saved.
+        for (node, loaded) in state.loaded.iter_mut() {
+            let identity = loaded.key.identity();
+            self.save_state(*node, &identity, &mut loaded.control);
+        }
         // A node that is gone takes its settings with it, so that a node
         // added later under the same id does not inherit them.
         for (node, _) in plugins_in(&before) {
