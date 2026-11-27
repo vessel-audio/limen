@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 use super::snapshot::{
     CONFIG_CAP, ConfigSummary, DictationStatus, ERROR_CAP, ErrorEntry, FIELD_CAP, HistoryEntry,
-    HistoryOutcome, RequestEntry, RequestOutcome, StateSnapshot, capped,
+    HistoryOutcome, RequestEntry, RequestOutcome, StateSnapshot, capped, provider_url,
 };
 use crate::config::{Config, PolishConfig, ProviderConfig};
 use crate::dictation::{DictationState, DictationView};
@@ -217,7 +217,7 @@ impl Projection {
     pub(crate) fn set_provider(&mut self, provider: &ProviderConfig) {
         self.snapshot.config = ConfigSummary {
             provider_model: capped(&provider.model, CONFIG_CAP).0,
-            provider_url: capped(&crate::config::display_url(&provider.url), CONFIG_CAP).0,
+            provider_url: provider_url(provider),
             ..self.snapshot.config.clone()
         };
     }

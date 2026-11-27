@@ -83,6 +83,25 @@ pub(crate) fn check_url_parameters(url: &reqwest::Url, field: &str) -> Result<()
     Ok(())
 }
 
+impl super::ProviderConfig {
+    /// Where transcription requests go: a custom server's URL, a vendor's
+    /// base URL from its settings or else its public one; `None` for a
+    /// subscription, whose sign-in names the server.
+    pub(crate) fn endpoint(&self) -> Option<&str> {
+        match self.service() {
+            super::Service::Custom => Some(self.url.as_str()),
+            vendor => match vendor.subscription() {
+                Some(_) => None,
+                None => self
+                    .options
+                    .get(&vendor)
+                    .and_then(|options| options.url.as_deref())
+                    .or(vendor.default_url()),
+            },
+        }
+    }
+}
+
 /// An endpoint safe to show in snapshots, logs, and errors: no userinfo,
 /// query, or fragment. An invalid URL is never echoed back.
 pub(crate) fn display_url(url: &str) -> String {
@@ -100,6 +119,31 @@ pub(crate) fn display_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::Config;
+
+    #[test]
+    fn transcription_goes_to_the_custom_url_or_the_vendors_own() {
+        let endpoint = |provider: &str| {
+            let config: Config = toml::from_str(&format!("[provider]\n{provider}\n")).unwrap();
+            config.provider.endpoint().map(str::to_string)
+        };
+        assert_eq!(
+            [
+                "url = \"http://127.0.0.1:8000/v1\"",
+                "service = \"openai\"\nurl = \"http://stale.example/v1\"",
+                "service = \"openai\"\n\n[provider.options.openai]\nurl = \"https://gateway.example/v1\"",
+                "service = \"chatgpt\"",
+            ]
+            .map(endpoint),
+            [
+                Some("http://127.0.0.1:8000/v1".to_string()),
+                Some("https://api.openai.com/v1".to_string()),
+                Some("https://gateway.example/v1".to_string()),
+                None,
+            ]
+        );
+    }
+
     #[test]
     fn displayed_endpoints_drop_credentials_queries_and_fragments() {
         assert_eq!(

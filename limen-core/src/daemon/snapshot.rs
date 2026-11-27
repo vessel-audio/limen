@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{Config, ProviderConfig};
 use crate::dictation::DictationState;
 
 pub(crate) const FIELD_CAP: usize = 64 * 1024;
@@ -114,7 +114,8 @@ pub struct ConfigSummary {
     pub input_method: String,
     /// The configured ASR model.
     pub provider_model: String,
-    /// The configured ASR endpoint URL.
+    /// Where transcription requests go, without credentials or query;
+    /// empty for a subscription, whose sign-in names the server.
     pub provider_url: String,
     /// Whether transcript polishing is enabled.
     pub polish_enabled: bool,
@@ -132,14 +133,34 @@ impl ConfigSummary {
         Self {
             input_method: capped(backend, CONFIG_CAP).0,
             provider_model: capped(&config.provider.model, CONFIG_CAP).0,
-            provider_url: capped(
-                &crate::config::display_url(&config.provider.url),
-                CONFIG_CAP,
-            )
-            .0,
+            provider_url: provider_url(&config.provider),
             polish_enabled: config.polish.enabled,
         }
     }
+
+    /// The host transcription requests go to, with the port when the URL
+    /// names one, such as `127.0.0.1:8000`; `None` when the endpoint is
+    /// unknown, as for a subscription.
+    pub fn provider_address(&self) -> Option<String> {
+        let url = reqwest::Url::parse(&self.provider_url).ok()?;
+        let host = url.host_str()?;
+        Some(match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        })
+    }
+}
+
+/// The displayable endpoint of `provider`, empty when it has none.
+pub(crate) fn provider_url(provider: &ProviderConfig) -> String {
+    capped(
+        &provider
+            .endpoint()
+            .map(crate::config::display_url)
+            .unwrap_or_default(),
+        CONFIG_CAP,
+    )
+    .0
 }
 
 /// Shorten to `cap` UTF-8 bytes at a character boundary and append an
@@ -159,5 +180,38 @@ pub(crate) fn capped(text: &str, cap: usize) -> (String, bool) {
             shortened.push('…');
             (shortened, true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigSummary;
+
+    #[test]
+    fn the_provider_address_is_its_host_and_any_port_it_names() {
+        let address = |url: &str| {
+            ConfigSummary {
+                input_method: "fcitx5".to_string(),
+                provider_model: "m".to_string(),
+                provider_url: url.to_string(),
+                polish_enabled: false,
+            }
+            .provider_address()
+        };
+        assert_eq!(
+            [
+                "http://127.0.0.1:8000/v1",
+                "https://api.openai.com/v1",
+                "http://[::1]:8080/inference",
+                "",
+            ]
+            .map(address),
+            [
+                Some("127.0.0.1:8000".to_string()),
+                Some("api.openai.com".to_string()),
+                Some("[::1]:8080".to_string()),
+                None,
+            ]
+        );
     }
 }

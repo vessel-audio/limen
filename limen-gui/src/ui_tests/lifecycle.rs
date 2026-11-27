@@ -269,3 +269,22 @@ fn a_mismatched_daemon_version_is_named(cx: &mut TestAppContext) {
         )
     );
 }
+
+/// While connected, the title bar names the address transcription requests
+/// go to beside the status; once the connection drops, it does not.
+#[gpui_kit::test]
+fn the_provider_address_shows_while_connected(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    let address = |ui: &mut Ui| {
+        ui.try_find("provider-address")
+            .and_then(|address| address.label().map(str::to_string))
+    };
+    let connected = address(&mut ui);
+    ui.receive(BridgeEvent::Msg(Msg::Disconnected {
+        reason: "daemon closed the connection".to_string(),
+    }));
+    assert_eq!(
+        (connected, address(&mut ui)),
+        (Some("127.0.0.1:9".to_string()), None)
+    );
+}
