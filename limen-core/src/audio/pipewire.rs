@@ -6,6 +6,7 @@
 //! is header-less.)
 
 use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::io::AsyncReadExt;
@@ -110,9 +111,25 @@ impl FloatCapture {
             .collect()
     }
 
-    /// Everything read and not yet returned, down to the last whole sample:
-    /// the end of a take that is stopping.
-    pub fn drain(&mut self) -> Vec<f32> {
+    /// Stop the microphone and collect everything read and not yet
+    /// returned, down to the last whole sample: the end of a take that is
+    /// stopping. What pw-record had already written to the pipe is read out
+    /// before it ends.
+    pub async fn drain(&mut self) -> Vec<f32> {
+        let _ = self.capture.child.start_kill();
+        if let Some(stdout) = self.capture.child.stdout.as_mut() {
+            let partial = &mut self.partial;
+            let _ = tokio::time::timeout(Duration::from_millis(300), async {
+                let mut buf = [0u8; 8192];
+                loop {
+                    match stdout.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => partial.extend_from_slice(&buf[..read]),
+                    }
+                }
+            })
+            .await;
+        }
         let samples = Self::samples(&self.partial);
         self.partial.clear();
         samples
@@ -132,9 +149,11 @@ impl FloatCapture {
             let mut buf = [0u8; 8192];
             match stdout.read(&mut buf).await? {
                 0 => {
-                    return Ok(match self.partial.len() >= 4 {
-                        true => Some(self.drain()),
-                        false => None,
+                    let rest = Self::samples(&self.partial);
+                    self.partial.clear();
+                    return Ok(match rest.is_empty() {
+                        true => None,
+                        false => Some(rest),
                     });
                 }
                 read => self.partial.extend_from_slice(&buf[..read]),

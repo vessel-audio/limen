@@ -45,20 +45,36 @@ pub(crate) fn save_audio_graph(paths: &Paths, graph: &GraphSpec) -> Result<()> {
     write_atomically(&paths.audio_graph_file(), text.as_bytes())
 }
 
-/// The saved state of a plugin, if it has one.
-pub(crate) fn load_plugin_state(paths: &Paths, node: NodeId) -> Result<Option<Vec<u8>>> {
+/// The saved state of the plugin `identity` names at `node`. State saved for
+/// another plugin under the same node id is not this plugin's, and is
+/// ignored.
+pub(crate) fn load_plugin_state(
+    paths: &Paths,
+    node: NodeId,
+    identity: &str,
+) -> Result<Option<Vec<u8>>> {
     let file = paths.plugin_state_file(node);
     match fs::read(&file) {
-        Ok(state) => Ok(Some(state)),
+        Ok(saved) => Ok(saved
+            .strip_prefix(identity.as_bytes())
+            .and_then(|rest| rest.strip_prefix(&[0]))
+            .map(<[u8]>::to_vec)),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("failed to read {}", file.display())),
     }
 }
 
-/// Save a plugin's state.
-pub(crate) fn save_plugin_state(paths: &Paths, node: NodeId, state: &[u8]) -> Result<()> {
+/// Save the state of the plugin `identity` names at `node`; the identity is
+/// kept with it so that it is only restored into the same plugin.
+pub(crate) fn save_plugin_state(
+    paths: &Paths,
+    node: NodeId,
+    identity: &str,
+    state: &[u8],
+) -> Result<()> {
     let _lock = super::lock_dir(&paths.config_file)?;
-    write_atomically(&paths.plugin_state_file(node), state)
+    let saved = [identity.as_bytes(), &[0], state].concat();
+    write_atomically(&paths.plugin_state_file(node), &saved)
 }
 
 /// Forget a plugin's saved state, as when its node is gone or holds another
@@ -108,7 +124,7 @@ mod tests {
         let paths = scratch("audio-graph");
         let before = (
             load_audio_graph(&paths).unwrap(),
-            load_plugin_state(&paths, 2).unwrap(),
+            load_plugin_state(&paths, 2, "a").unwrap(),
         );
         let mut graph = GraphSpec::passthrough();
         graph.nodes[0].x = 12.;
@@ -119,18 +135,32 @@ mod tests {
             y: 4.,
         });
         save_audio_graph(&paths, &graph).unwrap();
-        save_plugin_state(&paths, 2, &[0, 255, 7]).unwrap();
+        save_plugin_state(&paths, 2, "a", &[0, 255, 7]).unwrap();
         assert_eq!(
             (
                 before,
                 load_audio_graph(&paths).unwrap(),
-                load_plugin_state(&paths, 2).unwrap(),
+                load_plugin_state(&paths, 2, "a").unwrap(),
             ),
             (
                 (GraphSpec::passthrough(), None),
                 graph,
                 Some(vec![0, 255, 7])
             )
+        );
+    }
+
+    #[test]
+    fn state_saved_for_one_plugin_is_not_restored_into_another() {
+        let paths = scratch("audio-state-identity");
+        save_plugin_state(&paths, 2, "a.vst3\n00", &[1, 2]).unwrap();
+        assert_eq!(
+            (
+                load_plugin_state(&paths, 2, "a.vst3\n00").unwrap(),
+                load_plugin_state(&paths, 2, "b.vst3\n00").unwrap(),
+                load_plugin_state(&paths, 2, "a.vst3").unwrap(),
+            ),
+            (Some(vec![1, 2]), None, None)
         );
     }
 

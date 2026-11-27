@@ -186,7 +186,7 @@ pub(crate) async fn chain_capture_loop(
             }
         }
         // What the capture holds when the take stops is the end of the speech.
-        let rest = capture.drain();
+        let rest = capture.drain().await;
         if !rest.is_empty() {
             let _ = feed.try_send(rest);
         }

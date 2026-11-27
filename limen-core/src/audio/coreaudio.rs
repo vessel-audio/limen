@@ -8,6 +8,9 @@
 use std::collections::VecDeque;
 
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::sync::mpsc;
@@ -21,12 +24,26 @@ use super::resample::LinearResampler;
 const QUEUE_BLOCKS: usize = 64;
 /// Resampled chunks buffered for the ASR session.
 const PCM_CHUNKS: usize = 64;
+/// How long a forwarder waits for a block before looking at whether it was
+/// asked to stop. The capture's pipeline keeps its own sender, so a stopped
+/// stream does not end the wait by itself.
+const FORWARD_POLL: Duration = Duration::from_millis(50);
+/// How long stopping a float capture waits for the forwarder's last chunks.
+const DRAIN_WAIT: Duration = Duration::from_millis(500);
 
 pub struct Capture {
     // Dropping the stream stops the AudioUnit.
     _stream: cpal::Stream,
     pcm: mpsc::Receiver<Vec<i16>>,
     pending: VecDeque<i16>,
+    /// Tells the forwarder thread to end, which it would not otherwise.
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Capture {
@@ -35,15 +52,20 @@ impl Capture {
     pub fn start(device: Option<&str>) -> Result<Self> {
         let (stream, config, handle, blocks) = open(device)?;
         let (pcm_tx, pcm) = mpsc::channel(PCM_CHUNKS);
+        let stop = Arc::new(AtomicBool::new(false));
         std::thread::Builder::new()
             .name("limen-capture".into())
-            .spawn(move || forward_blocks(config, handle, blocks, pcm_tx))
+            .spawn({
+                let stop = stop.clone();
+                move || forward_blocks(config, handle, blocks, pcm_tx, &stop)
+            })
             .context("failed to spawn the capture forwarder")?;
 
         Ok(Self {
             _stream: stream,
             pcm,
             pending: VecDeque::new(),
+            stop,
         })
     }
 
@@ -105,9 +127,17 @@ fn mono(block: &[f32], channels: usize) -> Cow<'_, [f32]> {
 /// unquantized, so plugins see what the device delivered.
 pub struct FloatCapture {
     // Dropping the stream stops the AudioUnit.
-    _stream: cpal::Stream,
+    stream: Option<cpal::Stream>,
     samples: mpsc::Receiver<Vec<f32>>,
     pending: VecDeque<f32>,
+    /// Tells the forwarder thread to finish what is queued and end.
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for FloatCapture {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl FloatCapture {
@@ -115,23 +145,36 @@ impl FloatCapture {
     pub fn start(device: Option<&str>) -> Result<Self> {
         let (stream, config, handle, blocks) = open(device)?;
         let (tx, samples) = mpsc::channel(PCM_CHUNKS);
+        let stop = Arc::new(AtomicBool::new(false));
         std::thread::Builder::new()
             .name("limen-capture".into())
-            .spawn(move || forward_float(config, handle, blocks, tx))
+            .spawn({
+                let stop = stop.clone();
+                move || forward_float(config, handle, blocks, tx, &stop)
+            })
             .context("failed to spawn the capture forwarder")?;
         Ok(Self {
-            _stream: stream,
+            stream: Some(stream),
             samples,
             pending: VecDeque::new(),
+            stop,
         })
     }
 
-    /// Everything captured and not yet read: the end of a take that is
-    /// stopping, which would otherwise be lost with this capture.
-    pub fn drain(&mut self) -> Vec<f32> {
-        while let Ok(chunk) = self.samples.try_recv() {
-            self.pending.extend(chunk);
-        }
+    /// Stop the microphone and collect everything captured and not yet read:
+    /// the blocks still queued, and the last of the resampler's lookahead, the
+    /// end of a take that is stopping.
+    pub async fn drain(&mut self) -> Vec<f32> {
+        self.stream = None;
+        self.stop.store(true, Ordering::Relaxed);
+        let samples = &mut self.samples;
+        let pending = &mut self.pending;
+        let _ = tokio::time::timeout(DRAIN_WAIT, async {
+            while let Some(chunk) = samples.recv().await {
+                pending.extend(chunk);
+            }
+        })
+        .await;
         self.pending.drain(..).collect()
     }
 
@@ -151,28 +194,45 @@ impl FloatCapture {
     }
 }
 
-/// Downmix and resample blocks to the graph's rate until the stream or the
-/// consumer goes away.
+/// Downmix and resample blocks to the graph's rate until asked to stop or the
+/// consumer goes away, then flush the resampler.
 fn forward_float(
     config: InputConfig,
     handle: vessel_capture::CaptureHandle,
     blocks: crossbeam_channel::Receiver<Vec<f32>>,
     samples: mpsc::Sender<Vec<f32>>,
+    stop: &AtomicBool,
 ) {
     let channels = usize::from(config.channels);
     let mut resampler = plugin_graph::Resampler::new(config.sample_rate as u32, GRAPH_RATE);
-    while let Ok(block) = blocks.recv() {
+    let send = |out: Vec<f32>| match samples.try_send(out) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!("sample channel full, dropping a chunk");
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    };
+    loop {
+        let block = match blocks.recv_timeout(FORWARD_POLL) {
+            Ok(block) => block,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) if !stop.load(Ordering::Relaxed) => {
+                continue;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout)
+            | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        };
         let mut out = Vec::new();
         resampler.push(&mono(&block, channels), &mut out);
         handle.recycle(block);
-        match samples.try_send(out) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("sample channel full, dropping a chunk")
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => return,
+        if !send(out) {
+            return;
         }
     }
+    // The resampler's lookahead holds the last frames until more input comes.
+    let mut tail = Vec::new();
+    resampler.push(&vec![0.; resampler.delay() + 1], &mut tail);
+    send(tail);
 }
 
 /// Downmix and resample blocks until the stream or the consumer goes away.
@@ -181,10 +241,19 @@ fn forward_blocks(
     handle: vessel_capture::CaptureHandle,
     blocks: crossbeam_channel::Receiver<Vec<f32>>,
     pcm: mpsc::Sender<Vec<i16>>,
+    stop: &AtomicBool,
 ) {
     let channels = usize::from(config.channels);
     let mut resampler = LinearResampler::new(config.sample_rate as u32);
-    while let Ok(block) = blocks.recv() {
+    loop {
+        let block = match blocks.recv_timeout(FORWARD_POLL) {
+            Ok(block) => block,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) if !stop.load(Ordering::Relaxed) => {
+                continue;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout)
+            | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+        };
         let mut out = Vec::with_capacity(block.len() / channels / 2);
         resampler.push(&mono(&block, channels), &mut out);
         handle.recycle(block);

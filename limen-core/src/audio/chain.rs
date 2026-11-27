@@ -128,8 +128,12 @@ impl Chain {
 /// A whole recording of mono 48 kHz samples as the recognizer would hear it
 /// with no plugins in between.
 pub(crate) fn to_speech(samples: &[f32]) -> Vec<i16> {
+    let mut resampler = Resampler::new(GRAPH_RATE, SAMPLE_RATE);
     let mut converted = Vec::new();
-    Resampler::new(GRAPH_RATE, SAMPLE_RATE).push(samples, &mut converted);
+    resampler.push(samples, &mut converted);
+    // The resampler holds the last frames until more input comes.
+    resampler.push(&vec![0.; resampler.delay() + 1], &mut converted);
+    converted.truncate(samples.len() * SAMPLE_RATE as usize / GRAPH_RATE as usize);
     quantize(&converted)
 }
 

@@ -70,7 +70,16 @@ impl AppView {
 /// Called as the page is drawn: ask the daemon for the graph when the page is
 /// shown, and let go of a recording that has played to its end.
 pub(crate) fn follow(view: &mut AppView) {
-    let request = view.routing.follow(view.page == Page::Routing);
+    let dictation = view.model.snapshot.as_ref().map(|snapshot| {
+        (
+            snapshot.state.take,
+            matches!(
+                snapshot.state.dictation.state,
+                limen_core::DictationState::Idle
+            ),
+        )
+    });
+    let request = view.routing.follow(view.page == Page::Routing, dictation);
     view.send_audio(request);
     if view
         .playing

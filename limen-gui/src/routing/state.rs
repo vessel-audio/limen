@@ -80,6 +80,9 @@ pub struct RoutingState {
     dirty: bool,
     /// Whether the graph was asked for since the page was last shown.
     asked: bool,
+    /// The take, and whether dictation was idle, when the page last asked: a
+    /// plugin may have failed in a take that has ended since.
+    seen: Option<(u64, bool)>,
     /// The next node id, which never goes back to one used before.
     next_node: NodeId,
     /// How far the canvas is scrolled, in canvas coordinates.
@@ -106,6 +109,7 @@ impl Default for RoutingState {
             in_flight: None,
             dirty: false,
             asked: false,
+            seen: None,
             next_node: 0,
             pan: (0., 0.),
             connect_from: 0,
@@ -140,7 +144,19 @@ impl RoutingState {
 
     /// Called as the page is drawn: ask for the graph each time the page is
     /// shown, so what it shows is what the daemon has.
-    pub fn follow(&mut self, visible: bool) -> Option<AudioRequest> {
+    pub fn follow(
+        &mut self,
+        visible: bool,
+        dictation: Option<(u64, bool)>,
+    ) -> Option<AudioRequest> {
+        // A take that began or ended may have changed how the plugins are
+        // doing, so the page asks again.
+        if visible && self.asked && dictation != self.seen {
+            self.asked = false;
+        }
+        if visible && !self.asked {
+            self.seen = dictation;
+        }
         match (visible, self.asked) {
             // Asked again once the request in flight is answered.
             (true, false) if self.in_flight.is_some() => None,
@@ -588,7 +604,7 @@ mod tests {
     /// A state that has read the default graph from the daemon.
     fn loaded() -> RoutingState {
         let mut state = RoutingState::default();
-        let Some(AudioRequest::Get { id }) = state.follow(true) else {
+        let Some(AudioRequest::Get { id }) = state.follow(true, None) else {
             panic!("the page asks for the graph when shown");
         };
         state.graph_reply(id, Ok(view_of(GraphSpec::passthrough())));
@@ -629,16 +645,24 @@ mod tests {
     fn the_graph_is_asked_for_once_each_time_the_page_is_shown() {
         let mut state = RoutingState::default();
         let asked = [
-            state.follow(true),
-            state.follow(true),
-            state.follow(false),
-            state.follow(true),
+            state.follow(true, None),
+            state.follow(true, None),
+            state.follow(false, None),
+            state.follow(true, None),
         ]
         .map(|request| request.is_some());
         // The second showing waits for the first request's answer.
         assert_eq!(asked, [true, false, false, false]);
         state.graph_reply(1, Ok(view_of(GraphSpec::passthrough())));
-        assert!(state.follow(true).is_some());
+        // Once answered, a take that ends makes it ask again, and nothing else.
+        let steady = state.follow(true, Some((1, true)));
+        let reasked = state.follow(true, Some((1, true)));
+        state.graph_reply(2, Ok(view_of(GraphSpec::passthrough())));
+        let after_take = state.follow(true, Some((2, true)));
+        assert_eq!(
+            (steady.is_some(), reasked.is_some(), after_take.is_some()),
+            (true, false, true)
+        );
     }
 
     #[test]

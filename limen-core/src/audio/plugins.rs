@@ -46,6 +46,14 @@ struct LoadKey {
     sidechain: Sidechain,
 }
 
+impl LoadKey {
+    /// What names the plugin, for the state saved with it: not the
+    /// side-chain, which is the same plugin's setting.
+    fn identity(&self) -> String {
+        format!("{}\n{}", self.path, self.class_id)
+    }
+}
+
 struct Loaded {
     key: LoadKey,
     /// Owns the worker, which stops when this is dropped.
@@ -183,7 +191,16 @@ pub(super) struct State {
     /// Plugins whose latency changed since they loaded, which a new worker
     /// has to pick up.
     stale: HashSet<NodeId>,
+    /// How many times each node's worker was found failed and replaced.
+    crashes: HashMap<NodeId, u32>,
+    /// Workers a compile replaced, kept until it is known to have worked, so
+    /// that a graph that is refused leaves the plugins as they were.
+    retired: HashMap<NodeId, Loaded>,
 }
+
+/// How many failures a plugin gets: it is loaded again once, and a second
+/// failure leaves it out until the graph is saved again.
+const MAX_FAILURES: u32 = 2;
 
 /// The routing graph's plugins, and the graphs built from them.
 pub(crate) struct PluginChains {
@@ -275,7 +292,10 @@ impl PluginChains {
         for (node, plugin) in loaded.iter_mut() {
             for event in plugin.control.events() {
                 match event {
-                    PluginEvent::EditorClosed => self.save_state(*node, &mut plugin.control),
+                    PluginEvent::EditorClosed => {
+                        let identity = plugin.key.identity();
+                        self.save_state(*node, &identity, &mut plugin.control)
+                    }
                     PluginEvent::Failed(reason) => {
                         problems.insert(*node, reason);
                     }
@@ -287,12 +307,13 @@ impl PluginChains {
         }
     }
 
-    fn save_state(&self, node: NodeId, control: &mut Vst3Control) {
+    fn save_state(&self, node: NodeId, identity: &str, control: &mut Vst3Control) {
         let saved = control
             .save_state()
             .map_err(|error| error.to_string())
             .and_then(|bytes| {
-                save_plugin_state(&self.paths, node, &bytes).map_err(|error| format!("{error:#}"))
+                save_plugin_state(&self.paths, node, identity, &bytes)
+                    .map_err(|error| format!("{error:#}"))
             });
         if let Err(error) = saved {
             tracing::warn!(node, %error, "could not save a plugin's state");
@@ -318,7 +339,9 @@ impl PluginChains {
         if spec.is_passthrough() {
             return None;
         }
-        match self.compile(&spec, &mut state) {
+        let compiled = self.compile(&spec, &mut state);
+        state.retired.clear();
+        match compiled {
             Ok(graph) => {
                 let names = plugins_in(&spec)
                     .map(|(node, plugin)| (node, plugin.name.clone()))
@@ -391,10 +414,43 @@ impl PluginChains {
             return unavailable(reason.clone());
         }
         let stale = state.stale.contains(&node);
+        let same_key = state
+            .loaded
+            .get(&node)
+            .is_some_and(|current| current.key == key);
+        // A plugin whose worker died, or that failed in the take just ended,
+        // is loaded again once; failing again leaves it out.
+        let failed = same_key
+            && (state
+                .loaded
+                .get(&node)
+                .is_some_and(|current| !current.control.is_running())
+                || self
+                    .failures
+                    .lock()
+                    .is_ok_and(|failures| failures.contains_key(&node)));
+        if !same_key {
+            state.crashes.remove(&node);
+        }
+        if failed {
+            let crashes = state.crashes.entry(node).or_default();
+            *crashes += 1;
+            if *crashes >= MAX_FAILURES {
+                let reason = format!(
+                    "{} keeps failing; save the graph to try it again",
+                    plugin.name
+                );
+                state.disabled.insert(node, reason.clone());
+                if let Some(old) = state.loaded.remove(&node) {
+                    state.retired.insert(node, old);
+                }
+                return unavailable(reason);
+            }
+        }
         let reusable = state
             .loaded
             .get(&node)
-            .filter(|current| current.key == key && current.control.is_running() && !stale);
+            .filter(|current| current.key == key && !failed && !stale);
         if let Some(current) = reusable {
             if !current.wait_until_idle() {
                 return unavailable("an earlier take is still using it".to_string());
@@ -407,17 +463,17 @@ impl PluginChains {
                 return Box::new(shared);
             }
         }
-        // A new worker is needed. Its predecessor's settings go with it when
-        // it is the same plugin; a different plugin has no use for them.
+        // A new worker is needed. The old one's settings go on to the new when
+        // it is the same plugin and still running; the state saved for a
+        // different plugin is never restored into this one. The old worker is
+        // kept until the compile is known to have worked, so that a graph that
+        // is refused leaves it as it was.
         if let Some(mut old) = state.loaded.remove(&node) {
-            let same_plugin = old.key.path == key.path && old.key.class_id == key.class_id;
-            match (same_plugin, old.control.is_running()) {
-                (true, true) => self.save_state(node, &mut old.control),
-                (false, _) => {
-                    let _ = delete_plugin_state(&self.paths, node);
-                }
-                (true, false) => {}
+            let identity = old.key.identity();
+            if old.key.identity() == key.identity() && old.control.is_running() {
+                self.save_state(node, &identity, &mut old.control);
             }
+            state.retired.insert(node, old);
         }
         state.stale.remove(&node);
         let loaded = match &self.host {
@@ -430,7 +486,9 @@ impl PluginChains {
                     sidechain: plugin.sidechain,
                     deadline: DEADLINE,
                 };
-                let saved = load_plugin_state(&self.paths, node).ok().flatten();
+                let saved = load_plugin_state(&self.paths, node, &key.identity())
+                    .ok()
+                    .flatten();
                 host.load(
                     std::path::Path::new(&plugin.path),
                     &plugin.class_id,
@@ -512,9 +570,10 @@ impl PluginChains {
                             .loaded
                             .get(&node.id)
                             .map_or_else(|| wired_layout(&graph, node.id), |loaded| loaded.layout),
-                        failed
+                        state
+                            .disabled
                             .get(&node.id)
-                            .or_else(|| state.disabled.get(&node.id))
+                            .or_else(|| failed.get(&node.id))
                             .or_else(|| state.problems.get(&node.id))
                             .cloned(),
                     ),
@@ -541,13 +600,29 @@ impl PluginChains {
         if state.loaded.values().any(Loaded::in_use) {
             return Err("a recording is using the plugins; try again once it ends".to_string());
         }
-        state.disabled.clear();
-        let trial = self
-            .compile(&graph, &mut state)
-            .map_err(|error| error.to_string())?;
+        // Saving again is how a plugin that was left out is tried again.
+        let (disabled, crashes) = (
+            std::mem::take(&mut state.disabled),
+            std::mem::take(&mut state.crashes),
+        );
+        state.retired.clear();
+        let trial = match self.compile(&graph, &mut state) {
+            Ok(trial) => trial,
+            Err(error) => {
+                // A graph that is refused leaves every plugin as it was: the
+                // workers the compile replaced come back.
+                for (node, old) in std::mem::take(&mut state.retired) {
+                    state.loaded.insert(node, old);
+                }
+                (state.disabled, state.crashes) = (disabled, crashes);
+                return Err(error.to_string());
+            }
+        };
         drop(trial);
+        state.retired.clear();
         for (node, loaded) in state.loaded.iter_mut() {
-            self.save_state(*node, &mut loaded.control);
+            let identity = loaded.key.identity();
+            self.save_state(*node, &identity, &mut loaded.control);
         }
         let before = load_audio_graph(&self.paths).unwrap_or_else(|_| GraphSpec::passthrough());
         save_audio_graph(&self.paths, &graph).map_err(|error| format!("{error:#}"))?;
@@ -809,10 +884,11 @@ mod tests {
     }
 
     /// A worker that dies in the middle of a take costs that plugin only: the
-    /// take still comes out whole, and the next one loads the plugin again.
+    /// take still comes out whole, the next one loads the plugin again, and a
+    /// plugin that dies again is left out, passed through, from then on.
     #[test]
     #[ignore = "needs a worker and a plugin"]
-    fn a_worker_killed_mid_take_is_passed_through_and_loaded_again_for_the_next() {
+    fn a_worker_killed_mid_take_is_loaded_again_once_and_then_left_out() {
         let bundle = std::env::var("LIMEN_TEST_VST3").expect("LIMEN_TEST_VST3");
         let chains = registry(scratch("chains-kill"));
         chains.set_graph(plugin_graph_of(bundle)).unwrap();
@@ -824,11 +900,50 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         };
-        let (killed, failures) = take(&chains, Some(&kill));
-        let (after, again) = take(&chains, None);
+        let (first, first_failures) = take(&chains, Some(&kill));
+        let (second, second_failures) = take(&chains, Some(&kill));
+        let (third, third_failures) = take(&chains, None);
+        let problem = chains
+            .view()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|node| node.node == 2)
+            .and_then(|node| node.problem.clone());
         assert_eq!(
-            (killed.len(), failures.len(), after.len(), again),
-            (16_000, 1, 16_000, vec![])
+            (
+                [first.len(), second.len(), third.len()],
+                [first_failures.len(), second_failures.len()],
+                third_failures.len(),
+                problem.is_some_and(|problem| problem.contains("keeps failing")),
+            ),
+            ([16_000; 3], [1, 1], 1, true)
+        );
+    }
+
+    /// A graph that is refused leaves the plugin's worker as it was.
+    #[test]
+    #[ignore = "needs a worker and a plugin"]
+    fn a_refused_graph_leaves_the_running_worker_alone() {
+        let bundle = std::env::var("LIMEN_TEST_VST3").expect("LIMEN_TEST_VST3");
+        let chains = registry(scratch("chains-refused"));
+        let graph = plugin_graph_of(bundle);
+        chains.set_graph(graph.clone()).unwrap();
+        let before = chains.worker_pids();
+        // The side-chain is turned on, which replaces the worker, and a wire
+        // to a channel nothing has is added, which refuses the graph.
+        let mut refused = graph;
+        if let NodeKind::Plugin(plugin) = &mut refused.nodes[2].kind {
+            plugin.sidechain = Sidechain::On;
+        }
+        refused.edges.push(Edge {
+            from: Port { node: 0, port: 0 },
+            to: Port { node: 2, port: 9 },
+        });
+        let error = chains.set_graph(refused).err();
+        assert_eq!(
+            (error.is_some(), chains.worker_pids() == before),
+            (true, true)
         );
     }
 }

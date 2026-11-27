@@ -222,6 +222,7 @@ fn noise_through_a_plugin_keeps_its_length_and_a_denoiser_lowers_the_floor() {
         graph.process(chunk, &mut block).unwrap();
         output.extend(block);
     }
+    assert_eq!(graph.failures(), vec![], "the plugin did not process");
     let output = &output[latency..latency + input.len()];
     let (quiet_in, quiet_out) = (rms(&input[24_000..]), rms(&output[24_000..]));
     assert_eq!(output.len(), input.len());
