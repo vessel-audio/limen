@@ -115,6 +115,19 @@ settings.search_font: Search fonts
 settings.lightweight: Lightweight mode
 settings.lightweight_hint: Turns off animations to reduce rendering work
 settings.appearance_hint: Light, dark, or match the system
+settings.accent: Accent color
+settings.accent_hint: Color of buttons and highlights
+settings.accent_clay: Clay
+settings.accent_ocean: Ocean
+settings.accent_iris: Iris
+settings.accent_rose: Rose
+settings.accent_teal: Teal
+settings.accent_graphite: Graphite
+settings.accent_custom: Custom
+settings.accent_pick: Choose a custom color
+settings.accent_hue: Hue
+settings.accent_saturation: Saturation
+settings.accent_lightness: Lightness
 settings.language_hint: Language of the interface
 settings.font_size_hint: Scale of interface text
 settings.interface_font_hint: Typeface used throughout the window

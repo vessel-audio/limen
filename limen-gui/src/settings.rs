@@ -12,10 +12,16 @@ use crate::app::{AppView, Page, ShutdownAction};
 use crate::bridge::BridgeCommand;
 use crate::sidebar::SidebarMode;
 
+mod accent;
+mod custom_accent;
 mod font_scale;
 mod network;
 mod segmented;
 
+pub use accent::Accent;
+#[cfg(test)]
+pub(crate) use accent::Preset;
+pub use custom_accent::custom_picker;
 pub use font_scale::FontScale;
 pub use network::{NetworkForm, follow as follow_network, network};
 pub(crate) use segmented::{Segment, segmented};
@@ -199,6 +205,7 @@ pub fn general(view: &AppView, cx: &mut Context<AppView>) -> Div {
         .child(card(
             [
                 setting("settings.appearance", appearance, cx),
+                setting("settings.accent", accent::picker(view, cx), cx),
                 setting("settings.language", language, cx),
                 setting("settings.font_size", font_scale::picker(view, cx), cx),
                 setting(

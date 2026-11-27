@@ -1,8 +1,10 @@
-//! General and About settings: the subpages, appearance, language, text
-//! size, the interface font, lightweight mode, and the page's scrollbar. The
+//! General and About settings: the subpages, appearance, accent colour,
+//! language, text size, the interface font, lightweight mode, and the
+//! page's scrollbar. The
 //! Linux desktop suite keeps what needs a real desktop: that its dark
 //! preference reaches the window and is painted.
 
+use gpui_kit::component::color_picker::ColorPickerEvent;
 use gpui_kit::component::searchable_list::SearchableVec;
 use gpui_kit::component::{ActiveTheme, ThemeMode};
 use gpui_kit::{ScrollDelta, TestAppContext, point, px};
@@ -10,7 +12,7 @@ use rust_i18n::t;
 
 use super::{Daemon, Ui};
 use crate::locale::Locale;
-use crate::settings::{FontChoice, LightweightMode};
+use crate::settings::{Accent, FontChoice, LightweightMode, Preset};
 
 /// The checked state of each option of a segmented control, in order.
 fn checked<const N: usize>(ui: &mut Ui, options: [&str; N]) -> [Option<bool>; N] {
@@ -86,6 +88,122 @@ fn appearance_follows_the_choice_and_the_system(cx: &mut TestAppContext) {
                 (ThemeMode::Light, [Some(true), Some(false), Some(false)]),
             ]
         )
+    );
+}
+
+/// An accent swatch checks itself alone, colours the theme's primary, and
+/// tints its background away from the default's cream; both last through a
+/// switch to the dark scheme, whose background is tinted too.
+#[gpui_kit::test]
+fn the_accent_colours_the_interface(cx: &mut TestAppContext) {
+    const OPTIONS: [&str; 3] = ["accent-clay", "accent-ocean", "accent-graphite"];
+    let mut ui = Ui::connected(cx, Daemon::default());
+    ui.click("settings-page");
+    let observe = |ui: &mut Ui| {
+        (
+            ui.read(|_, cx| (cx.theme().primary, cx.theme().background)),
+            checked(ui, OPTIONS),
+        )
+    };
+    let ((clay, cream), opened) = observe(&mut ui);
+    ui.click("accent-ocean");
+    let ((primary, background), chosen) = observe(&mut ui);
+    ui.click("appearance-dark");
+    let ((dark_primary, dark_background), dark) = observe(&mut ui);
+    let ocean = Accent::Preset(Preset::Ocean).shades().0;
+    let ocean_checked = [Some(false), Some(true), Some(false)];
+    assert_eq!(
+        (
+            (clay, opened),
+            (primary, background != cream, chosen),
+            (dark_primary, dark_background.h, dark),
+        ),
+        (
+            (
+                Accent::Preset(Preset::Clay).shades().0,
+                [Some(true), Some(false), Some(false)]
+            ),
+            (ocean, true, ocean_checked),
+            (ocean, ocean.h, ocean_checked),
+        )
+    );
+}
+
+/// A colour committed in the custom colour panel becomes the accent and
+/// joins the swatches, checked; a preset unchecks it, and its swatch
+/// brings it back. A pale colour takes dark button text, which white would
+/// not contrast with.
+#[gpui_kit::test]
+fn a_custom_accent_joins_the_swatches(cx: &mut TestAppContext) {
+    const OPTIONS: [&str; 2] = ["accent-clay", "accent-custom"];
+    let mut ui = Ui::connected(cx, Daemon::default());
+    ui.click("settings-page");
+    let opened = ui.try_find("accent-custom").is_some();
+    let pale = gpui_kit::hsla(0.15, 0.9, 0.8, 1.);
+    let picker = ui.read(|view, _| view.accent_picker.clone());
+    // Committing a colour stores it and then announces it, as the panel's
+    // palette, sliders, and hex field do.
+    ui.act(|window, cx| {
+        picker.update(cx, |picker, cx| {
+            picker.set_value(pale, window, cx);
+            cx.emit(ColorPickerEvent::Change(Some(pale)));
+        })
+    });
+    let observe = |ui: &mut Ui| {
+        (
+            ui.read(|_, cx| (cx.theme().primary, cx.theme().button_primary_foreground)),
+            checked(ui, OPTIONS),
+        )
+    };
+    let picked = observe(&mut ui);
+    ui.click("accent-clay");
+    let preset = observe(&mut ui);
+    ui.click("accent-custom");
+    let restored = observe(&mut ui);
+    let clay = Accent::Preset(Preset::Clay);
+    let custom = (
+        (pale, gpui_kit::Hsla::from(gpui_kit::rgb(0x141413))),
+        [Some(false), Some(true)],
+    );
+    assert_eq!(
+        (opened, picked, preset, restored),
+        (
+            false,
+            custom,
+            (
+                (clay.shades().0, clay.foreground()),
+                [Some(true), Some(false)]
+            ),
+            custom,
+        )
+    );
+}
+
+/// The plus button opens the custom colour panel, starting from the accent
+/// in use, and turns its plus into a cross; opening it adds no swatch until
+/// a colour is committed, and pressing the button again closes it.
+#[gpui_kit::test]
+fn the_plus_button_opens_the_custom_colour_panel(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    ui.click("settings-page");
+    let picker = ui.read(|view, _| view.accent_picker.clone());
+    let observe = |ui: &mut Ui| {
+        (
+            ui.read(|_, cx| {
+                let picker = picker.read(cx);
+                (picker.is_open(), picker.value())
+            }),
+            ui.try_find("accent-custom").is_some(),
+        )
+    };
+    ui.click("accent-custom-pick");
+    let opened = observe(&mut ui);
+    ui.click("accent-custom-pick");
+    let closed = observe(&mut ui);
+    let clay = Some(Accent::Preset(Preset::Clay).shades().0);
+    assert_eq!(
+        (opened, closed),
+        (((true, clay), false), ((false, clay), false))
     );
 }
 

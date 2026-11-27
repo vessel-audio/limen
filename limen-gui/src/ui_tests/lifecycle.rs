@@ -6,7 +6,7 @@
 //! config, whose log opens in the desktop's handler: the test platform cannot
 //! open files.
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{ScrollDelta, TestAppContext, point, px};
 use limen_core::{Backend, SessionState, Shortcut};
 use rust_i18n::t;
 
@@ -27,6 +27,16 @@ fn connection(ui: &mut Ui) -> (String, Option<String>) {
     )
 }
 
+/// Open General settings, scrolled down to the service controls at the
+/// bottom of the page, below the view at the test window's size.
+fn service_controls(ui: &mut Ui) {
+    ui.click("settings-page");
+    ui.scroll(
+        "settings-general",
+        ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+    );
+}
+
 /// A daemon of `version` says hello and sends its first snapshot.
 fn greeted(ui: &mut Ui, version: &str) {
     ui.receive(BridgeEvent::Msg(Msg::Hello {
@@ -44,7 +54,7 @@ fn greeted(ui: &mut Ui, version: &str) {
 #[gpui_kit::test]
 fn stopping_asks_first_and_start_brings_it_back(cx: &mut TestAppContext) {
     let mut ui = Ui::connected(cx, Daemon::default());
-    ui.click("settings-page");
+    service_controls(&mut ui);
     ui.click("stop-daemon");
     let asked = (ui.label("shutdown-confirmation"), ui.sent());
     ui.click("cancel-shutdown");
@@ -107,7 +117,7 @@ fn restarting_replaces_the_daemon(cx: &mut TestAppContext) {
         ui.try_find("toggle-input").is_some(),
         ui.try_find("copy-toggle-command").is_some(),
     );
-    ui.click("settings-page");
+    service_controls(&mut ui);
     ui.click("restart-daemon");
     let restarted = ui.sent();
     ui.receive(BridgeEvent::Msg(Msg::Disconnected {

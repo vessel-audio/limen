@@ -14,8 +14,8 @@ use crate::model::{Action, GuiState, Msg, Toast};
 use crate::pages::{self, ModelForms};
 use crate::recorder::RecorderState;
 use crate::settings::{
-    AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode, NetworkForm,
-    SettingsPage,
+    Accent, AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode,
+    NetworkForm, SettingsPage,
 };
 use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -52,6 +52,12 @@ pub struct AppView {
     pub appearance: AppearancePreference,
     pub language: LanguagePreference,
     pub font_scale: FontScale,
+    pub accent: Accent,
+    /// The colour last committed in the custom accent panel, shown as a
+    /// swatch beside the presets.
+    pub custom_accent: Option<Hsla>,
+    /// The custom accent panel's state.
+    pub accent_picker: Entity<gpui_kit::component::color_picker::ColorPickerState>,
     pub font_family: SharedString,
     pub font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
     pub lightweight: LightweightMode,
@@ -129,7 +135,9 @@ impl AppView {
             )
             .searchable(true)
         });
+        let (accent_picker, accent_subscription) = crate::settings::custom_picker(window, cx);
         let subscriptions = vec![
+            accent_subscription,
             cx.subscribe_in(&toggle_input, window, |this, _, event, _, _| match event {
                 InputEvent::Change => this.toggle_touched = true,
                 InputEvent::Focus => this.toggle_focused = true,
@@ -186,6 +194,9 @@ impl AppView {
             appearance: AppearancePreference::System,
             language: LanguagePreference::System,
             font_scale: FontScale::DEFAULT,
+            accent: Accent::DEFAULT,
+            custom_accent: None,
+            accent_picker,
             font_family: FontChoice::SYSTEM_FAMILY.into(),
             font_select,
             lightweight: LightweightMode::Off,
@@ -214,7 +225,7 @@ impl AppView {
             AppearancePreference::Light => Theme::change(ThemeMode::Light, Some(window), cx),
             AppearancePreference::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
         }
-        crate::palette::apply(cx);
+        crate::palette::apply(self.accent, cx);
         self.apply_typography(cx);
     }
 
@@ -470,7 +481,7 @@ impl Render for AppView {
             let mode = ThemeMode::from(window.appearance());
             if cx.theme().mode != mode {
                 Theme::change(mode, Some(window), cx);
-                crate::palette::apply(cx);
+                crate::palette::apply(self.accent, cx);
                 self.apply_typography(cx);
             }
         }
