@@ -320,3 +320,117 @@ fn a_test_recording_is_asked_for_and_offers_both_versions_to_play(cx: &mut TestA
         )
     );
 }
+
+#[gpui_kit::test]
+fn the_connection_form_wires_the_picked_ports_without_the_canvas(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    with_gain(&mut ui);
+    scroll_down(&mut ui);
+    // Outputs: the microphone's then the gain's; inputs: the recognizer's
+    // then the gain's. Pick the gain's output for the recognizer.
+    ui.click("connect-from");
+    let from = ui.label("connect-from");
+    ui.click("connect-add");
+    let (_, graph) = saved(ui.sent());
+    let mut expected = gain_graph();
+    expected.edges.push(wire((2, 0), (1, 0)));
+    assert_eq!(
+        (from.contains(&t!("routing.gain").to_string()), graph),
+        (true, expected)
+    );
+}
+
+#[gpui_kit::test]
+fn a_selected_wire_and_a_selected_node_can_be_removed_from_the_toolbar(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    with_gain(&mut ui);
+    // A click on empty canvas selects nothing, so there is nothing to remove.
+    ui.click_at("routing-canvas", point(px(10.), px(300.)));
+    let nothing_selected = ui.find("remove-selected").disabled();
+    // The default wire runs level from the input's port to the output's, and
+    // is selected by clicking on it, at its middle.
+    ui.click_at("routing-canvas", point(px(294.), px(44.)));
+    ui.click("remove-selected");
+    let (id, graph) = saved(ui.sent());
+    ui.receive(BridgeEvent::AudioGraph {
+        id,
+        result: Ok(view_of(graph.clone())),
+    });
+    ui.click("node-2");
+    ui.click("remove-selected");
+    let (_, without_node) = saved(ui.sent());
+    let mut no_wires = gain_graph();
+    no_wires.edges.clear();
+    assert_eq!(
+        (nothing_selected, graph, without_node),
+        (Some(true), no_wires, {
+            let mut bare = GraphSpec::passthrough();
+            bare.edges.clear();
+            bare
+        })
+    );
+}
+
+#[gpui_kit::test]
+fn the_sidechain_of_a_plugin_is_switched_on_and_saved(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    ui.click("add-plugin");
+    ui.sent();
+    ui.receive(BridgeEvent::AudioScanned {
+        id: 2,
+        result: Ok(vec![plugin("Compressor", "Fx|Dynamics")]),
+    });
+    ui.click("plugin-0");
+    let (id, graph) = saved(ui.sent());
+    ui.receive(BridgeEvent::AudioGraph {
+        id,
+        result: Ok(view_of(graph)),
+    });
+    scroll_down(&mut ui);
+    ui.click("sidechain-node-2");
+    let (_, graph) = saved(ui.sent());
+    let sidechain = match &graph.nodes[2].kind {
+        NodeKind::Plugin(plugin) => plugin.sidechain,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(sidechain, Sidechain::On);
+}
+
+#[gpui_kit::test]
+fn only_one_save_is_out_at_a_time_and_what_was_edited_meanwhile_follows_it(
+    cx: &mut TestAppContext,
+) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    ui.click("add-gain");
+    let (id, graph) = saved(ui.sent());
+    // Edited before the daemon has answered: nothing is sent yet.
+    scroll_down(&mut ui);
+    ui.click("gain-up-2");
+    let waiting = ui.sent();
+    ui.receive(BridgeEvent::AudioGraph {
+        id,
+        result: Ok(view_of(graph)),
+    });
+    let (_, follow) = saved(ui.sent());
+    assert_eq!(
+        (waiting, follow.nodes[2].kind.clone()),
+        (vec![], NodeKind::Gain { db: 1. })
+    );
+}
+
+#[gpui_kit::test]
+fn the_canvas_scrolls_so_a_node_out_of_view_can_be_reached(cx: &mut TestAppContext) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    let before = ui.find("node-1").bounds().left();
+    ui.scroll(
+        "routing-canvas",
+        ScrollDelta::Pixels(point(px(-120.), px(0.))),
+    );
+    let after = ui.find("node-1").bounds().left();
+    assert_eq!((before - after).round(), px(120.).round());
+}

@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::GraphError;
+
 /// A node's stable identity, which saved wires, plugin state, and editor
 /// windows keep across edits.
 pub type NodeId = u32;
@@ -125,12 +127,99 @@ impl GraphSpec {
         }
     }
 
-    /// Whether nothing in the graph changes the signal: it has no node but
-    /// the input and the output.
+    /// Whether the graph is the default one: the input's first channel
+    /// goes straight to the output and nothing else is in the way. A graph
+    /// of just those two nodes with the wire taken away is not, since it
+    /// delivers silence.
     pub fn is_passthrough(&self) -> bool {
-        self.nodes.iter().all(|node| match node.kind {
+        let only_endpoints = self.nodes.iter().all(|node| match node.kind {
             NodeKind::Input | NodeKind::Output => true,
             NodeKind::Gain { .. } | NodeKind::Plugin(_) => false,
-        })
+        });
+        let of = |wanted: fn(&NodeKind) -> bool| {
+            self.nodes
+                .iter()
+                .find(|node| wanted(&node.kind))
+                .map(|node| node.id)
+        };
+        let (input, output) = (
+            of(|kind| matches!(kind, NodeKind::Input)),
+            of(|kind| matches!(kind, NodeKind::Output)),
+        );
+        match (only_endpoints, input, output, self.edges.as_slice()) {
+            (true, Some(input), Some(output), [edge]) => {
+                edge.from
+                    == Port {
+                        node: input,
+                        port: 0,
+                    }
+                    && edge.to
+                        == Port {
+                            node: output,
+                            port: 0,
+                        }
+            }
+            (true, _, _, _) | (false, _, _, _) => false,
+        }
+    }
+
+    /// Check what can be checked without knowing the channels of any
+    /// plugin: that ids are unique, there is one input and one output,
+    /// wires join nodes that exist, none is repeated, and they form no loop.
+    pub fn validate(&self) -> Result<(), GraphError> {
+        let mut seen = std::collections::HashSet::new();
+        if let Some(duplicate) = self.nodes.iter().find(|node| !seen.insert(node.id)) {
+            return Err(GraphError::DuplicateNode(duplicate.id));
+        }
+        let count = |wanted: fn(&NodeKind) -> bool| {
+            self.nodes.iter().filter(|node| wanted(&node.kind)).count()
+        };
+        let (inputs, outputs) = (
+            count(|kind| matches!(kind, NodeKind::Input)),
+            count(|kind| matches!(kind, NodeKind::Output)),
+        );
+        if (inputs, outputs) != (1, 1) {
+            return Err(GraphError::Endpoints { inputs, outputs });
+        }
+        let mut edges = std::collections::HashSet::new();
+        for edge in &self.edges {
+            for node in [edge.from.node, edge.to.node] {
+                if !seen.contains(&node) {
+                    return Err(GraphError::UnknownNode(node));
+                }
+            }
+            if !edges.insert(*edge) {
+                return Err(GraphError::DuplicateEdge(*edge));
+            }
+        }
+        // Kahn's algorithm: a loop leaves nodes that never become ready.
+        let mut waiting = self
+            .nodes
+            .iter()
+            .map(|node| (node.id, 0usize))
+            .collect::<std::collections::HashMap<_, _>>();
+        self.edges
+            .iter()
+            .for_each(|edge| *waiting.entry(edge.to.node).or_default() += 1);
+        let mut ready = waiting
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(node, _)| *node)
+            .collect::<Vec<_>>();
+        let mut ordered = 0;
+        while let Some(node) = ready.pop() {
+            ordered += 1;
+            for edge in self.edges.iter().filter(|edge| edge.from.node == node) {
+                let count = waiting.entry(edge.to.node).or_default();
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(edge.to.node);
+                }
+            }
+        }
+        match ordered == self.nodes.len() {
+            true => Ok(()),
+            false => Err(GraphError::Cycle),
+        }
     }
 }

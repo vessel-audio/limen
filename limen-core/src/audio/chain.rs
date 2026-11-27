@@ -2,6 +2,8 @@
 //! routes the voice through plugins: a [`CompiledGraph`] at 48 kHz, which
 //! most voice plugins expect, then down to the recognizer's 16 kHz s16.
 
+use std::sync::Arc;
+
 use plugin_graph::{CompiledGraph, Failure, GraphConfig, Resampler};
 use tokio::sync::{mpsc, watch};
 
@@ -19,8 +21,19 @@ pub(crate) const GRAPH_CONFIG: GraphConfig = GraphConfig {
     block: GRAPH_BLOCK,
 };
 
+/// Called with the nodes that were passed through when a take ends.
+pub(crate) type FailureHook = Arc<dyn Fn(&[Failure]) + Send + Sync>;
+
+fn quantize(samples: &[f32]) -> Vec<i16> {
+    samples
+        .iter()
+        .map(|sample| (sample.clamp(-1., 1.) * 32767.).round() as i16)
+        .collect()
+}
+
 /// Mono samples at [`GRAPH_RATE`] in, 16 kHz s16 chunks out, whatever the
-/// chunk size going in.
+/// chunk size going in. Over a whole take, as many samples come out as the
+/// recognizer would have had without the graph.
 pub(crate) struct Chain {
     graph: CompiledGraph,
     /// Input not yet a whole block.
@@ -30,7 +43,10 @@ pub(crate) struct Chain {
     skip: usize,
     down: Resampler,
     block_out: Vec<f32>,
-    converted: Vec<f32>,
+    /// Frames fed in, and samples sent out, over the take so far.
+    fed: usize,
+    emitted: usize,
+    hook: Option<FailureHook>,
 }
 
 impl Chain {
@@ -41,41 +57,71 @@ impl Chain {
             pending: Vec::new(),
             down: Resampler::new(GRAPH_RATE, SAMPLE_RATE),
             block_out: vec![0.; GRAPH_BLOCK],
-            converted: Vec::new(),
+            fed: 0,
+            emitted: 0,
+            hook: None,
         }
     }
 
-    /// Process `samples` and return the 16 kHz audio they complete.
-    pub fn feed(&mut self, samples: &[f32]) -> Vec<i16> {
+    /// Tell `hook` which nodes were passed through, when the take ends.
+    pub fn with_hook(mut self, hook: FailureHook) -> Self {
+        self.hook = Some(hook);
+        self
+    }
+
+    /// Run `samples` through the graph and down to 16 kHz.
+    fn run(&mut self, samples: &[f32]) -> Vec<f32> {
         self.pending.extend_from_slice(samples);
         let whole = self.pending.len() / GRAPH_BLOCK * GRAPH_BLOCK;
-        self.converted.clear();
+        let mut converted = Vec::new();
         for block in self.pending[..whole].as_chunks::<GRAPH_BLOCK>().0 {
             // The graph's buffers are the ones given to it, so a size
             // mismatch is impossible here.
             let _ = self.graph.process(block, &mut self.block_out);
             let drop = self.skip.min(GRAPH_BLOCK);
             self.skip -= drop;
-            self.down.push(&self.block_out[drop..], &mut self.converted);
+            self.down.push(&self.block_out[drop..], &mut converted);
         }
         self.pending.drain(..whole);
-        self.converted
-            .iter()
-            .map(|sample| (sample.clamp(-1., 1.) * 32767.).round() as i16)
-            .collect()
+        converted
     }
 
-    /// The end of the take: push out what the plugins still hold back, so
-    /// the last of the speech is not cut off.
+    /// Process `samples` and return the 16 kHz audio they complete.
+    pub fn feed(&mut self, samples: &[f32]) -> Vec<i16> {
+        self.fed += samples.len();
+        let out = quantize(&self.run(samples));
+        self.emitted += out.len();
+        out
+    }
+
+    /// The end of the take: push out what the plugins still hold back, and
+    /// the last of the resampler's lookahead, so the last of the speech is
+    /// not cut off, and no more than the take's own length comes out.
     pub fn finish(&mut self) -> Vec<i16> {
         let to_block = (GRAPH_BLOCK - self.pending.len() % GRAPH_BLOCK) % GRAPH_BLOCK;
-        let flush = vec![0.; self.skip.max(self.graph.latency()) + to_block];
-        self.feed(&flush)
+        let tail = self.graph.latency().div_ceil(GRAPH_BLOCK) * GRAPH_BLOCK;
+        let mut out = self.run(&vec![0.; to_block + tail]);
+        self.down.push(&vec![0.; self.down.delay() + 1], &mut out);
+        let wanted = self.fed * SAMPLE_RATE as usize / GRAPH_RATE as usize;
+        out.truncate(wanted.saturating_sub(self.emitted));
+        let out = quantize(&out);
+        self.emitted += out.len();
+        out
     }
 
     /// The nodes that were passed through since they failed.
     pub fn failures(&self) -> Vec<Failure> {
         self.graph.failures()
+    }
+
+    fn report(&self) {
+        let failures = self.failures();
+        for failure in &failures {
+            tracing::warn!(node = failure.node, reason = %failure.reason, "a plugin was passed through");
+        }
+        if let Some(hook) = self.hook.as_ref().filter(|_| !failures.is_empty()) {
+            hook(&failures);
+        }
     }
 }
 
@@ -84,10 +130,7 @@ impl Chain {
 pub(crate) fn to_speech(samples: &[f32]) -> Vec<i16> {
     let mut converted = Vec::new();
     Resampler::new(GRAPH_RATE, SAMPLE_RATE).push(samples, &mut converted);
-    converted
-        .iter()
-        .map(|sample| (sample.clamp(-1., 1.) * 32767.).round() as i16)
-        .collect()
+    quantize(&converted)
 }
 
 /// The chain's thread: process what `work` delivers until its sender is
@@ -113,9 +156,7 @@ pub(crate) fn run_worker(
         send(chain.feed(&samples));
     }
     send(chain.finish());
-    for failure in chain.failures() {
-        tracing::warn!(node = failure.node, reason = %failure.reason, "a plugin was passed through");
-    }
+    chain.report();
 }
 
 #[cfg(test)]
@@ -219,18 +260,32 @@ mod tests {
             take(&mut through_lookahead(1200), 1),
             take(&mut through_lookahead(0), 1),
         );
-        // A second at 16 kHz, within the resampler's lookahead, whatever the
-        // plugin's delay; and the speech is there at the end, not cut off.
-        let settled = |take: &[i16]| take[take.len() - 200..take.len() - 100].to_vec();
-        assert_eq!(
+        // Exactly a second at 16 kHz whatever the plugin's delay, and the
+        // speech is there right up to the end, not cut off.
+        let intact = |take: &[i16]| {
+            let end = take.len();
             (
-                with.len().abs_diff(16_000) < 100,
-                without.len().abs_diff(16_000) < 100,
-                settled(&with),
-                settled(&without),
-            ),
-            (true, true, vec![16384; 100], vec![16384; 100])
+                take[end - 60..end - 20]
+                    .iter()
+                    .all(|sample| sample.abs_diff(16_384) < 160),
+                take[end - 1] > 4_000,
+            )
+        };
+        assert_eq!(
+            (with.len(), without.len(), intact(&with), intact(&without)),
+            (16_000, 16_000, (true, true), (true, true))
         );
+    }
+
+    #[test]
+    fn a_take_that_is_not_a_whole_number_of_blocks_comes_out_the_length_it_went_in() {
+        let lengths = [48_001, 47_999, 100, 1].map(|frames| {
+            let mut chain = through_lookahead(777);
+            let mut out = chain.feed(&vec![0.5; frames]);
+            out.extend(chain.finish());
+            out.len()
+        });
+        assert_eq!(lengths, [16_000, 15_999, 33, 0]);
     }
 
     #[test]
@@ -246,13 +301,11 @@ mod tests {
         while let Ok(chunk) = pcm.try_recv() {
             heard.extend(chunk);
         }
-        // 0.2 s in, 0.2 s out, the plugin's 1200 frames of delay included.
+        // 0.2 s in, exactly 0.2 s out, the plugin's 1200 frames of delay
+        // included.
         assert_eq!(
-            (
-                heard.len().abs_diff(3200) < 100,
-                *levels.borrow() != Level::SILENCE
-            ),
-            (true, true)
+            (heard.len(), *levels.borrow() != Level::SILENCE),
+            (3200, true)
         );
     }
 }

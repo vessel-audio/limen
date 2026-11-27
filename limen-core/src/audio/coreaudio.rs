@@ -126,6 +126,15 @@ impl FloatCapture {
         })
     }
 
+    /// Everything captured and not yet read: the end of a take that is
+    /// stopping, which would otherwise be lost with this capture.
+    pub fn drain(&mut self) -> Vec<f32> {
+        while let Ok(chunk) = self.samples.try_recv() {
+            self.pending.extend(chunk);
+        }
+        self.pending.drain(..).collect()
+    }
+
     /// Read exactly `samples` samples; `Ok(None)` at end of stream. Safe to
     /// drop mid-await: what was already received is kept.
     pub async fn read_chunk(&mut self, samples: usize) -> Result<Option<Vec<f32>>> {

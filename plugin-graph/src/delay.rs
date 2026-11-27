@@ -14,6 +14,19 @@ impl DelayLine {
         }
     }
 
+    /// Take `input` in as `add_into` would, with nowhere for the delayed
+    /// frames to go, so a line that is not in use yet already holds what
+    /// it would have to give.
+    pub fn advance(&mut self, input: &[f32]) {
+        match self.frames.len() {
+            0 => {}
+            length => input.iter().for_each(|sample| {
+                self.frames[self.position] = *sample;
+                self.position = (self.position + 1) % length;
+            }),
+        }
+    }
+
     /// Add `input`, delayed, to `output`.
     pub fn add_into(&mut self, input: &[f32], output: &mut [f32]) {
         match self.frames.len() {

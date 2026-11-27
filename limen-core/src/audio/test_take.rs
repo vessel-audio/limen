@@ -30,36 +30,48 @@ impl PluginChains {
         }
     }
 
+    /// Claim the microphone for a test of `seconds`: from now until the test
+    /// is over, a dictation that starts cancels it through the flag this
+    /// returns. Fails when the length is out of range or a test is already
+    /// under way. The claim is made before the test's task is spawned, so a
+    /// take cannot start in between and find nothing to cancel.
+    pub(crate) fn begin_test(&self, seconds: u32) -> Result<Arc<AtomicBool>, String> {
+        if !(1..=MAX_TEST_SECONDS).contains(&seconds) {
+            return Err(format!("a test lasts 1 to {MAX_TEST_SECONDS} seconds"));
+        }
+        let mut slot = self
+            .test
+            .lock()
+            .map_err(|_| "test state poisoned".to_string())?;
+        if slot.is_some() {
+            return Err("a test is already recording".to_string());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *slot = Some(cancel.clone());
+        Ok(cancel)
+    }
+
     /// Record `seconds` of the microphone, then process the same recording
-    /// through the saved graph. Both come out as 16 kHz mono WAV files.
+    /// through the saved graph. Both come out as 16 kHz mono WAV files. The
+    /// claim made by [`Self::begin_test`] is kept until both are done.
     pub(crate) async fn record_test(
         self: &Arc<Self>,
+        cancel: Arc<AtomicBool>,
         seconds: u32,
         device: Option<String>,
     ) -> Result<TestFiles> {
-        if !(1..=MAX_TEST_SECONDS).contains(&seconds) {
-            bail!("a test lasts 1 to {MAX_TEST_SECONDS} seconds");
+        let result = async {
+            let samples = self.record(seconds, device, &cancel).await?;
+            let chains = self.clone();
+            tokio::task::spawn_blocking(move || chains.process_test(&samples, &cancel))
+                .await
+                .context("the test processing stopped")?
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut slot = self
-                .test
-                .lock()
-                .map_err(|_| anyhow::anyhow!("test state poisoned"))?;
-            if slot.is_some() {
-                bail!("a test is already recording");
-            }
-            *slot = Some(cancel.clone());
-        }
-        let recorded = self.record(seconds, device, &cancel).await;
+        .await;
         if let Ok(mut slot) = self.test.lock() {
             *slot = None;
         }
-        let samples = recorded?;
-        let chains = self.clone();
-        tokio::task::spawn_blocking(move || chains.process_test(&samples))
-            .await
-            .context("the test processing stopped")?
+        result
     }
 
     async fn record(
@@ -83,14 +95,18 @@ impl PluginChains {
         Ok(samples)
     }
 
-    fn process_test(&self, samples: &[f32]) -> Result<TestFiles> {
+    fn process_test(&self, samples: &[f32], cancel: &AtomicBool) -> Result<TestFiles> {
         let dry = to_speech(samples);
         let wet = match self.build() {
             Some(mut chain) => {
-                let mut wet = samples
-                    .chunks(GRAPH_RATE as usize / 10)
-                    .flat_map(|chunk| chain.feed(chunk))
-                    .collect::<Vec<_>>();
+                let mut wet = Vec::new();
+                for chunk in samples.chunks(GRAPH_RATE as usize / 10) {
+                    // Let go of the plugins at once if a take wants them.
+                    if cancel.load(Ordering::Relaxed) {
+                        bail!("the test was cancelled because a dictation started");
+                    }
+                    wet.extend(chain.feed(chunk));
+                }
                 wet.extend(chain.finish());
                 wet
             }

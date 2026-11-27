@@ -61,6 +61,17 @@ pub(crate) fn save_plugin_state(paths: &Paths, node: NodeId, state: &[u8]) -> Re
     write_atomically(&paths.plugin_state_file(node), state)
 }
 
+/// Forget a plugin's saved state, as when its node is gone or holds another
+/// plugin now.
+pub(crate) fn delete_plugin_state(paths: &Paths, node: NodeId) -> Result<()> {
+    let _lock = super::lock_dir(&paths.config_file)?;
+    match fs::remove_file(paths.plugin_state_file(node)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("failed to remove a plugin's saved state"),
+    }
+}
+
 /// Write `contents` to a temp file beside `file` and rename it into place, so
 /// a reader sees the old contents or the new, never a part.
 fn write_atomically(file: &Path, contents: &[u8]) -> Result<()> {

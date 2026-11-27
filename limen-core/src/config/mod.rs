@@ -30,7 +30,7 @@ mod value;
 mod write;
 
 pub(crate) use audio_graph::{
-    load_audio_graph, load_plugin_state, save_audio_graph, save_plugin_state,
+    delete_plugin_state, load_audio_graph, load_plugin_state, save_audio_graph, save_plugin_state,
 };
 pub(crate) use endpoint::{
     check_key_url, check_polish_root, check_polish_url, check_url_parameters, display_url,

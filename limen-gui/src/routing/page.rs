@@ -13,7 +13,7 @@ use limen_core::{Playback, PluginEntry};
 use plugin_graph::{NodeId, NodeKind, NodeSpec, Sidechain};
 
 use super::canvas::{canvas_view, title};
-use super::state::{Notice, Plugins, TestState};
+use super::state::{Notice, Plugins, Selection, TestState};
 use crate::a11y;
 use crate::app::{AppView, Page};
 use crate::bridge::{AudioRequest, BridgeCommand};
@@ -50,7 +50,14 @@ impl AppView {
             Which::Original => &files.dry,
             Which::Processed => &files.wet,
         };
-        match Playback::start(Path::new(wav)) {
+        // The other recording starts where this one is, so that the two can
+        // be compared on the same words.
+        let from = self
+            .playing
+            .as_ref()
+            .map(|playing| playing.playback.position())
+            .unwrap_or_default();
+        match Playback::start_at(Path::new(wav), from) {
             Ok(playback) => self.playing = Some(Playing { which, playback }),
             Err(error) => {
                 self.playing = None;
@@ -147,6 +154,20 @@ pub(crate) fn page(view: &AppView, cx: &mut Context<AppView>) -> Div {
 
 fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
     let editable = view.routing.graph.is_some();
+    // A wire can always go; a node only if it is not the input or the output.
+    let removable = match view.routing.selection {
+        Selection::Wire(_) => true,
+        Selection::Node(id) => view.routing.graph.as_ref().is_some_and(|graph| {
+            graph.nodes.iter().any(|node| {
+                node.id == id
+                    && match node.kind {
+                        NodeKind::Gain { .. } | NodeKind::Plugin(_) => true,
+                        NodeKind::Input | NodeKind::Output => false,
+                    }
+            })
+        }),
+        Selection::Nothing => false,
+    };
     div()
         .h_flex()
         .flex_wrap()
@@ -185,6 +206,19 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         .disabled(!editable)
                         .on_click(cx.listener(|this, _, _, cx| {
                             let request = this.routing.open_palette();
+                            this.send_audio(request);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    a11y::button("remove-selected")
+                        .outline()
+                        .small()
+                        .icon(IconName::Close)
+                        .label(rust_i18n::t!("routing.remove_selected").to_string())
+                        .disabled(!removable)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let request = this.routing.remove_selected();
                             this.send_audio(request);
                             cx.notify();
                         })),
@@ -501,7 +535,66 @@ fn connections_list(view: &AppView, cx: &mut Context<AppView>) -> Div {
             .into_any_element(),
         false => div().v_flex().gap_1().children(rows).into_any_element(),
     };
-    section("routing.connections", cx).child(body)
+    // Wiring without the canvas: pick an output and an input, then connect.
+    let label = |port: Option<plugin_graph::Port>, input: bool| match port {
+        Some(port) => format!(
+            "{} {} {}",
+            name(port.node),
+            match input {
+                true => rust_i18n::t!("routing.port_in"),
+                false => rust_i18n::t!("routing.port_out"),
+            },
+            port.port + 1
+        ),
+        None => String::new(),
+    };
+    let (from, to) = (routing.picked_output(), routing.picked_input());
+    let form = div()
+        .h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .child(
+            a11y::button("connect-from")
+                .outline()
+                .small()
+                .label(format!(
+                    "{}: {}",
+                    rust_i18n::t!("routing.connect_from"),
+                    label(from, false)
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.routing.next_output();
+                    cx.notify();
+                })),
+        )
+        .child(
+            a11y::button("connect-to")
+                .outline()
+                .small()
+                .label(format!(
+                    "{}: {}",
+                    rust_i18n::t!("routing.connect_to"),
+                    label(to, true)
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.routing.next_input();
+                    cx.notify();
+                })),
+        )
+        .child(
+            a11y::button("connect-add")
+                .primary()
+                .small()
+                .icon(IconName::Plus)
+                .label(rust_i18n::t!("routing.connect").to_string())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let request = this.routing.connect_picked();
+                    this.send_audio(request);
+                    cx.notify();
+                })),
+        );
+    section("routing.connections", cx).child(body).child(form)
 }
 
 /// Record a few seconds and hear them before and after the plugins.

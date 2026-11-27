@@ -175,7 +175,7 @@ pub(crate) async fn chain_capture_loop(
                 _ = &mut stop => None,
             };
             let Some(samples) = read else {
-                return Ok(());
+                break;
             };
             match feed.try_send(samples) {
                 Ok(()) => {}
@@ -185,6 +185,12 @@ pub(crate) async fn chain_capture_loop(
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return Ok(()),
             }
         }
+        // What the capture holds when the take stops is the end of the speech.
+        let rest = capture.drain();
+        if !rest.is_empty() {
+            let _ = feed.try_send(rest);
+        }
+        Ok(())
     }
     .await;
     // Closing the queue lets the worker flush the chain and finish.

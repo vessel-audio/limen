@@ -2,8 +2,12 @@
 //! first needs them (or the graph is saved) and kept between takes, since
 //! starting one takes a couple of hundred milliseconds, which dictation
 //! should not wait for each time.
+//!
+//! A worker that died is loaded again once, at the next take; a plugin that
+//! cannot be loaded stays out of the graph, passed through, until the graph
+//! is saved again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
@@ -17,9 +21,10 @@ use plugin_graph::{
     Processor, Sidechain,
 };
 
-use super::chain::{Chain, GRAPH_BLOCK, GRAPH_CONFIG, GRAPH_RATE};
+use super::chain::{Chain, FailureHook, GRAPH_BLOCK, GRAPH_CONFIG, GRAPH_RATE};
 use crate::config::{
-    Paths, load_audio_graph, load_plugin_state, save_audio_graph, save_plugin_state,
+    Paths, delete_plugin_state, load_audio_graph, load_plugin_state, save_audio_graph,
+    save_plugin_state,
 };
 use crate::ipc::audio::{AudioGraphView, NodeStatus, PluginEntry};
 
@@ -29,10 +34,15 @@ const DEADLINE: Duration = Duration::from_millis(50);
 /// How often loaded plugins are asked what happened to them.
 const POLL: Duration = Duration::from_millis(250);
 
+/// How long a take waits for a plugin that an earlier take or a test is
+/// still finishing with.
+const IDLE_WAIT: Duration = Duration::from_secs(1);
+
 /// What identifies a loaded plugin: a different one needs a new worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoadKey {
     path: String,
+    class_id: String,
     sidechain: Sidechain,
 }
 
@@ -49,14 +59,31 @@ impl Loaded {
     fn in_use(&self) -> bool {
         Arc::strong_count(&self.processor) > 1
     }
+
+    /// Wait for a take that is finishing to let go of the plugin.
+    fn wait_until_idle(&self) -> bool {
+        let steps = IDLE_WAIT.as_millis() / 10;
+        for _ in 0..steps {
+            if !self.in_use() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        !self.in_use()
+    }
 }
+
+/// Why each node's plugin did not do its work, as far as a take saw.
+type Failures = Arc<Mutex<HashMap<NodeId, String>>>;
 
 /// A loaded plugin as a graph node, shared with the registry so that it
 /// survives the graph.
 struct Shared {
+    node: NodeId,
     processor: Arc<Mutex<Vst3Processor>>,
     layout: PortLayout,
     latency: usize,
+    failures: Failures,
 }
 
 impl Processor for Shared {
@@ -74,20 +101,31 @@ impl Processor for Shared {
         input: &[f32],
         output: &mut [f32],
     ) -> Result<(), ProcessError> {
-        self.processor
+        let result = self
+            .processor
             .lock()
             .map_err(|_| ProcessError("the plugin's processor panicked".to_string()))?
-            .process(frames, input, output)
+            .process(frames, input, output);
+        if let Err(error) = &result
+            && let Ok(mut failures) = self.failures.lock()
+        {
+            failures.insert(self.node, error.0.clone());
+        }
+        result
     }
 }
 
 /// Stands in for a plugin that could not be loaded: a node that is passed
-/// through from the first block, with the reason as its failure.
-struct Unavailable(String);
+/// through from the first block, with the reason as its failure. It has the
+/// channels the saved wires use, so that the rest of the graph still builds.
+struct Unavailable {
+    reason: String,
+    layout: PortLayout,
+}
 
 impl Processor for Unavailable {
     fn layout(&self) -> PortLayout {
-        UNAVAILABLE_LAYOUT
+        self.layout
     }
 
     fn latency(&self) -> usize {
@@ -95,22 +133,56 @@ impl Processor for Unavailable {
     }
 
     fn process(&mut self, _: usize, _: &[f32], _: &mut [f32]) -> Result<(), ProcessError> {
-        Err(ProcessError(self.0.clone()))
+        Err(ProcessError(self.reason.clone()))
     }
 }
 
 /// What a plugin that is not loaded is drawn with: one channel in and out.
-const UNAVAILABLE_LAYOUT: PortLayout = PortLayout {
+const UNLOADED_LAYOUT: PortLayout = PortLayout {
     main_inputs: 1,
     sidechain_inputs: 0,
     outputs: 1,
 };
 
+/// The channels that the wires of `spec` use on `node`, at least one each
+/// way.
+fn wired_layout(spec: &GraphSpec, node: NodeId) -> PortLayout {
+    let width = |ports: Vec<u16>| {
+        ports
+            .into_iter()
+            .max()
+            .map_or(1, |port| usize::from(port) + 1)
+    };
+    PortLayout {
+        main_inputs: width(
+            spec.edges
+                .iter()
+                .filter(|edge| edge.to.node == node)
+                .map(|edge| edge.to.port)
+                .collect(),
+        ),
+        sidechain_inputs: 0,
+        outputs: width(
+            spec.edges
+                .iter()
+                .filter(|edge| edge.from.node == node)
+                .map(|edge| edge.from.port)
+                .collect(),
+        ),
+    }
+}
+
 #[derive(Default)]
 pub(super) struct State {
     loaded: HashMap<NodeId, Loaded>,
-    /// Why a node's plugin does nothing.
+    /// Why a node's worker failed, as it told the registry.
     problems: HashMap<NodeId, String>,
+    /// Plugins that could not be loaded, and why; they stay out until the
+    /// graph is saved again.
+    disabled: HashMap<NodeId, String>,
+    /// Plugins whose latency changed since they loaded, which a new worker
+    /// has to pick up.
+    stale: HashSet<NodeId>,
 }
 
 /// The routing graph's plugins, and the graphs built from them.
@@ -118,6 +190,8 @@ pub(crate) struct PluginChains {
     pub(super) paths: Paths,
     host: Option<Vst3Host>,
     state: Mutex<State>,
+    failures: Failures,
+    notify: fn(&str, &str),
     /// Stops the test recording in progress, if any.
     pub(super) test: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
 }
@@ -150,14 +224,17 @@ fn plugins_in(spec: &GraphSpec) -> impl Iterator<Item = (NodeId, &PluginRef)> {
 }
 
 impl PluginChains {
-    /// The registry for the graph saved under `paths`. A thread of its own
-    /// watches the loaded plugins, saving a plugin's state when its editor
-    /// closes; it ends with the registry.
-    pub(crate) fn new(paths: Paths) -> Arc<Self> {
+    /// The registry for the graph saved under `paths`; `notify` tells the
+    /// user when a plugin was passed through. A thread of its own watches the
+    /// loaded plugins, saving a plugin's state when its editor closes; it
+    /// ends with the registry.
+    pub(crate) fn new(paths: Paths, notify: fn(&str, &str)) -> Arc<Self> {
         let chains = Arc::new(Self {
             paths,
             host: worker().map(Vst3Host::new),
             state: Mutex::new(State::default()),
+            failures: Failures::default(),
+            notify,
             test: Mutex::new(None),
         });
         let weak = Arc::downgrade(&chains);
@@ -185,16 +262,25 @@ impl PluginChains {
     }
 
     /// Handle what happened to the plugins since the last poll: save the
-    /// state of one whose editor closed, and note one that failed.
+    /// state of one whose editor closed, note one that failed, and mark one
+    /// whose latency changed.
     fn poll(&self) {
         let mut state = self.lock();
-        let State { loaded, problems } = &mut *state;
+        let State {
+            loaded,
+            problems,
+            stale,
+            ..
+        } = &mut *state;
         for (node, plugin) in loaded.iter_mut() {
             for event in plugin.control.events() {
                 match event {
                     PluginEvent::EditorClosed => self.save_state(*node, &mut plugin.control),
                     PluginEvent::Failed(reason) => {
                         problems.insert(*node, reason);
+                    }
+                    PluginEvent::LatencyChanged => {
+                        stale.insert(*node);
                     }
                 }
             }
@@ -213,10 +299,10 @@ impl PluginChains {
         }
     }
 
-    /// The signal path for a take, or `None` when the saved graph changes
-    /// nothing or cannot be used, in which case the microphone goes straight
-    /// to the recognizer as ever. Loads plugins that are not loaded yet, so
-    /// it may take a while: call it off the async runtime.
+    /// The signal path for a take, or `None` when the saved graph is the
+    /// default one or cannot be used, in which case the microphone goes
+    /// straight to the recognizer as ever. Loads plugins that are not loaded
+    /// yet, so it may take a while: call it off the async runtime.
     pub(crate) fn build(&self) -> Option<Chain> {
         let spec = match load_audio_graph(&self.paths) {
             Ok(spec) => spec,
@@ -233,7 +319,24 @@ impl PluginChains {
             return None;
         }
         match self.compile(&spec, &mut state) {
-            Ok(graph) => Some(Chain::new(graph)),
+            Ok(graph) => {
+                let names = plugins_in(&spec)
+                    .map(|(node, plugin)| (node, plugin.name.clone()))
+                    .collect::<HashMap<_, _>>();
+                let notify = self.notify;
+                let hook: FailureHook = Arc::new(move |failures| {
+                    let told = failures
+                        .iter()
+                        .map(|failure| {
+                            let name = names.get(&failure.node).map_or("A plugin", String::as_str);
+                            format!("{name}: {}", failure.reason)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    notify("Limen", &format!("Passed through, not processed. {told}"));
+                });
+                Some(Chain::new(graph).with_hook(hook))
+            }
             Err(error) => {
                 tracing::warn!(error = %error, "audio graph unusable; recording without it");
                 None
@@ -243,37 +346,80 @@ impl PluginChains {
 
     fn compile(&self, spec: &GraphSpec, state: &mut State) -> Result<CompiledGraph, GraphError> {
         let processors = plugins_in(spec)
-            .map(|(node, plugin)| (node, self.processor(state, node, plugin)))
+            .map(|(node, plugin)| {
+                let wired = wired_layout(spec, node);
+                (node, self.processor(state, node, plugin, wired))
+            })
             .collect::<HashMap<_, _>>();
         CompiledGraph::compile(spec, GRAPH_CONFIG, processors)
     }
 
+    fn shared(&self, node: NodeId, loaded: &Loaded) -> Option<Shared> {
+        let mut processor = loaded.processor.lock().ok()?;
+        processor.restart().ok()?;
+        Some(Shared {
+            node,
+            layout: processor.layout(),
+            latency: processor.latency(),
+            processor: loaded.processor.clone(),
+            failures: self.failures.clone(),
+        })
+    }
+
     /// The processor for the plugin at `node`: the loaded one, started over,
-    /// or a new one.
-    fn processor(&self, state: &mut State, node: NodeId, plugin: &PluginRef) -> Box<dyn Processor> {
+    /// or a new one. A worker that died or whose latency changed is loaded
+    /// again; one that cannot be loaded leaves the node passed through.
+    fn processor(
+        &self,
+        state: &mut State,
+        node: NodeId,
+        plugin: &PluginRef,
+        wired: PortLayout,
+    ) -> Box<dyn Processor> {
+        let unavailable = |reason: String| -> Box<dyn Processor> {
+            Box::new(Unavailable {
+                reason,
+                layout: wired,
+            })
+        };
         let key = LoadKey {
             path: plugin.path.clone(),
+            class_id: plugin.class_id.clone(),
             sidechain: plugin.sidechain,
         };
-        let loaded = state.loaded.get(&node).filter(|current| current.key == key);
-        if let Some(current) = loaded {
-            if current.in_use() {
-                return Box::new(Unavailable("an earlier take is still using it".to_string()));
+        if let Some(reason) = state.disabled.get(&node) {
+            return unavailable(reason.clone());
+        }
+        let stale = state.stale.contains(&node);
+        let reusable = state
+            .loaded
+            .get(&node)
+            .filter(|current| current.key == key && current.control.is_running() && !stale);
+        if let Some(current) = reusable {
+            if !current.wait_until_idle() {
+                return unavailable("an earlier take is still using it".to_string());
             }
-            let restarted = current.processor.lock().ok().and_then(|mut processor| {
-                processor.restart().ok()?;
-                Some(Shared {
-                    layout: processor.layout(),
-                    latency: processor.latency(),
-                    processor: current.processor.clone(),
-                })
-            });
-            if let Some(shared) = restarted {
+            if let Some(shared) = self.shared(node, current) {
+                if let Ok(mut failures) = self.failures.lock() {
+                    failures.remove(&node);
+                }
                 state.problems.remove(&node);
                 return Box::new(shared);
             }
         }
-        state.loaded.remove(&node);
+        // A new worker is needed. Its predecessor's settings go with it when
+        // it is the same plugin; a different plugin has no use for them.
+        if let Some(mut old) = state.loaded.remove(&node) {
+            let same_plugin = old.key.path == key.path && old.key.class_id == key.class_id;
+            match (same_plugin, old.control.is_running()) {
+                (true, true) => self.save_state(node, &mut old.control),
+                (false, _) => {
+                    let _ = delete_plugin_state(&self.paths, node);
+                }
+                (true, false) => {}
+            }
+        }
+        state.stale.remove(&node);
         let loaded = match &self.host {
             None => Err(NO_WORKER.to_string()),
             Some(host) => {
@@ -287,6 +433,7 @@ impl PluginChains {
                 let saved = load_plugin_state(&self.paths, node).ok().flatten();
                 host.load(
                     std::path::Path::new(&plugin.path),
+                    &plugin.class_id,
                     options,
                     saved.as_deref(),
                 )
@@ -296,10 +443,15 @@ impl PluginChains {
         match loaded {
             Ok((control, processor)) => {
                 let shared = Shared {
+                    node,
                     layout: processor.layout(),
                     latency: processor.latency(),
                     processor: Arc::new(Mutex::new(processor)),
+                    failures: self.failures.clone(),
                 };
+                if let Ok(mut failures) = self.failures.lock() {
+                    failures.remove(&node);
+                }
                 state.problems.remove(&node);
                 state.loaded.insert(
                     node,
@@ -315,8 +467,8 @@ impl PluginChains {
             Err(error) => {
                 tracing::warn!(plugin = %plugin.name, %error, "plugin did not load");
                 let reason = format!("{}: {error}", plugin.name);
-                state.problems.insert(node, reason.clone());
-                Box::new(Unavailable(reason))
+                state.disabled.insert(node, reason.clone());
+                unavailable(reason)
             }
         }
     }
@@ -328,6 +480,11 @@ impl PluginChains {
     }
 
     fn describe(&self, graph: GraphSpec, state: &State) -> AudioGraphView {
+        let failed = self
+            .failures
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_default();
         let nodes = graph
             .nodes
             .iter()
@@ -349,13 +506,17 @@ impl PluginChains {
                         },
                         None,
                     ),
-                    NodeKind::Gain { .. } => (UNAVAILABLE_LAYOUT, None),
+                    NodeKind::Gain { .. } => (UNLOADED_LAYOUT, None),
                     NodeKind::Plugin(_) => (
                         state
                             .loaded
                             .get(&node.id)
-                            .map_or(UNAVAILABLE_LAYOUT, |loaded| loaded.layout),
-                        state.problems.get(&node.id).cloned(),
+                            .map_or_else(|| wired_layout(&graph, node.id), |loaded| loaded.layout),
+                        failed
+                            .get(&node.id)
+                            .or_else(|| state.disabled.get(&node.id))
+                            .or_else(|| state.problems.get(&node.id))
+                            .cloned(),
                     ),
                 };
                 NodeStatus {
@@ -370,13 +531,17 @@ impl PluginChains {
         AudioGraphView { graph, nodes }
     }
 
-    /// Save `graph` for the next take on, after loading its plugins and
-    /// checking that it can be built. Nothing changes when it cannot.
+    /// Save `graph` for the next take on, after checking its topology,
+    /// loading its plugins, and checking that it can be built. Nothing is
+    /// saved when it cannot. Saving again is also what lets a plugin that
+    /// failed to load be tried again.
     pub(crate) fn set_graph(&self, graph: GraphSpec) -> Result<AudioGraphView, String> {
+        graph.validate().map_err(|error| error.to_string())?;
         let mut state = self.lock();
         if state.loaded.values().any(Loaded::in_use) {
             return Err("a recording is using the plugins; try again once it ends".to_string());
         }
+        state.disabled.clear();
         let trial = self
             .compile(&graph, &mut state)
             .map_err(|error| error.to_string())?;
@@ -384,19 +549,27 @@ impl PluginChains {
         for (node, loaded) in state.loaded.iter_mut() {
             self.save_state(*node, &mut loaded.control);
         }
+        let before = load_audio_graph(&self.paths).unwrap_or_else(|_| GraphSpec::passthrough());
         save_audio_graph(&self.paths, &graph).map_err(|error| format!("{error:#}"))?;
+        // A node that is gone takes its settings with it, so that a node
+        // added later under the same id does not inherit them.
+        for (node, _) in plugins_in(&before) {
+            if !plugins_in(&graph).any(|(id, _)| id == node) {
+                let _ = delete_plugin_state(&self.paths, node);
+            }
+        }
         state
             .loaded
             .retain(|node, _| plugins_in(&graph).any(|(id, _)| id == *node));
         Ok(self.describe(graph, &state))
     }
 
-    /// Show the editor of the plugin at `node`.
+    /// Show the editor of the plugin at `node`, once it has opened.
     pub(crate) fn open_editor(&self, node: NodeId) -> Result<(), String> {
-        let state = self.lock();
+        let mut state = self.lock();
         let plugin = state
             .loaded
-            .get(&node)
+            .get_mut(&node)
             .ok_or_else(|| format!("node {node} has no loaded plugin"))?;
         plugin
             .control
@@ -425,6 +598,16 @@ impl PluginChains {
             })
             .collect())
     }
+
+    /// The process ids of the loaded plugins' workers, by node.
+    #[cfg(test)]
+    fn worker_pids(&self) -> Vec<u32> {
+        self.lock()
+            .loaded
+            .values()
+            .map(|loaded| loaded.control.worker_pid())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +632,10 @@ mod tests {
         }
     }
 
+    fn registry(paths: Paths) -> std::sync::Arc<PluginChains> {
+        PluginChains::new(paths, |_, _| {})
+    }
+
     fn wire(from: u32, to: u32) -> Edge {
         Edge {
             from: Port {
@@ -471,10 +658,20 @@ mod tests {
         graph
     }
 
+    fn plugin_graph_of(bundle: String) -> GraphSpec {
+        with_node(NodeKind::Plugin(PluginRef {
+            path: bundle,
+            class_id: String::new(),
+            name: "plugin".to_string(),
+            enabled: true,
+            sidechain: Sidechain::Off,
+        }))
+    }
+
     #[test]
     fn a_graph_is_checked_before_it_is_saved() {
         let paths = scratch("chains-set");
-        let chains = PluginChains::new(paths.clone());
+        let chains = registry(paths.clone());
         let gain = with_node(NodeKind::Gain { db: -6. });
         let mut looped = gain.clone();
         looped.edges.push(wire(2, 2));
@@ -497,7 +694,7 @@ mod tests {
 
     #[test]
     fn a_fresh_graph_reports_the_channels_of_its_endpoints() {
-        let chains = PluginChains::new(scratch("chains-view"));
+        let chains = registry(scratch("chains-view"));
         assert_eq!(
             chains.view().unwrap().nodes,
             vec![
@@ -519,6 +716,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_plugin_that_cannot_load_keeps_its_wires_and_leaves_the_rest_of_the_graph_alone() {
+        // Two wires leave the plugin and two arrive, as a stereo plugin's
+        // would; with no worker the plugin is out, but the graph still builds.
+        let paths = scratch("chains-unavailable");
+        let chains = registry(paths.clone());
+        let mut graph = plugin_graph_of("/no/such/plugin.vst3".to_string());
+        graph.edges.push(Edge {
+            from: Port { node: 0, port: 0 },
+            to: Port { node: 2, port: 1 },
+        });
+        graph.edges.push(Edge {
+            from: Port { node: 2, port: 1 },
+            to: Port { node: 1, port: 0 },
+        });
+        crate::config::save_audio_graph(&paths, &graph).unwrap();
+        let chain = chains.build();
+        let view = chains.view().unwrap();
+        let plugin = view.nodes.iter().find(|node| node.node == 2).unwrap();
+        assert_eq!(
+            (
+                chain.is_some(),
+                plugin.main_inputs,
+                plugin.outputs,
+                plugin.problem.is_some()
+            ),
+            (true, 2, 2, true)
+        );
+    }
+
     /// Runs a real plugin, given by `LIMEN_TEST_VST3` with the worker in
     /// `LIMEN_VST_WORKER`, through the saved graph the way takes and the
     /// routing page do.
@@ -526,16 +753,8 @@ mod tests {
     #[ignore = "needs a worker and a plugin"]
     fn a_real_plugin_is_loaded_saved_run_and_reused() {
         let bundle = std::env::var("LIMEN_TEST_VST3").expect("LIMEN_TEST_VST3");
-        let paths = scratch("chains-real");
-        let chains = PluginChains::new(paths);
-        let graph = with_node(NodeKind::Plugin(PluginRef {
-            path: bundle.clone(),
-            class_id: String::new(),
-            name: "plugin".to_string(),
-            enabled: true,
-            sidechain: Sidechain::Off,
-        }));
-        let view = chains.set_graph(graph).unwrap();
+        let chains = registry(scratch("chains-real"));
+        let view = chains.set_graph(plugin_graph_of(bundle.clone())).unwrap();
         let plugin = view.nodes.iter().find(|node| node.node == 2).unwrap();
         assert_eq!(
             (
@@ -546,25 +765,13 @@ mod tests {
             (true, true, None)
         );
 
-        let take = |chains: &PluginChains| {
-            let mut chain = chains.build().expect("a chain");
-            let signal = (0..48_000)
-                .map(|frame| (frame as f32 * 0.05).sin() * 0.3)
-                .collect::<Vec<_>>();
-            let mut pcm = signal
-                .chunks(4800)
-                .flat_map(|chunk| chain.feed(chunk))
-                .collect::<Vec<_>>();
-            pcm.extend(chain.finish());
-            (pcm, chain.failures())
-        };
-        let (first, failures) = take(&chains);
-        let (second, _) = take(&chains);
+        let (first, failures) = take(&chains, None);
+        let (second, _) = take(&chains, None);
         let loud = |pcm: &[i16]| pcm.iter().any(|sample| sample.unsigned_abs() > 300);
         assert_eq!(
             (
-                first.len().abs_diff(16_000) < 200,
-                second.len().abs_diff(16_000) < 200,
+                first.len(),
+                second.len(),
                 loud(&first),
                 loud(&second),
                 failures,
@@ -574,7 +781,54 @@ mod tests {
                     .iter()
                     .any(|entry| entry.path == bundle),
             ),
-            (true, true, true, true, vec![], true)
+            (16_000, 16_000, true, true, vec![], true)
+        );
+    }
+
+    /// One second through the saved graph, in 4800-frame chunks. With
+    /// `kill`, the plugin's worker is killed after the first half.
+    fn take(
+        chains: &PluginChains,
+        kill: Option<&dyn Fn()>,
+    ) -> (Vec<i16>, Vec<plugin_graph::Failure>) {
+        let mut chain = chains.build().expect("a chain");
+        let signal = (0..48_000)
+            .map(|frame| (frame as f32 * 0.05).sin() * 0.3)
+            .collect::<Vec<_>>();
+        let mut pcm = Vec::new();
+        for (index, chunk) in signal.chunks(4800).enumerate() {
+            if index == 5
+                && let Some(kill) = kill
+            {
+                kill();
+            }
+            pcm.extend(chain.feed(chunk));
+        }
+        pcm.extend(chain.finish());
+        (pcm, chain.failures())
+    }
+
+    /// A worker that dies in the middle of a take costs that plugin only: the
+    /// take still comes out whole, and the next one loads the plugin again.
+    #[test]
+    #[ignore = "needs a worker and a plugin"]
+    fn a_worker_killed_mid_take_is_passed_through_and_loaded_again_for_the_next() {
+        let bundle = std::env::var("LIMEN_TEST_VST3").expect("LIMEN_TEST_VST3");
+        let chains = registry(scratch("chains-kill"));
+        chains.set_graph(plugin_graph_of(bundle)).unwrap();
+        let kill = || {
+            for pid in chains.worker_pids() {
+                // SAFETY: the pid is a child of this process that is still
+                // owned by the registry.
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        };
+        let (killed, failures) = take(&chains, Some(&kill));
+        let (after, again) = take(&chains, None);
+        assert_eq!(
+            (killed.len(), failures.len(), after.len(), again),
+            (16_000, 1, 16_000, vec![])
         );
     }
 }

@@ -226,11 +226,11 @@ fn a_failing_plugin_is_passed_through_on_time_and_reported() {
     let chain = spec(vec![plugin(true)], &[(0, 0, 2, 0), (2, 0, 1, 0)]);
     let mut graph = compile(&chain, vec![(2, Delay::failing_from(2, 1))]).unwrap();
     // The first block is the plugin's own; from the second, the bypass
-    // delays by the same two frames, starting empty.
+    // delays by the same two frames and carries on from where it was.
     assert_eq!(
         (run(&mut graph, &RAMP), graph.failures()),
         (
-            vec![0., 0., 1., 2., 0., 0., 5., 6., 7., 8., 9., 10.],
+            vec![0., 0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10.],
             vec![Failure {
                 node: 2,
                 reason: "the worker died".to_string()
@@ -333,4 +333,54 @@ fn a_graph_survives_saving_as_toml() {
     saved.nodes[3].y = -40.;
     let text = toml::to_string(&saved).unwrap();
     assert_eq!(toml::from_str::<GraphSpec>(&text).unwrap(), saved, "{text}");
+}
+
+#[test]
+fn only_the_default_wiring_counts_as_passthrough() {
+    let mut cut = GraphSpec::passthrough();
+    cut.edges.clear();
+    let mut second_channel = GraphSpec::passthrough();
+    second_channel.edges[0].from.port = 1;
+    let with_gain = spec(
+        vec![NodeKind::Gain { db: 0. }],
+        &[(0, 0, 2, 0), (2, 0, 1, 0)],
+    );
+    assert_eq!(
+        [
+            GraphSpec::passthrough(),
+            cut.clone(),
+            second_channel,
+            with_gain
+        ]
+        .map(|graph| graph.is_passthrough()),
+        [true, false, false, false]
+    );
+    // A graph with the wire cut is still a graph: it delivers silence.
+    let mut graph = compile(&cut, vec![]).unwrap();
+    assert_eq!(run(&mut graph, &RAMP), vec![0.; 12]);
+}
+
+#[test]
+fn validate_checks_the_topology_without_any_processor() {
+    let gain = || NodeKind::Gain { db: 0. };
+    let looped = spec(
+        vec![gain(), gain()],
+        &[(0, 0, 2, 0), (2, 0, 3, 0), (3, 0, 2, 0), (3, 0, 1, 0)],
+    );
+    let mut duplicated = spec(vec![gain()], &[(0, 0, 2, 0)]);
+    duplicated.edges.push(duplicated.edges[0]);
+    assert_eq!(
+        [
+            looped.validate(),
+            spec(vec![gain()], &[(0, 0, 9, 0)]).validate(),
+            duplicated.validate(),
+            GraphSpec::passthrough().validate(),
+        ],
+        [
+            Err(GraphError::Cycle),
+            Err(GraphError::UnknownNode(9)),
+            Err(GraphError::DuplicateEdge(duplicated.edges[0])),
+            Ok(()),
+        ]
+    );
 }

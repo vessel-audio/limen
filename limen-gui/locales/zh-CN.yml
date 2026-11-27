@@ -132,6 +132,10 @@ routing.recording: 正在录制…
 routing.play_original: 播放原声
 routing.play_processed: 播放插件处理后
 routing.stop: 停止
+routing.remove_selected: 移除所选
+routing.connect_from: 从
+routing.connect_to: 到
+routing.connect: 连接
 connection.offline: 后台服务未连接
 settings.title: 设置
 settings.general: 常规

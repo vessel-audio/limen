@@ -132,6 +132,10 @@ routing.recording: Recording…
 routing.play_original: Play original
 routing.play_processed: Play with plugins
 routing.stop: Stop
+routing.remove_selected: Remove selected
+routing.connect_from: From
+routing.connect_to: To
+routing.connect: Connect
 connection.offline: Service offline
 settings.title: Settings
 settings.general: General

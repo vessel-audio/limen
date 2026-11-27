@@ -3,12 +3,21 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use vst_audio::{Command, HostEvent, Instance};
+use vst_audio::{Command, HostEvent, Instance, RequestId, Status};
 
 use super::host::Vst3Error;
 
 /// How long saving a plugin's state may take.
 const STATE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a plugin's editor may take to open.
+const EDITOR_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a worker answered a request with.
+enum Answer {
+    Done,
+    State(Vec<u8>),
+}
 
 /// Something that happened to a loaded plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +26,9 @@ pub enum PluginEvent {
     EditorClosed,
     /// The plugin's worker failed; the processor reports it too.
     Failed(String),
+    /// The plugin now has another latency than the one it loaded with, so a
+    /// graph built around the old one is out of step.
+    LatencyChanged,
 }
 
 /// A loaded plugin's controls. It owns the plugin's worker, which stops when
@@ -34,12 +46,32 @@ impl Vst3Control {
         }
     }
 
-    /// Show the plugin's own editor in a window of its own. Fails right away
-    /// when the worker cannot reach a display; a plugin with no editor says
-    /// so through [`Self::events`].
-    pub fn open_editor(&self) -> Result<(), Vst3Error> {
-        self.instance.controller().request(Command::OpenEditor)?;
-        Ok(())
+    /// Show the plugin's own editor in a window of its own. Waits for the
+    /// worker to say it opened, so that a machine with no display, or a plugin
+    /// with no editor, is an error here rather than later.
+    pub fn open_editor(&mut self) -> Result<(), Vst3Error> {
+        let request = self.instance.controller().request(Command::OpenEditor)?;
+        self.wait_for(request, EDITOR_TIMEOUT).map(|_| ())
+    }
+
+    /// Whether the plugin's worker is up. A worker that crashed or was killed
+    /// is not, and its processor does nothing more.
+    pub fn is_running(&self) -> bool {
+        self.instance.controller().status() == Status::Running
+    }
+
+    /// The operating system's id of the plugin's worker process.
+    pub fn worker_pid(&self) -> u32 {
+        self.instance.controller().worker_pid()
+    }
+
+    /// Replace the plugin's state with `bytes`, as [`Self::save_state`] gave.
+    pub fn restore_state(&mut self, bytes: Vec<u8>) -> Result<(), Vst3Error> {
+        let request = self
+            .instance
+            .controller()
+            .request(Command::RestoreState(bytes))?;
+        self.wait_for(request, STATE_TIMEOUT).map(|_| ())
     }
 
     pub fn close_editor(&self) -> Result<(), Vst3Error> {
@@ -50,13 +82,27 @@ impl Vst3Control {
     /// The plugin's state, to pass to [`super::Vst3Host::load`] later.
     pub fn save_state(&mut self) -> Result<Vec<u8>, Vst3Error> {
         let request = self.instance.controller().request(Command::SaveState)?;
-        let deadline = Instant::now() + STATE_TIMEOUT;
+        match self.wait_for(request, STATE_TIMEOUT)? {
+            Answer::State(bytes) => Ok(bytes),
+            Answer::Done => Err(Vst3Error::Plugin(
+                "the plugin answered without its state".to_string(),
+            )),
+        }
+    }
+
+    /// Wait for the worker's answer to `request`, keeping whatever else it
+    /// says meanwhile for [`Self::events`].
+    fn wait_for(&mut self, request: RequestId, timeout: Duration) -> Result<Answer, Vst3Error> {
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             match self.instance.try_next_event() {
                 Some(HostEvent::State {
                     request: Some(id),
                     bytes,
-                }) if id == request => return Ok(bytes),
+                }) if id == request => return Ok(Answer::State(bytes)),
+                Some(HostEvent::Completed { request: id }) if id == request => {
+                    return Ok(Answer::Done);
+                }
                 Some(HostEvent::RequestFailed {
                     request: id,
                     reason,
@@ -67,7 +113,7 @@ impl Vst3Control {
                 None => std::thread::sleep(Duration::from_millis(5)),
             }
         }
-        Err(Vst3Error::Timeout(STATE_TIMEOUT))
+        Err(Vst3Error::Timeout(timeout))
     }
 
     /// What happened since the last call.
@@ -81,10 +127,12 @@ impl Vst3Control {
     fn translate(event: HostEvent) -> Option<PluginEvent> {
         match event {
             HostEvent::EditorClosed => Some(PluginEvent::EditorClosed),
-            HostEvent::Failed { reason } | HostEvent::RequestFailed { reason, .. } => {
-                Some(PluginEvent::Failed(reason))
-            }
-            HostEvent::Completed { .. }
+            HostEvent::Failed { reason } => Some(PluginEvent::Failed(reason)),
+            HostEvent::LatencyChanged(_) => Some(PluginEvent::LatencyChanged),
+            // A refused request, such as an editor that cannot open, is told
+            // to whoever made it; the worker itself is fine.
+            HostEvent::RequestFailed { .. }
+            | HostEvent::Completed { .. }
             | HostEvent::State { .. }
             | HostEvent::Parameters { .. }
             | HostEvent::EditorStatus { .. }
@@ -92,7 +140,6 @@ impl Vst3Control {
             | HostEvent::EditorResized { .. }
             | HostEvent::ParameterEdited { .. }
             | HostEvent::ParametersChanged
-            | HostEvent::LatencyChanged(_)
             | HostEvent::RecoveryRequired
             | HostEvent::Recovered { .. }
             | HostEvent::Stopped

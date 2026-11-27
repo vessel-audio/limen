@@ -65,7 +65,15 @@ impl Step {
             .filter(|_| running)
             .map(|processor| processor.process(frames, &self.input, output))
         {
-            Some(Ok(())) => return,
+            Some(Ok(())) => {
+                // Keep what a bypass would pass on, so that if this processor
+                // fails the signal carries on from where it was.
+                self.bypass
+                    .iter_mut()
+                    .zip(self.input.chunks_exact(frames))
+                    .for_each(|(delay, input)| delay.advance(input));
+                return;
+            }
             Some(Err(error)) => self.failure = Some(error.0),
             None => {}
         }

@@ -501,12 +501,15 @@ async fn an_audio_request_says_so_when_audio_routing_is_not_available() {
 async fn a_test_recording_is_refused_while_dictating() {
     let mut harness = harness();
     let dir = std::env::temp_dir().join(format!("limen-actor-audio-{}", std::process::id()));
-    harness.actor.audio = Some(crate::audio::PluginChains::new(crate::config::Paths {
-        socket: dir.join("limen.sock"),
-        log_file: dir.join("daemon.log"),
-        cache_dir: dir.join("cache"),
-        config_file: dir.join("config.toml"),
-    }));
+    harness.actor.audio = Some(crate::audio::PluginChains::new(
+        crate::config::Paths {
+            socket: dir.join("limen.sock"),
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+            config_file: dir.join("config.toml"),
+        },
+        |_, _| {},
+    ));
     start_recording(&mut harness.actor);
     let (reply, mut answer) = oneshot::channel();
     harness

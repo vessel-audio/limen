@@ -343,7 +343,9 @@ impl AppView {
             }
             BridgeEvent::NetworkSaved { id, result } => self.network.saved(id, result),
             BridgeEvent::AudioGraph { id, result } => {
-                self.routing.graph_reply(id, result);
+                // What was edited while that request was out goes now.
+                let next = self.routing.graph_reply(id, result);
+                self.send_audio(next);
                 Vec::new()
             }
             BridgeEvent::AudioScanned { id, result } => {

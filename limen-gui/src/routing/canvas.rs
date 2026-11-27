@@ -30,9 +30,10 @@ impl AppView {
     /// A window position as a place on the canvas.
     fn routing_point(&self, position: Point<Pixels>) -> (f32, f32) {
         let origin = self.routing_origin.get();
+        let pan = self.routing.pan;
         (
-            f32::from(position.x - origin.x),
-            f32::from(position.y - origin.y),
+            f32::from(position.x - origin.x) + pan.0,
+            f32::from(position.y - origin.y) + pan.1,
         )
     }
 
@@ -56,7 +57,10 @@ pub(super) fn title(node: &NodeSpec) -> (String, bool) {
     }
 }
 
-pub(super) fn canvas_view(view: &AppView, cx: &mut Context<AppView>) -> Stateful<Div> {
+pub(super) fn canvas_view(
+    view: &AppView,
+    cx: &mut Context<AppView>,
+) -> ObservedElement<Stateful<Div>> {
     let theme = cx.theme();
     let (border, line, chosen_line, backdrop) = (
         theme.border,
@@ -65,6 +69,7 @@ pub(super) fn canvas_view(view: &AppView, cx: &mut Context<AppView>) -> Stateful
         theme.muted.opacity(0.3),
     );
     let routing = &view.routing;
+    let pan = routing.pan;
     let graph = routing
         .graph
         .clone()
@@ -85,8 +90,9 @@ pub(super) fn canvas_view(view: &AppView, cx: &mut Context<AppView>) -> Stateful
                 usize::from(edge.from.port),
             );
             let to = port_point(node(edge.to.node)?, Side::Input, usize::from(edge.to.port));
+            let shift = |(x, y): (f32, f32)| (x - pan.0, y - pan.1);
             Some((
-                curve_points(wire_curve(from, to)),
+                curve_points(wire_curve(shift(from), shift(to))),
                 routing.selection == Selection::Wire(*edge),
             ))
         })
@@ -131,6 +137,8 @@ pub(super) fn canvas_view(view: &AppView, cx: &mut Context<AppView>) -> Stateful
 
     div()
         .id("routing-canvas")
+        .test_support()
+        .accessibility_id("routing-canvas")
         .relative()
         .h(px(CANVAS_HEIGHT))
         .w_full()
@@ -149,6 +157,14 @@ pub(super) fn canvas_view(view: &AppView, cx: &mut Context<AppView>) -> Stateful
             }),
         )
         .on_drop(cx.listener(|this, _: &NodeDrag, _, cx| this.finish_node_drag(cx)))
+        // The wheel and the trackpad scroll the canvas, so that a node moved
+        // out of view can be brought back.
+        .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+            let delta = event.delta.pixel_delta(px(20.));
+            this.routing
+                .scroll_by((-f32::from(delta.x), -f32::from(delta.y)));
+            cx.notify();
+        }))
         .child(layer)
         .children(cards)
         .children(ports)
@@ -234,8 +250,8 @@ fn node_card(view: &AppView, spec: &NodeSpec, cx: &mut Context<AppView>) -> Stat
     div()
         .id(SharedString::from(format!("node-card-{id}")))
         .absolute()
-        .left(px(spec.x))
-        .top(px(spec.y))
+        .left(px(spec.x - view.routing.pan.0))
+        .top(px(spec.y - view.routing.pan.1))
         .w(px(NODE_WIDTH))
         .h(px(node_height(size)))
         .rounded_md()
@@ -271,6 +287,7 @@ fn port_dots(
         .chain(outputs)
         .map(|(side, index)| {
             let (x, y) = port_point(spec, side, index);
+            let (x, y) = (x - routing.pan.0, y - routing.pan.1);
             let port = Port {
                 node: spec.id,
                 port: index as u16,

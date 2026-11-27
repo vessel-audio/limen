@@ -86,30 +86,62 @@ impl Capture {
 
 /// Microphone capture for the plugin graph: mono f32 at the graph's rate,
 /// which PipeWire converts to, so plugins see unquantized audio.
-pub struct FloatCapture(Capture);
+pub struct FloatCapture {
+    capture: Capture,
+    /// Bytes read and not yet a whole chunk.
+    partial: Vec<u8>,
+}
 
 impl FloatCapture {
     /// Start recording from the given pw-record target (`None` = default).
     pub fn start(device: Option<&str>) -> Result<Self> {
-        Capture::spawn(device, "f32", "48000").map(Self)
+        Ok(Self {
+            capture: Capture::spawn(device, "f32", "48000")?,
+            partial: Vec::new(),
+        })
     }
 
-    /// Read exactly `samples` samples; `Ok(None)` on EOF. Not safe to drop
-    /// mid-await: a partly read chunk is lost, which only matters when the
-    /// take is ending anyway.
+    fn samples(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect()
+    }
+
+    /// Everything read and not yet returned, down to the last whole sample:
+    /// the end of a take that is stopping.
+    pub fn drain(&mut self) -> Vec<f32> {
+        let samples = Self::samples(&self.partial);
+        self.partial.clear();
+        samples
+    }
+
+    /// Read exactly `samples` samples; `Ok(None)` on EOF. Safe to drop
+    /// mid-await: what was already read is kept for the next call.
     pub async fn read_chunk(&mut self, samples: usize) -> Result<Option<Vec<f32>>> {
-        let stdout = self.0.child.stdout.as_mut().context("pw-record stdout")?;
-        let mut buf = vec![0u8; samples * 4];
-        match stdout.read_exact(&mut buf).await {
-            Ok(_) => Ok(Some(
-                buf.as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|bytes| f32::from_le_bytes(*bytes))
-                    .collect(),
-            )),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
-            Err(e) => Err(e.into()),
+        let wanted = samples * 4;
+        let stdout = self
+            .capture
+            .child
+            .stdout
+            .as_mut()
+            .context("pw-record stdout")?;
+        while self.partial.len() < wanted {
+            let mut buf = [0u8; 8192];
+            match stdout.read(&mut buf).await? {
+                0 => {
+                    return Ok(match self.partial.len() >= 4 {
+                        true => Some(self.drain()),
+                        false => None,
+                    });
+                }
+                read => self.partial.extend_from_slice(&buf[..read]),
+            }
         }
+        let chunk = Self::samples(&self.partial[..wanted]);
+        self.partial.drain(..wanted);
+        Ok(Some(chunk))
     }
 }

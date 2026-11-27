@@ -239,6 +239,13 @@ impl<'a> Ui<'a> {
         self.act(|window, cx| window.click(id, cx));
     }
 
+    /// Click the element at `offset` from its corner, then let the window
+    /// settle.
+    pub(super) fn click_at(&mut self, id: &str, offset: Point<Pixels>) {
+        let id = gpui_kit::SharedString::from(id.to_string());
+        self.act(|window, cx| window.click_at(id, offset, cx));
+    }
+
     /// Turn the wheel over the element, then settle.
     pub(super) fn scroll(&mut self, id: &str, delta: ScrollDelta) {
         let id = gpui_kit::SharedString::from(id.to_string());

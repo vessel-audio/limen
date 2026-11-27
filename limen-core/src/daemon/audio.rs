@@ -29,11 +29,20 @@ impl DictationActor {
                         return;
                     }
                 }
+                // Claim the microphone here, where a dictation that starts
+                // next is handled in turn, so that it finds the test to cancel.
+                let cancel = match audio.begin_test(seconds) {
+                    Ok(cancel) => cancel,
+                    Err(message) => {
+                        let _ = reply.send(error(&message));
+                        return;
+                    }
+                };
                 let device = Config::load(&self.config_file)
                     .ok()
                     .and_then(|config| config.audio.device);
                 tokio::spawn(async move {
-                    let answer = match audio.record_test(seconds, device).await {
+                    let answer = match audio.record_test(cancel, seconds, device).await {
                         Ok(files) => Reply::AudioTest(files),
                         Err(failure) => error(&format!("{failure:#}")),
                     };
