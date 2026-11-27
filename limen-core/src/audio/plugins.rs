@@ -606,26 +606,33 @@ impl PluginChains {
             std::mem::take(&mut state.crashes),
         );
         state.retired.clear();
+        // A graph that is refused, by the compile or by the disk, leaves every
+        // plugin as it was: the workers the compile replaced come back.
+        let rollback = |state: &mut State| {
+            for (node, old) in std::mem::take(&mut state.retired) {
+                state.loaded.insert(node, old);
+            }
+        };
         let trial = match self.compile(&graph, &mut state) {
             Ok(trial) => trial,
             Err(error) => {
-                // A graph that is refused leaves every plugin as it was: the
-                // workers the compile replaced come back.
-                for (node, old) in std::mem::take(&mut state.retired) {
-                    state.loaded.insert(node, old);
-                }
+                rollback(&mut state);
                 (state.disabled, state.crashes) = (disabled, crashes);
                 return Err(error.to_string());
             }
         };
         drop(trial);
-        state.retired.clear();
         for (node, loaded) in state.loaded.iter_mut() {
             let identity = loaded.key.identity();
             self.save_state(*node, &identity, &mut loaded.control);
         }
         let before = load_audio_graph(&self.paths).unwrap_or_else(|_| GraphSpec::passthrough());
-        save_audio_graph(&self.paths, &graph).map_err(|error| format!("{error:#}"))?;
+        if let Err(error) = save_audio_graph(&self.paths, &graph) {
+            rollback(&mut state);
+            (state.disabled, state.crashes) = (disabled, crashes);
+            return Err(format!("{error:#}"));
+        }
+        state.retired.clear();
         // A node that is gone takes its settings with it, so that a node
         // added later under the same id does not inherit them.
         for (node, _) in plugins_in(&before) {
