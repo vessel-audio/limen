@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["limen-core", "limen-genai", "limen-gui", "limen-rig", "limen"]
-default-members = ["limen-core", "limen-genai", "limen-rig", "limen"]
+members = ["limen-core", "limen-genai", "limen-gui", "limen-rig", "limen", "limen-vst-worker", "plugin-graph"]
+default-members = ["limen-core", "limen-genai", "limen-rig", "limen", "limen-vst-worker", "plugin-graph"]
 
 [workspace.package]
 version = "0.1.0"
@@ -44,6 +44,10 @@ limen-core = { path = "limen-core" }
 limen-genai = { path = "limen-genai" }
 limen-gui = { path = "limen-gui" }
 limen-rig = { path = "limen-rig" }
+plugin-graph = { path = "plugin-graph" }
+# Out-of-process VST3 hosting (plugin-graph, feature `vst3`). The worker
+# binary it launches is a separate crate, `vst-audio-worker`.
+vst-audio = "0.13"
 gpui-kit = "=0.8.1"
 zbus = { version = "6.1.0", default-features = false, features = [
   "proxy",

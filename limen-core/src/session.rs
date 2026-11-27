@@ -18,10 +18,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use crate::audio::{CaptureReap, Level, SAMPLE_RATE, capture_loop, reap_capture};
+use crate::audio::{
+    CaptureReap, Level, PluginChains, SAMPLE_RATE, capture_loop, chain_capture_loop, reap_capture,
+    stop_chain_capture,
+};
 use crate::backend::ModelBackend;
 use crate::config::{Config, ProviderConfig};
 use crate::dictation::Event;
@@ -62,6 +65,7 @@ impl SessionHandle {
         backend: Arc<dyn ModelBackend>,
         meter: Meter,
         dictation: mpsc::UnboundedSender<Event>,
+        chains: Option<Arc<PluginChains>>,
     ) -> (Self, watch::Receiver<Level>) {
         let (mailbox, commands) = mpsc::unbounded_channel();
         let (level, levels) = watch::channel(Level::SILENCE);
@@ -74,6 +78,7 @@ impl SessionHandle {
                 dictation,
                 active: None,
                 level,
+                chains,
             }
             .run(),
         );
@@ -126,6 +131,9 @@ struct SessionActor {
     dictation: mpsc::UnboundedSender<Event>,
     active: Option<Active>,
     level: watch::Sender<Level>,
+    /// The plugins takes run the microphone through, when there are any to
+    /// offer.
+    chains: Option<Arc<PluginChains>>,
 }
 
 impl SessionActor {
@@ -176,6 +184,7 @@ impl SessionActor {
             &*self.backend,
             self.meter.clone(),
             self.level.clone(),
+            self.chains.as_ref(),
         )
         .await
         {
@@ -233,6 +242,9 @@ struct Active {
     /// `Option` because a JoinHandle panics when polled after completion:
     /// reaping takes it out, so teardown can never poll it twice.
     capture: Option<JoinHandle<()>>,
+    /// Asks a capture running through plugins to stop and flush them; absent
+    /// for a plain capture, which is simply aborted.
+    stop: Option<oneshot::Sender<()>>,
     stage: Stage,
     level: watch::Sender<Level>,
 }
@@ -264,6 +276,7 @@ impl Active {
         backend: &dyn ModelBackend,
         meter: Meter,
         level: watch::Sender<Level>,
+        chains: Option<&Arc<PluginChains>>,
     ) -> Result<Self> {
         let session_cfg = SessionConfig {
             language: cfg.provider.language.clone(),
@@ -278,16 +291,42 @@ impl Active {
         let capture_level = level.clone();
         let device = cfg.audio.device.clone();
         let chunk_ms = cfg.audio.chunk_ms;
-        let capture = tokio::spawn(async move {
-            if let Err(e) = capture_loop(device, chunk_ms, tx, capture_level).await {
-                tracing::warn!(error = %format!("{e:#}"), "capture loop failed");
+        // Loading plugins can take a while; keep it off the runtime.
+        let chain = match chains.cloned() {
+            Some(chains) => tokio::task::spawn_blocking(move || chains.build())
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let (capture, stop) = match chain {
+            Some(chain) => {
+                let (stop, stopped) = oneshot::channel();
+                let capture = tokio::spawn(async move {
+                    if let Err(e) =
+                        chain_capture_loop(device, chunk_ms, tx, capture_level, chain, stopped)
+                            .await
+                    {
+                        tracing::warn!(error = %format!("{e:#}"), "capture loop failed");
+                    }
+                });
+                (capture, Some(stop))
             }
-        });
+            None => {
+                let capture = tokio::spawn(async move {
+                    if let Err(e) = capture_loop(device, chunk_ms, tx, capture_level).await {
+                        tracing::warn!(error = %format!("{e:#}"), "capture loop failed");
+                    }
+                });
+                (capture, None)
+            }
+        };
         Ok(Self {
             sink,
             events,
             pcm,
             capture: Some(capture),
+            stop,
             stage: Stage::Recording,
             level,
         })
@@ -341,7 +380,16 @@ impl Active {
     /// Stop capturing, drain whatever PCM is still queued (the tail of the
     /// utterance lives there), then finalize so the provider flushes it.
     async fn finalize(&mut self) -> Result<()> {
-        match self.reap_capture().await {
+        // Capture through plugins is asked to flush them first; it is aborted
+        // only if it does not finish.
+        let reaped = match self.stop.take() {
+            Some(stop) => match self.capture.take() {
+                Some(handle) => stop_chain_capture(handle, stop, self.level.clone()).await,
+                None => CaptureReap::Reaped,
+            },
+            None => self.reap_capture().await,
+        };
+        match reaped {
             CaptureReap::Reaped => {}
             CaptureReap::TimedOut => anyhow::bail!("microphone capture did not stop"),
         }
@@ -354,6 +402,7 @@ impl Active {
     /// Abort the capture task and wait until pw-record is actually dead
     /// (kill_on_drop runs when the task's `Capture` is dropped).
     async fn reap_capture(&mut self) -> CaptureReap {
+        self.stop = None;
         self.level.send_replace(Level::SILENCE);
         let Some(handle) = self.capture.take() else {
             return CaptureReap::Reaped;
@@ -445,6 +494,7 @@ mod tests {
             events: Box::new(ScriptedEvents(events.into_iter().collect())),
             pcm,
             capture: None,
+            stop: None,
             stage: Stage::Recording,
             level: watch::channel(Level::SILENCE).0,
         }
@@ -477,6 +527,7 @@ mod tests {
                 dictation,
                 active: Some(active),
                 level: watch::channel(Level::SILENCE).0,
+                chains: None,
             }
             .run(),
         );
@@ -487,6 +538,28 @@ mod tests {
         tokio::time::timeout(TEST_TIMEOUT, reports.recv())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn finalize_lets_a_capture_through_plugins_flush_before_draining() {
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        let (tx, pcm) = mpsc::channel(2);
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let mut active = recording_take(&operations, pcm, []);
+        // A capture that holds its last chunk back until it is told to stop,
+        // as plugins with lookahead do.
+        active.capture = Some(tokio::spawn(async move {
+            let _ = stopped.await;
+            tx.send(vec![9, 9]).await.unwrap();
+        }));
+        active.stop = Some(stop);
+
+        active.finalize().await.unwrap();
+
+        assert_eq!(
+            *operations.lock().unwrap(),
+            [SinkOperation::Audio(vec![9, 9]), SinkOperation::Finalized]
+        );
     }
 
     #[tokio::test]
@@ -620,6 +693,7 @@ mod tests {
             events: Box::new(ScriptedEvents(VecDeque::new())),
             pcm,
             capture: None,
+            stop: None,
             stage: Stage::Recording,
             level,
         };

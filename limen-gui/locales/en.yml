@@ -96,6 +96,42 @@ note.removed: Removed the GNOME custom shortcut.
 note.disabled: Disabled the GNOME custom shortcut; it stays otherwise.
 about.menu: About
 connection.online: Service ready
+nav.routing: Audio routing
+routing.title: Audio routing
+routing.hint: Route your voice through plugins before it is transcribed. Changes apply from the next recording.
+routing.add_plugin: Add plugin
+routing.add_gain: Add gain
+routing.scanning: Looking for plugins…
+routing.no_plugins: No VST3 effect plugins were found
+routing.close: Close
+routing.input: Microphone
+routing.output: Recognizer
+routing.gain: Gain
+routing.in: in
+routing.out: out
+routing.key: side-chain
+routing.port_in: input
+routing.port_key: side-chain input
+routing.port_out: output
+routing.enabled: enabled
+routing.sidechain: Side-chain
+routing.edit: Edit
+routing.remove: Remove
+routing.nodes: Plugins and gains
+routing.no_nodes: Nothing added yet. Add a plugin to start.
+routing.connections: Connections
+routing.no_connections: Nothing is wired. Click an output dot, then an input dot.
+routing.wiring: Now click an input to finish the wire.
+routing.loop: That wire would feed a node back into itself.
+routing.loading: Reading the routing…
+routing.retry: Try again
+routing.test: Test recording
+routing.test_hint: Record a few seconds of your voice, then hear it with and without the plugins.
+routing.record: Record
+routing.recording: Recording…
+routing.play_original: Play original
+routing.play_processed: Play with plugins
+routing.stop: Stop
 connection.offline: Service offline
 settings.title: Settings
 settings.general: General

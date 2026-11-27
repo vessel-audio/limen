@@ -39,14 +39,18 @@ impl Drop for Capture {
 impl Capture {
     /// Start recording from the given pw-record target (`None` = default).
     pub fn start(device: Option<&str>) -> Result<Self> {
+        Self::spawn(device, "s16", "16000")
+    }
+
+    fn spawn(device: Option<&str>, format: &str, rate: &str) -> Result<Self> {
         let mut cmd = Command::new("pw-record");
         cmd.args([
             "--container",
             "raw",
             "--format",
-            "s16",
+            format,
             "--rate",
-            "16000",
+            rate,
             "--channels",
             "1",
         ])
@@ -72,6 +76,36 @@ impl Capture {
                     .0
                     .iter()
                     .map(|bytes| i16::from_le_bytes(*bytes))
+                    .collect(),
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// Microphone capture for the plugin graph: mono f32 at the graph's rate,
+/// which PipeWire converts to, so plugins see unquantized audio.
+pub struct FloatCapture(Capture);
+
+impl FloatCapture {
+    /// Start recording from the given pw-record target (`None` = default).
+    pub fn start(device: Option<&str>) -> Result<Self> {
+        Capture::spawn(device, "f32", "48000").map(Self)
+    }
+
+    /// Read exactly `samples` samples; `Ok(None)` on EOF. Not safe to drop
+    /// mid-await: a partly read chunk is lost, which only matters when the
+    /// take is ending anyway.
+    pub async fn read_chunk(&mut self, samples: usize) -> Result<Option<Vec<f32>>> {
+        let stdout = self.0.child.stdout.as_mut().context("pw-record stdout")?;
+        let mut buf = vec![0u8; samples * 4];
+        match stdout.read_exact(&mut buf).await {
+            Ok(_) => Ok(Some(
+                buf.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| f32::from_le_bytes(*bytes))
                     .collect(),
             )),
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),

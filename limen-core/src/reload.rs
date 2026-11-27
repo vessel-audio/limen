@@ -22,7 +22,13 @@ pub(crate) async fn reload(paths: &Paths, request: &v1::Request) -> Result<Confi
         Ok(v1::Reply::Error { message }) => {
             bail!("saved, but the daemon did not apply it: {message}")
         }
-        Ok(v1::Reply::ShortcutStatus(_) | v1::Reply::Accepted { .. }) => {
+        Ok(
+            v1::Reply::ShortcutStatus(_)
+            | v1::Reply::Accepted { .. }
+            | v1::Reply::AudioPlugins { .. }
+            | v1::Reply::AudioGraph(_)
+            | v1::Reply::AudioTest(_),
+        ) => {
             bail!("the daemon answered something else")
         }
         Err(error) if error.downcast_ref::<ipc::NotRunning>().is_some() => Ok(ConfigChange::Saved),

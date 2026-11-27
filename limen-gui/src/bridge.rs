@@ -1,5 +1,6 @@
 //! Tokio bridge for subscriptions, daemon lifecycle, and shortcut operations.
 
+mod audio;
 mod lifecycle;
 mod models;
 mod network;
@@ -20,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::model::{Msg, Toast};
+pub use audio::AudioRequest;
 use lifecycle::{
     StartError, StartResult, is_outdated, request_with_timeout, restart, wait_for_socket_removal,
     wait_for_termination,
@@ -40,6 +42,7 @@ pub enum BridgeCommand {
     Shortcut(ShortcutRequest),
     Model(ModelRequest),
     Network(NetworkRequest),
+    Audio(AudioRequest),
 }
 
 /// Shortcut writes executed through the same core operations as the CLI.
@@ -120,6 +123,25 @@ pub enum BridgeEvent {
     NetworkSaved {
         id: u64,
         result: Result<ConfigChange, String>,
+    },
+    /// The routing graph and the state of its nodes, as the daemon has it.
+    AudioGraph {
+        id: u64,
+        result: Result<limen_core::AudioGraphView, String>,
+    },
+    /// The plugins installed on the daemon's machine.
+    AudioScanned {
+        id: u64,
+        result: Result<Vec<limen_core::PluginEntry>, String>,
+    },
+    /// Whether a plugin's editor opened.
+    AudioEditor {
+        result: Result<(), String>,
+    },
+    /// The test recording, before and after the graph.
+    AudioTest {
+        id: u64,
+        result: Result<limen_core::TestFiles, String>,
     },
     Toast(Toast),
 }
@@ -594,6 +616,7 @@ async fn handle_command(
         }
         BridgeCommand::Model(request) => models::handle(env, events, request),
         BridgeCommand::Network(request) => network::handle(env, events, request),
+        BridgeCommand::Audio(request) => audio::handle(env, events, request),
     }
 }
 

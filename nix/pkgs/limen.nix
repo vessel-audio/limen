@@ -66,9 +66,13 @@ rustPlatform.buildRustPackage {
     lockFile = ../../Cargo.lock;
     allowBuiltinFetchGit = true;
   };
+  # The worker hosts each VST3 plugin in a process of its own, so a plugin
+  # that crashes cannot take limen down; limen looks for it beside itself.
   cargoBuildFlags = [
     "-p"
     "limen"
+    "-p"
+    "limen-vst-worker"
   ];
   cargoTestFlags =
     if withGui then
@@ -134,6 +138,11 @@ rustPlatform.buildRustPackage {
       mkdir -p $contents/MacOS $contents/Resources
       mv $out/bin/limen $contents/MacOS/limen
       ln -s $contents/MacOS/limen $out/bin/limen
+      # Plugins load into the worker, not into the app: if the app is ever
+      # notarized with the hardened runtime, it is the worker that needs the
+      # com.apple.security.cs.disable-library-validation entitlement.
+      mv $out/bin/limen-vst-worker $contents/MacOS/limen-vst-worker
+      ln -s $contents/MacOS/limen-vst-worker $out/bin/limen-vst-worker
 
       # png2icns accepts only the sizes icns has a slot for; 64 is not one.
       iconset=$(mktemp -d)
@@ -153,16 +162,19 @@ rustPlatform.buildRustPackage {
         desktop-file-validate "$entry"
         grep -qx "Exec=$out/bin/limen ${launch}" "$entry"
         test -f $out/share/icons/hicolor/scalable/apps/io.github.Emin017.Limen.svg
+        test -x $out/bin/limen-vst-worker
         runHook postInstallCheck
       ''
     else
       ''
         runHook preInstallCheck
         $out/bin/limen --help >/dev/null
+        test -x $out/bin/limen-vst-worker
       ''
       + lib.optionalString withAppBundle ''
         contents=$out/Applications/Limen.app/Contents
         test -f $contents/MacOS/limen
+        test -x $contents/MacOS/limen-vst-worker
         test ! -L $contents/MacOS/limen
         test -x $contents/MacOS/limen
         test "$(realpath $out/bin/limen)" = "$(realpath $contents/MacOS/limen)"

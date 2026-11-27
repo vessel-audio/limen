@@ -14,6 +14,11 @@
 //! | `{"v":1,"type":"shortcut_status"}`       | `{"type":"shortcut_status",...}`         |
 //! | `{"v":1,"type":"provider_reload"}`       | `{"type":"ok"}`, for the next take       |
 //! | `{"v":1,"type":"polish_reload"}`         | `{"type":"ok"}`, for the next transcript |
+//! | `{"v":1,"type":"audio_scan"}`            | `{"type":"audio_plugins",...}`           |
+//! | `{"v":1,"type":"audio_graph_get"}`       | `{"type":"audio_graph",...}`             |
+//! | `{"v":1,"type":"audio_graph_set",...}`   | `{"type":"audio_graph",...}`, next take  |
+//! | `{"v":1,"type":"audio_editor_open",...}` | `{"type":"ok"}`, once the window opens   |
+//! | `{"v":1,"type":"audio_test","seconds":N}`| `{"type":"audio_test",...}` after N s    |
 //! | anything that fails                      | `{"type":"error","message":"..."}`       |
 
 use std::time::Duration;
@@ -22,7 +27,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
+use plugin_graph::{GraphSpec, NodeId};
+
 use super::Command;
+use super::audio::{AudioGraphView, PluginEntry, TestFiles};
 use crate::shortcut::HoldEdge;
 use crate::shortcut::status::ShortcutStatus;
 
@@ -31,6 +39,13 @@ pub const VERSION: u64 = 1;
 
 /// A rebind may wait for the old portal request and session to close.
 const REBIND_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Scanning opens every plugin bundle in a worker of its own, and a graph
+/// change loads the plugins it adds.
+const AUDIO_REPLY_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// A test recording is answered once it has been recorded and processed.
+const AUDIO_TEST_PROCESSING: Duration = Duration::from_secs(30);
 
 /// How a stopped take is delivered.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +59,7 @@ pub enum Delivery {
 }
 
 /// A request, without its version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     /// Subscribe to hello, coalesced snapshots, and recording levels.
@@ -69,10 +84,23 @@ pub enum Request {
     /// Apply the `[polish]` section of the config file again, from the next
     /// transcript on.
     PolishReload,
+    /// List the VST3 plugins installed on this machine.
+    AudioScan,
+    /// Read the routing graph and the state of its nodes.
+    AudioGraphGet,
+    /// Save a routing graph, loading its plugins, for the next take on.
+    /// Refused while a take is using the plugins, or when the graph cannot
+    /// be used; nothing is saved then.
+    AudioGraphSet { graph: GraphSpec },
+    /// Open a plugin's own editor window on the daemon's display.
+    AudioEditorOpen { node: NodeId },
+    /// Record the microphone for this many seconds, and answer with it
+    /// before and after the graph. Refused while dictating.
+    AudioTest { seconds: u32 },
 }
 
 /// A successful, data-bearing, or error response to a protocol request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
     /// The request completed without additional data.
@@ -81,6 +109,12 @@ pub enum Reply {
     Accepted { take: u64 },
     /// The current global-shortcut state.
     ShortcutStatus(ShortcutStatus),
+    /// The plugins installed on this machine.
+    AudioPlugins { plugins: Vec<PluginEntry> },
+    /// The saved routing graph.
+    AudioGraph(AudioGraphView),
+    /// A test recording.
+    AudioTest(TestFiles),
     /// The request failed; the message remains English for CLI compatibility.
     Error { message: String },
 }
@@ -110,7 +144,7 @@ impl<'a> Envelope<'a> {
 }
 
 /// The connection handler's response to a parsed request.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub(super) enum Action {
     Reply(Box<Reply>),
     Subscribe,
@@ -139,6 +173,16 @@ pub(super) async fn answer(text: &str, commands: &mpsc::Sender<Command>) -> Acti
                 Request::ShortcutStatus => (Command::ShortcutStatus(reply), super::CONN_TIMEOUT),
                 Request::ProviderReload => (Command::ProviderReload(reply), super::CONN_TIMEOUT),
                 Request::PolishReload => (Command::PolishReload(reply), super::CONN_TIMEOUT),
+                Request::AudioTest { seconds } => (
+                    Command::Audio(request, reply),
+                    Duration::from_secs(u64::from(seconds)) + AUDIO_TEST_PROCESSING,
+                ),
+                Request::AudioScan
+                | Request::AudioGraphGet
+                | Request::AudioGraphSet { .. }
+                | Request::AudioEditorOpen { .. } => {
+                    (Command::Audio(request, reply), AUDIO_REPLY_TIMEOUT)
+                }
             };
             Action::Reply(Box::new(
                 super::forward(commands, command, answer, reply_timeout)
@@ -201,6 +245,66 @@ mod tests {
                 r#"{"type":"ok"}"#,
                 r#"{"type":"error","message":"say \"hi\"\n"}"#
             ]
+        );
+    }
+
+    #[test]
+    fn audio_requests_and_replies_keep_their_shape_on_the_wire() {
+        use plugin_graph::GraphSpec;
+
+        use crate::ipc::audio::{AudioGraphView, NodeStatus, PluginEntry, TestFiles};
+
+        let requests = [
+            Request::AudioScan,
+            Request::AudioGraphGet,
+            Request::AudioGraphSet {
+                graph: GraphSpec::passthrough(),
+            },
+            Request::AudioEditorOpen { node: 2 },
+            Request::AudioTest { seconds: 5 },
+        ];
+        let lines = requests
+            .clone()
+            .map(|request| serde_json::to_string(&Envelope::new(&request)).unwrap());
+        let replies = [
+            Reply::AudioPlugins {
+                plugins: vec![PluginEntry {
+                    path: "/Library/Audio/Plug-Ins/VST3/X.vst3".to_string(),
+                    class_id: "00ff".to_string(),
+                    name: "X".to_string(),
+                    vendor: "V".to_string(),
+                    category: "Fx|Dynamics".to_string(),
+                    effect: true,
+                }],
+            },
+            Reply::AudioGraph(AudioGraphView {
+                graph: GraphSpec::passthrough(),
+                nodes: vec![NodeStatus {
+                    node: 0,
+                    main_inputs: 0,
+                    sidechain_inputs: 0,
+                    outputs: 1,
+                    problem: Some("did not load".to_string()),
+                }],
+            }),
+            Reply::AudioTest(TestFiles {
+                dry: "/tmp/dry.wav".to_string(),
+                wet: "/tmp/wet.wav".to_string(),
+            }),
+        ];
+        assert_eq!(
+            (
+                lines[0].clone(),
+                lines.clone().map(|line| parse(&line)),
+                replies
+                    .clone()
+                    .map(|reply| serde_json::from_str::<Reply>(&reply.to_line()).unwrap()),
+            ),
+            (
+                r#"{"v":1,"type":"audio_scan"}"#.to_string(),
+                requests.map(Ok),
+                replies
+            )
         );
     }
 

@@ -16,6 +16,7 @@ mod motion;
 mod pages;
 mod palette;
 mod recorder;
+mod routing;
 mod settings;
 mod sidebar;
 mod smooth_scroll;

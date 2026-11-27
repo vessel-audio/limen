@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
+mod audio_graph;
 mod endpoint;
 mod keys;
 mod network;
@@ -28,6 +29,9 @@ mod validate;
 mod value;
 mod write;
 
+pub(crate) use audio_graph::{
+    load_audio_graph, load_plugin_state, save_audio_graph, save_plugin_state,
+};
 pub(crate) use endpoint::{
     check_key_url, check_polish_root, check_polish_url, check_url_parameters, display_url,
 };

@@ -76,6 +76,13 @@ pub struct AppView {
     pub providers_scroll: SmoothScroll,
     pub usage_scroll: SmoothScroll,
     pub network_scroll: SmoothScroll,
+    pub routing_scroll: SmoothScroll,
+    /// The Audio routing page's graph and what it is waiting for.
+    pub routing: crate::routing::RoutingState,
+    /// Where the routing canvas begins in the window, as last drawn.
+    pub routing_origin: std::rc::Rc<std::cell::Cell<Point<Pixels>>>,
+    /// The test recording being played, if any.
+    pub playing: Option<crate::routing::Playing>,
     pub usage: crate::pages::UsageState,
     /// The newest transcript on the dictation page, and its reveal.
     pub transcript: crate::pages::TranscriptState,
@@ -88,6 +95,9 @@ pub struct AppView {
 pub enum Page {
     Dictation,
     Shortcuts,
+    /// Routing the microphone through plugins, under Workspace in the
+    /// sidebar.
+    Routing,
     /// The ASR and polishing providers, under Models in the sidebar.
     Providers,
     /// What the providers served, under Models in the sidebar.
@@ -212,6 +222,10 @@ impl AppView {
             providers_scroll: SmoothScroll::default(),
             usage_scroll: SmoothScroll::default(),
             network_scroll: SmoothScroll::default(),
+            routing_scroll: SmoothScroll::default(),
+            routing: crate::routing::RoutingState::default(),
+            routing_origin: Default::default(),
+            playing: None,
             usage: crate::pages::UsageState::default(),
             transcript: crate::pages::TranscriptState::default(),
             shortcuts_scroll: SmoothScroll::default(),
@@ -328,6 +342,22 @@ impl AppView {
                 Vec::new()
             }
             BridgeEvent::NetworkSaved { id, result } => self.network.saved(id, result),
+            BridgeEvent::AudioGraph { id, result } => {
+                self.routing.graph_reply(id, result);
+                Vec::new()
+            }
+            BridgeEvent::AudioScanned { id, result } => {
+                self.routing.scanned(id, result);
+                Vec::new()
+            }
+            BridgeEvent::AudioEditor { result } => {
+                self.routing.editor_opened(result);
+                Vec::new()
+            }
+            BridgeEvent::AudioTest { id, result } => {
+                self.routing.tested(id, result);
+                Vec::new()
+            }
             BridgeEvent::Toast(_) => Vec::new(),
         }
     }
@@ -492,6 +522,7 @@ impl Render for AppView {
             &self.providers_scroll,
             &self.usage_scroll,
             &self.network_scroll,
+            &self.routing_scroll,
         ] {
             scroll.step(window);
         }
@@ -499,6 +530,7 @@ impl Render for AppView {
         pages::follow_usage(self);
         pages::follow_transcript(self, cx);
         crate::settings::follow_network(self, window, cx);
+        crate::routing::follow(self);
         let page = match self.page {
             Page::Dictation => div()
                 .v_flex()
@@ -510,6 +542,11 @@ impl Render for AppView {
                 .flex_1()
                 .min_h_0()
                 .child(pages::shortcuts(self, cx, window)),
+            Page::Routing => div()
+                .v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(crate::routing::page(self, cx)),
             Page::Providers => div()
                 .v_flex()
                 .flex_1()

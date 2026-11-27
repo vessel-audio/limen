@@ -95,9 +95,11 @@ async fn run_async(
     let shortcuts = crate::shortcut::spawn_shortcuts(cfg.shortcut, activation_tx, notify);
     let (session_report_tx, session_reports) = mpsc::unbounded_channel::<Event>();
     let (projection, snapshots) = Projection::new(&cfg);
-    let (session, levels) = SessionHandle::spawn(cfg, backend, meter, session_report_tx);
+    let chains = crate::audio::PluginChains::new(paths.clone());
+    let (session, levels) =
+        SessionHandle::spawn(cfg, backend, meter, session_report_tx, Some(chains.clone()));
     let shortcut_watch = shortcuts.subscribe();
-    let actor = DictationActor::new(
+    let mut actor = DictationActor::new(
         session,
         input_tx,
         polish,
@@ -106,6 +108,7 @@ async fn run_async(
         shortcuts,
         projection,
     );
+    actor.audio = Some(chains);
 
     // Do not accept until every actor and snapshot exists.
     let watchers = ipc::Watchers::new(snapshots, shortcut_watch, levels);

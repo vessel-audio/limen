@@ -3,21 +3,29 @@
 //! and resamples in software (`coreaudio`, `resample`). Both deliver the same
 //! contract: 16 kHz mono s16le chunks.
 
+mod chain;
 #[cfg(target_os = "macos")]
 mod coreaudio;
 #[cfg(target_os = "linux")]
 mod pipewire;
+mod playback;
+mod plugins;
 #[cfg(target_os = "macos")]
 mod resample;
+mod test_take;
 
 #[cfg(target_os = "macos")]
-pub(crate) use coreaudio::Capture;
+pub(crate) use coreaudio::{Capture, FloatCapture};
 #[cfg(target_os = "linux")]
-pub(crate) use pipewire::Capture;
+pub(crate) use pipewire::{Capture, FloatCapture};
+
+pub(crate) use chain::Chain;
+pub use playback::Playback;
+pub(crate) use plugins::PluginChains;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -132,6 +140,78 @@ pub(crate) async fn capture_loop(
     .await;
     level.send_replace(Level::SILENCE);
     result
+}
+
+/// Chunks of microphone audio waiting for the chain; past this, new ones are
+/// dropped, as when the recognizer lags.
+const CHAIN_QUEUE: usize = 64;
+
+/// Capture the microphone through `chain` until `stop` fires (or is dropped)
+/// or capture ends. The chain runs on a thread of its own, because a plugin
+/// may take milliseconds to answer and no async worker should wait for it.
+/// Once the microphone is released the chain is flushed, so what the plugins
+/// hold back still reaches `tx`.
+pub(crate) async fn chain_capture_loop(
+    device: Option<String>,
+    chunk_ms: u32,
+    tx: mpsc::Sender<Vec<i16>>,
+    level: watch::Sender<Level>,
+    chain: Chain,
+    mut stop: oneshot::Receiver<()>,
+) -> Result<()> {
+    let (feed, work) = std::sync::mpsc::sync_channel(CHAIN_QUEUE);
+    let worker = std::thread::Builder::new()
+        .name("limen-chain".into())
+        .spawn({
+            let level = level.clone();
+            move || chain::run_worker(chain, work, tx, level)
+        })?;
+    let result = async {
+        let mut capture = FloatCapture::start(device.as_deref())?;
+        let chunk = (chain::GRAPH_RATE * chunk_ms / 1000) as usize;
+        loop {
+            let read = tokio::select! {
+                read = capture.read_chunk(chunk) => read?,
+                _ = &mut stop => None,
+            };
+            let Some(samples) = read else {
+                return Ok(());
+            };
+            match feed.try_send(samples) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                    tracing::warn!("chain queue full, dropping a chunk");
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return Ok(()),
+            }
+        }
+    }
+    .await;
+    // Closing the queue lets the worker flush the chain and finish.
+    drop(feed);
+    let _ = tokio::task::spawn_blocking(move || worker.join()).await;
+    level.send_replace(Level::SILENCE);
+    result
+}
+
+/// How long a chain capture may take to flush and exit once asked to stop.
+const CHAIN_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Ask a chain capture to stop and wait for it to flush, falling back to
+/// aborting it if it does not exit in time.
+pub(crate) async fn stop_chain_capture(
+    mut handle: JoinHandle<()>,
+    stop: oneshot::Sender<()>,
+    level: watch::Sender<Level>,
+) -> CaptureReap {
+    let _ = stop.send(());
+    match tokio::time::timeout(CHAIN_STOP_TIMEOUT, &mut handle).await {
+        Ok(_) => {
+            level.send_replace(Level::SILENCE);
+            CaptureReap::Reaped
+        }
+        Err(_) => reap_capture(handle, level).await,
+    }
 }
 
 #[cfg(test)]

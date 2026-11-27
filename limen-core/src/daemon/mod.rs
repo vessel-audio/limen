@@ -12,6 +12,7 @@
 //! Their outcomes come back as events, so the loop stays responsive to IPC
 //! even while pw-record is being reaped or a take is being finalized.
 
+mod audio;
 mod host;
 mod input;
 mod lifecycle;
@@ -29,12 +30,14 @@ pub use spawn::{DaemonTermination, daemon_peer_pid, terminate_daemon};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
+use crate::audio::PluginChains;
 use crate::config::{Config, PolishConfig};
 use crate::dictation::{self, Control, Dictation, Effect, Event, InputOutcome, Notification};
 use crate::ipc;
@@ -78,6 +81,8 @@ struct DictationActor {
     outstanding_input: usize,
     projection: Projection,
     delivery: ipc::v1::Delivery,
+    /// The plugins takes run through, when audio routing is available.
+    audio: Option<Arc<PluginChains>>,
 }
 
 /// Whether the message being handled came from an IPC caller awaiting a reply.
@@ -132,6 +137,7 @@ impl DictationActor {
             outstanding_input: 0,
             projection,
             delivery: ipc::v1::Delivery::Input,
+            audio: None,
         }
     }
 
@@ -190,7 +196,13 @@ impl DictationActor {
 
             for effect in transition.effects {
                 match effect {
-                    Effect::StartSession => self.session.tell(SessionCommand::Start),
+                    Effect::StartSession => {
+                        // A test recording gives way: the take needs the microphone.
+                        if let Some(audio) = &self.audio {
+                            audio.cancel_test();
+                        }
+                        self.session.tell(SessionCommand::Start)
+                    }
                     Effect::StopSession => self.session.tell(SessionCommand::Stop),
                     Effect::TeardownSession => self.session.tell(SessionCommand::Teardown),
                     Effect::QueueInput(text) => {
@@ -431,6 +443,7 @@ impl DictationActor {
                         ipc::Command::PolishReload(reply) => {
                             let _ = reply.send(self.reload_polish());
                         }
+                        ipc::Command::Audio(request, reply) => self.audio_request(request, reply),
                     }
                 }
 
