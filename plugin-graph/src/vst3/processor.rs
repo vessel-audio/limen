@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use vst_audio::{BlockEndpoint, Rendered};
 
-use super::host::LoadOptions;
+use super::host::{Channels, LoadOptions};
 use crate::{PortLayout, ProcessError, Processor};
 
 /// The audio side of a loaded plugin.
@@ -18,6 +18,19 @@ pub struct Vst3Processor {
     deadline: Duration,
     layout: PortLayout,
     latency: usize,
+    /// Set when mono was asked for and the plugin only takes stereo: the
+    /// processor then presents one channel in and out, and what it hands the
+    /// plugin is the voice on both channels, which it averages back.
+    fold: Option<Fold>,
+}
+
+/// Scratch buffers for a plugin that takes stereo in place of the mono the
+/// graph speaks.
+struct Fold {
+    input: Vec<f32>,
+    output: Vec<f32>,
+    /// Channels of the plugin's input beyond the main bus.
+    sidechains: usize,
 }
 
 impl Vst3Processor {
@@ -25,13 +38,32 @@ impl Vst3Processor {
     /// which `buses::choose` puts first.
     pub(super) fn new(blocks: BlockEndpoint, main_inputs: usize, options: LoadOptions) -> Self {
         let geometry = blocks.geometry();
-        Self {
-            layout: PortLayout {
-                main_inputs,
-                sidechain_inputs: geometry.input_channels as usize - main_inputs,
-                outputs: geometry.output_channels as usize,
+        let (inputs, outputs) = (
+            geometry.input_channels as usize,
+            geometry.output_channels as usize,
+        );
+        let sidechains = inputs - main_inputs;
+        let folded = options.channels == Channels::PreferMono && main_inputs == 2 && outputs == 2;
+        let layout = match folded {
+            true => PortLayout {
+                main_inputs: 1,
+                sidechain_inputs: sidechains,
+                outputs: 1,
             },
+            false => PortLayout {
+                main_inputs,
+                sidechain_inputs: sidechains,
+                outputs,
+            },
+        };
+        Self {
+            layout,
             latency: blocks.latency_frames(),
+            fold: folded.then(|| Fold {
+                input: vec![0.; inputs * options.block],
+                output: vec![0.; outputs * options.block],
+                sidechains,
+            }),
             blocks,
             block: options.block,
             deadline: options.deadline,
@@ -47,6 +79,24 @@ impl Vst3Processor {
         self.blocks
             .restart(self.blocks.depth())
             .map_err(|error| ProcessError(format!("{error:?}")))
+    }
+}
+
+impl Vst3Processor {
+    /// A block's outcome: while the pipeline is still filling, that much of
+    /// the start is silence, which the reported latency accounts for.
+    fn finish(
+        result: Result<Rendered, vst_audio::RenderError>,
+        output: &mut [f32],
+    ) -> Result<(), ProcessError> {
+        match result {
+            Ok(Rendered::Delivered) => Ok(()),
+            Ok(Rendered::Priming) => {
+                output.fill(0.);
+                Ok(())
+            }
+            Err(error) => Err(ProcessError(error.to_string())),
+        }
     }
 }
 
@@ -71,15 +121,24 @@ impl Processor for Vst3Processor {
                 self.block
             )));
         }
-        match self.blocks.process_wait(input, output, self.deadline) {
-            Ok(Rendered::Delivered) => Ok(()),
-            // The pipeline is still filling: that much of the start is
-            // silence, which the reported latency accounts for.
-            Ok(Rendered::Priming) => {
-                output.fill(0.);
-                Ok(())
-            }
-            Err(error) => Err(ProcessError(error.to_string())),
-        }
+        let Some(fold) = self.fold.as_mut() else {
+            let result = self.blocks.process_wait(input, output, self.deadline);
+            return Self::finish(result, output);
+        };
+        // The voice on both channels, then the side-chains as they came.
+        let (voice, sidechains) = input.split_at(frames);
+        fold.input[..frames].copy_from_slice(voice);
+        fold.input[frames..2 * frames].copy_from_slice(voice);
+        fold.input[2 * frames..2 * frames + fold.sidechains * frames].copy_from_slice(sidechains);
+        let result = self
+            .blocks
+            .process_wait(&fold.input, &mut fold.output, self.deadline);
+        let (left, right) = fold.output.split_at(frames);
+        // Averaged back to the one channel the graph has.
+        output
+            .iter_mut()
+            .zip(left.iter().zip(right))
+            .for_each(|(out, (left, right))| *out = (left + right) / 2.);
+        Self::finish(result, output)
     }
 }

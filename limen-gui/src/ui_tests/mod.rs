@@ -246,6 +246,12 @@ impl<'a> Ui<'a> {
         self.act(|window, cx| window.click_at(id, offset, cx));
     }
 
+    /// Double-click the element, then let the window settle.
+    pub(super) fn double_click(&mut self, id: &str) {
+        let id = gpui_kit::SharedString::from(id.to_string());
+        self.act(|window, cx| window.double_click(id, cx));
+    }
+
     /// Turn the wheel over the element, then settle.
     pub(super) fn scroll(&mut self, id: &str, delta: ScrollDelta) {
         let id = gpui_kit::SharedString::from(id.to_string());

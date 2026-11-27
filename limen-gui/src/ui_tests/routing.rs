@@ -434,3 +434,44 @@ fn the_canvas_scrolls_so_a_node_out_of_view_can_be_reached(cx: &mut TestAppConte
     let after = ui.find("node-1").bounds().left();
     assert_eq!((before - after).round(), px(120.).round());
 }
+
+#[gpui_kit::test]
+fn the_microphone_is_wired_to_a_plugins_sidechain_port_and_a_double_click_opens_its_editor(
+    cx: &mut TestAppContext,
+) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    ui.click("add-plugin");
+    ui.sent();
+    ui.receive(BridgeEvent::AudioScanned {
+        id: 2,
+        result: Ok(vec![plugin("Compressor", "Fx|Dynamics")]),
+    });
+    ui.click("plugin-0");
+    let (id, graph) = saved(ui.sent());
+    // The daemon says the plugin has a main input and a side-chain input.
+    ui.receive(BridgeEvent::AudioGraph {
+        id,
+        result: Ok(AudioGraphView {
+            graph,
+            nodes: vec![NodeStatus {
+                node: 2,
+                main_inputs: 1,
+                sidechain_inputs: 1,
+                outputs: 1,
+                problem: None,
+            }],
+        }),
+    });
+    ui.click("port-out-0-0");
+    ui.click("port-in-2-1");
+    let (_, wired) = saved(ui.sent());
+    ui.double_click("node-2");
+    assert_eq!(
+        (wired.edges.last().copied(), ui.sent()),
+        (
+            Some(wire((0, 0), (2, 1))),
+            vec![BridgeCommand::Audio(AudioRequest::OpenEditor { node: 2 })]
+        )
+    );
+}

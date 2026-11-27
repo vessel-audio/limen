@@ -384,7 +384,19 @@ impl Active {
         // only if it does not finish.
         let reaped = match self.stop.take() {
             Some(stop) => match self.capture.take() {
-                Some(handle) => stop_chain_capture(handle, stop, self.level.clone()).await,
+                Some(handle) => {
+                    // The chain's output is read while it flushes: a backlog
+                    // of audio must not fill the channel and cost the end of
+                    // the take.
+                    let mut stopping =
+                        std::pin::pin!(stop_chain_capture(handle, stop, self.level.clone()));
+                    loop {
+                        tokio::select! {
+                            reaped = &mut stopping => break reaped,
+                            Some(pcm) = self.pcm.recv() => self.sink.send_audio(&pcm).await?,
+                        }
+                    }
+                }
                 None => CaptureReap::Reaped,
             },
             None => self.reap_capture().await,

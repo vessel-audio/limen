@@ -188,6 +188,7 @@ fn node_card(view: &AppView, spec: &NodeSpec, cx: &mut Context<AppView>) -> Stat
         theme.foreground,
         theme.muted_foreground,
     );
+    let opens_editor = matches!(spec.kind, NodeKind::Plugin(_));
     let key = SharedString::from(format!("node-{id}"));
     let header = div()
         .id(key.clone())
@@ -214,6 +215,12 @@ fn node_card(view: &AppView, spec: &NodeSpec, cx: &mut Context<AppView>) -> Stat
                 cx.notify();
             }),
         )
+        // Double-clicking a plugin's name opens its own editor.
+        .on_click(cx.listener(move |this, event: &ClickEvent, _, _| {
+            if event.click_count() == 2 && opens_editor {
+                this.send_audio(Some(crate::bridge::AudioRequest::OpenEditor { node: id }));
+            }
+        }))
         .on_drag(NodeDrag, |drag, _, _, cx| cx.new(|_| drag.clone()))
         .on_drag_move(cx.listener(|this, event: &DragMoveEvent<NodeDrag>, _, cx| {
             let at = this.routing_point(event.event.position);

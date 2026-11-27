@@ -196,6 +196,8 @@ pub(super) struct State {
     /// Workers a compile replaced, kept until it is known to have worked, so
     /// that a graph that is refused leaves the plugins as they were.
     retired: HashMap<NodeId, Loaded>,
+    /// Nodes a compile loaded a worker for, which a refused graph takes back.
+    fresh: HashSet<NodeId>,
 }
 
 /// How many failures a plugin gets: it is loaded again once, and a second
@@ -341,6 +343,7 @@ impl PluginChains {
         }
         let compiled = self.compile(&spec, &mut state);
         state.retired.clear();
+        state.fresh.clear();
         match compiled {
             Ok(graph) => {
                 let names = plugins_in(&spec)
@@ -511,6 +514,7 @@ impl PluginChains {
                     failures.remove(&node);
                 }
                 state.problems.remove(&node);
+                state.fresh.insert(node);
                 state.loaded.insert(
                     node,
                     Loaded {
@@ -606,9 +610,13 @@ impl PluginChains {
             std::mem::take(&mut state.crashes),
         );
         state.retired.clear();
+        state.fresh.clear();
         // A graph that is refused, by the compile or by the disk, leaves every
         // plugin as it was: the workers the compile replaced come back.
         let rollback = |state: &mut State| {
+            for node in std::mem::take(&mut state.fresh) {
+                state.loaded.remove(&node);
+            }
             for (node, old) in std::mem::take(&mut state.retired) {
                 state.loaded.insert(node, old);
             }
@@ -629,6 +637,7 @@ impl PluginChains {
             return Err(format!("{error:#}"));
         }
         state.retired.clear();
+        state.fresh.clear();
         // Only now, with the graph committed, is it safe to write the plugins'
         // settings: a plugin that replaced another under the same node id must
         // not overwrite the old one's settings if the graph could not be saved.
