@@ -162,7 +162,7 @@ pub fn run(paths: Paths, models: Arc<dyn ModelBackend>) -> Result<()> {
 fn init(cx: &mut App) {
     gpui_kit::init(cx);
     gpui_kit::component::theme::Theme::sync_system_appearance(None, cx);
-    palette::apply(cx);
+    palette::apply(settings::Accent::DEFAULT, cx);
 }
 
 /// The control panel's window, which the in-process UI tests open too.

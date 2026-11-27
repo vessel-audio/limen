@@ -1,4 +1,4 @@
-//! A provider's daily use as a column chart: one coral column a day on a
+//! A provider's daily use as a column chart: one accent-coloured column a day on a
 //! hairline baseline, a hairline at the top tick, which is labelled, and
 //! the first and last dates below. Each day is its own hover target,
 //! taller than its column, whose tooltip and accessible name give the day's

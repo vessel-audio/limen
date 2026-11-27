@@ -104,8 +104,8 @@ pub(super) fn card(
         .gap_5()
         .p_6()
         .rounded_xl()
-        // Canvas with a hairline, not a cream card: the chart's coral keeps
-        // its contrast on the canvas, and falls short of 3:1 on cream.
+        // Canvas with a hairline, not a cream card: the chart's accent keeps
+        // its contrast on the canvas, and may fall short of 3:1 on cream.
         .bg(theme.background)
         .border_1()
         .border_color(theme.border)
