@@ -36,6 +36,18 @@ impl AppView {
             self.model.connection,
             Connection::Connecting | Connection::Spawning | Connection::Reconnecting { .. }
         );
+        // Where transcription requests go, shown while the service is up.
+        let address = match self.model.connection {
+            Connection::Connected => self
+                .snapshot_config()
+                .and_then(|config| config.provider_address()),
+            Connection::NotRunning
+            | Connection::Connecting
+            | Connection::Spawning
+            | Connection::Reconnecting { .. }
+            | Connection::SpawnFailed { .. }
+            | Connection::ProtocolMismatch { .. } => None,
+        };
         let dot = div().size(px(6.)).rounded_full().bg(color);
         let (section, page_key) = match self.page {
             Page::Dictation => ("nav.section", "nav.dictation"),
@@ -184,7 +196,29 @@ impl AppView {
                                 false => dot.into_any_element(),
                             })
                             .child(status),
-                    ),
+                    )
+                    .children(address.map(|address| {
+                        div()
+                            .h_flex()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .pl_2()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(div().text_color(cx.theme().border).child("·"))
+                            .child(
+                                div()
+                                    .id("provider-address")
+                                    .test_support()
+                                    .accessibility_id("provider-address")
+                                    .role(Role::Label)
+                                    .aria_label(address.clone())
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(address),
+                            )
+                    })),
             )
     }
 
