@@ -108,6 +108,12 @@ impl AppView {
                 label: rust_i18n::t!("nav.shortcuts").into(),
                 page: Page::Shortcuts,
             },
+            Destination {
+                id: "routing-page",
+                lead: Lead::Icon(IconName::Network),
+                label: rust_i18n::t!("nav.routing").into(),
+                page: Page::Routing,
+            },
         ];
         let models = [
             Destination {
@@ -280,6 +286,12 @@ impl AppView {
                 page: Page::Settings(SettingsPage::Network),
             },
             Destination {
+                id: "settings-tab-plugins",
+                lead: Lead::Indent,
+                label: rust_i18n::t!("settings.plugins").into(),
+                page: Page::Settings(SettingsPage::Plugins),
+            },
+            Destination {
                 id: "settings-tab-about",
                 lead: Lead::Indent,
                 label: rust_i18n::t!("about.menu").into(),
@@ -291,7 +303,7 @@ impl AppView {
             (SidebarMode::Collapsed, Page::Settings(page)) => (false, page),
             (
                 SidebarMode::Expanded | SidebarMode::Collapsed,
-                Page::Dictation | Page::Shortcuts | Page::Providers | Page::Usage,
+                Page::Dictation | Page::Shortcuts | Page::Routing | Page::Providers | Page::Usage,
             ) => (false, SettingsPage::General),
         };
         // The highlight rests on the open subpage, or on Settings itself
@@ -302,7 +314,10 @@ impl AppView {
                 .position(|subpage| subpage.page == page)
                 .map(|index| index + 1),
             (false, Page::Settings(_)) => Some(0),
-            (false, Page::Dictation | Page::Shortcuts | Page::Providers | Page::Usage) => None,
+            (
+                false,
+                Page::Dictation | Page::Shortcuts | Page::Routing | Page::Providers | Page::Usage,
+            ) => None,
         };
         let unfolded = match open {
             true => subpages.len() as f32 * (ROW_HEIGHT + ROW_GAP),

@@ -1122,6 +1122,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "com-scrape-types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ce183b975b8fc736a20919c4002717255fbd867df575c792aeefa9a56a73ad0"
+
+[[package]]
 name = "combine"
 version = "4.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4434,6 +4440,7 @@ dependencies = [
  "global-hotkey",
  "hound",
  "libc",
+ "plugin-graph",
  "reqwest",
  "serde",
  "serde_json",
@@ -4470,6 +4477,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "plugin-graph",
  "rust-i18n",
  "tokio",
  "tracing",
@@ -4486,6 +4494,13 @@ dependencies = [
  "rig-reqwest",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "limen-vst-worker"
+version = "0.1.0"
+dependencies = [
+ "vst-audio-worker-runtime",
 ]
 
 [[package]]
@@ -5867,6 +5882,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "plugin-graph"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "vst-audio",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6704,6 +6729,12 @@ checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "rtrb"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5974e397833d890f2f74963408e0d4a6cd8eda2f6a445ae06750291b5d7a997e"
 
 [[package]]
 name = "rust-embed"
@@ -8471,6 +8502,93 @@ dependencies = [
 ]
 
 [[package]]
+name = "vst-audio"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49fa190f2031bca36d829d631295fdf1773b6f3e49acc8b8c0b7854a717e82a4"
+dependencies = [
+ "rtrb",
+ "thiserror 2.0.21",
+ "vst-audio-protocol",
+ "vst-audio-ring",
+ "vst-audio-transport-sys",
+]
+
+[[package]]
+name = "vst-audio-protocol"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ef73ceb6250a6fcce4d6b07b6358a2bce238f4c05b0f2842fd66df43a13ae3d"
+dependencies = [
+ "thiserror 2.0.21",
+ "vst-audio-ring",
+ "vst3",
+]
+
+[[package]]
+name = "vst-audio-ring"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e02dc2018e55287e0a91dcff13f3208b2356a5621937bc0cc3a9e5876fe0048"
+
+[[package]]
+name = "vst-audio-transport-sys"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aff45aeb749ef5db20ea9e273819e61dbd08d56ed329fcda8a2aa7180fcf5ad8"
+dependencies = [
+ "libc",
+ "tempfile",
+ "vst-audio-ring",
+ "win-custody",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "vst-audio-worker-runtime"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4520f37fcf729ff3d8955098fa793bbe96e269263810f9650a87290b92148f9b"
+dependencies = [
+ "clap",
+ "thiserror 2.0.21",
+ "vst-audio-protocol",
+ "vst-audio-ring",
+ "vst-audio-transport-sys",
+ "vst-audio-worker-sys",
+]
+
+[[package]]
+name = "vst-audio-worker-sys"
+version = "0.13.0"
+dependencies = [
+ "crossbeam-queue",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "thiserror 2.0.21",
+ "vst-audio-protocol",
+ "vst-audio-ring",
+ "vst3",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-sys",
+ "windows 0.62.2",
+ "x11rb",
+]
+
+[[package]]
+name = "vst3"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31e3fe7a6f028ded8c5a9984cf283319e6dc63572c9b71da1d4ee9d71d3b6bf"
+dependencies = [
+ "com-scrape-types",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8957,6 +9075,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "win-custody"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ac317571806f48e6b0131e06cd9047c942a5db502c633efedf0e13a832b121"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

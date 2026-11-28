@@ -18,16 +18,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcut::{Backend, Shortcut};
 
+mod audio_graph;
 mod endpoint;
 mod keys;
 mod network;
 mod options;
+mod plugin_library;
 mod service;
 mod transaction;
 mod validate;
 mod value;
 mod write;
 
+pub(crate) use audio_graph::{
+    delete_plugin_state, load_audio_graph, load_plugin_state, save_audio_graph, save_plugin_state,
+};
 pub(crate) use endpoint::{
     check_key_url, check_polish_root, check_polish_url, check_url_parameters, display_url,
 };
@@ -35,6 +40,7 @@ pub use keys::KeyChange;
 pub(crate) use keys::{Secret, saved_keys};
 pub use network::{NetworkConfig, Proxy, ProxyLogin, ProxyMode};
 pub use options::{ChatApi, ProviderOptions};
+pub(crate) use plugin_library::{load_plugin_library, save_plugin_library};
 pub use service::{Format, Service};
 pub(crate) use transaction::recover as recover_provider_save;
 pub(crate) use value::{Key, Value, update};

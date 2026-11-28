@@ -35,6 +35,8 @@
           linuxOnly = lib.optionals pkgs.stdenv.hostPlatform.isLinux;
           treefmtEval = treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "Cargo.toml";
+            # Third-party source kept as it was published, with its one patch.
+            settings.global.excludes = [ "vendor/**" ];
             programs = {
               nixfmt.enable = true;
               statix.enable = true;

@@ -1,0 +1,17 @@
+[package]
+name = "plugin-graph"
+version.workspace = true
+edition.workspace = true
+description = "A block-based audio routing graph for plugin hosting, free of any application dependency"
+
+[features]
+# Hosting VST3 plugins in separate worker processes.
+vst3 = ["dep:vst-audio"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+vst-audio = { workspace = true, optional = true }
+
+[dev-dependencies]
+toml.workspace = true

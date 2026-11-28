@@ -1,0 +1,8 @@
+[package]
+name = "limen-vst-worker"
+version.workspace = true
+edition.workspace = true
+description = "The process that hosts one VST3 plugin for limen, so a plugin that crashes cannot take limen down"
+
+[dependencies]
+vst-audio-worker-runtime = "=0.13.0"

@@ -35,6 +35,8 @@ mod model_support;
 mod models;
 mod navigation;
 mod network;
+mod plugins;
+mod routing;
 mod settings;
 mod shortcuts;
 mod usage;
@@ -236,6 +238,19 @@ impl<'a> Ui<'a> {
     pub(super) fn click(&mut self, id: &str) {
         let id = gpui_kit::SharedString::from(id.to_string());
         self.act(|window, cx| window.click(id, cx));
+    }
+
+    /// Click the element at `offset` from its corner, then let the window
+    /// settle.
+    pub(super) fn click_at(&mut self, id: &str, offset: Point<Pixels>) {
+        let id = gpui_kit::SharedString::from(id.to_string());
+        self.act(|window, cx| window.click_at(id, offset, cx));
+    }
+
+    /// Double-click the element, then let the window settle.
+    pub(super) fn double_click(&mut self, id: &str) {
+        let id = gpui_kit::SharedString::from(id.to_string());
+        self.act(|window, cx| window.double_click(id, cx));
     }
 
     /// Turn the wheel over the element, then settle.

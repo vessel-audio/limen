@@ -52,8 +52,10 @@ impl AppView {
         let (section, page_key) = match self.page {
             Page::Dictation => ("nav.section", "nav.dictation"),
             Page::Shortcuts => ("nav.section", "nav.shortcuts"),
+            Page::Routing => ("nav.section", "nav.routing"),
             Page::Settings(SettingsPage::General) => ("settings.title", "settings.general"),
             Page::Settings(SettingsPage::Network) => ("settings.title", "settings.network"),
+            Page::Settings(SettingsPage::Plugins) => ("settings.title", "settings.plugins"),
             Page::Settings(SettingsPage::About) => ("settings.title", "about.menu"),
             Page::Providers => ("nav.models", "nav.providers"),
             Page::Usage => ("nav.models", "nav.usage"),

@@ -12,6 +12,7 @@ libc.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 limen-core.workspace = true
+plugin-graph.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

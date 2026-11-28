@@ -10,6 +10,7 @@
 //! Daemon side spawns one task per connection: a garbage or stalled client
 //! can neither block nor kill the daemon's main loop.
 
+pub mod audio;
 mod client;
 mod legacy;
 mod subscription;
@@ -58,6 +59,9 @@ pub enum Command {
     ShortcutStatus(oneshot::Sender<v1::Reply>),
     ProviderReload(oneshot::Sender<v1::Reply>),
     PolishReload(oneshot::Sender<v1::Reply>),
+    /// One of the `audio_*` requests, which the daemon answers once the
+    /// plugin work it asks for is done.
+    Audio(v1::Request, oneshot::Sender<v1::Reply>),
 }
 
 /// The daemon does not listen on its socket.
@@ -347,7 +351,8 @@ mod tests {
                     | Command::ShortcutRebind(reply)
                     | Command::ShortcutStatus(reply)
                     | Command::ProviderReload(reply)
-                    | Command::PolishReload(reply) => {
+                    | Command::PolishReload(reply)
+                    | Command::Audio(_, reply) => {
                         let _ = reply.send(v1::Reply::Ok);
                     }
                 }

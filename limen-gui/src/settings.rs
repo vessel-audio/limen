@@ -16,6 +16,8 @@ mod accent;
 mod custom_accent;
 mod font_scale;
 mod network;
+mod plugin_library;
+mod plugins;
 mod segmented;
 
 pub use accent::Accent;
@@ -24,6 +26,7 @@ pub(crate) use accent::Preset;
 pub use custom_accent::custom_picker;
 pub use font_scale::FontScale;
 pub use network::{NetworkForm, follow as follow_network, network};
+pub use plugins::{PluginsForm, follow as follow_plugins, page as plugins_page};
 pub(crate) use segmented::{Segment, segmented};
 
 /// Settings subpages, listed below Settings in the expanded sidebar and
@@ -32,6 +35,7 @@ pub(crate) use segmented::{Segment, segmented};
 pub enum SettingsPage {
     General,
     Network,
+    Plugins,
     About,
 }
 
@@ -340,6 +344,11 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                             "settings-tab-network",
                             rust_i18n::t!("settings.network"),
                             SettingsPage::Network,
+                        ),
+                        (
+                            "settings-tab-plugins",
+                            rust_i18n::t!("settings.plugins"),
+                            SettingsPage::Plugins,
                         ),
                         (
                             "settings-tab-about",

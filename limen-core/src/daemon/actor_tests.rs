@@ -481,3 +481,44 @@ async fn clear_history_removes_completed_entries_and_replies_ok() {
     assert_eq!(history[0].id, 2);
     assert!(matches!(history[0].outcome, HistoryOutcome::Pending));
 }
+
+#[tokio::test]
+async fn an_audio_request_says_so_when_audio_routing_is_not_available() {
+    let mut harness = harness();
+    let (reply, mut answer) = oneshot::channel();
+    harness
+        .actor
+        .audio_request(ipc::v1::Request::AudioGraphGet, reply);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Reply::Error {
+            message: "audio routing is not available".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_test_recording_is_refused_while_dictating() {
+    let mut harness = harness();
+    let dir = std::env::temp_dir().join(format!("limen-actor-audio-{}", std::process::id()));
+    harness.actor.audio = Some(crate::audio::PluginChains::new(
+        crate::config::Paths {
+            socket: dir.join("limen.sock"),
+            log_file: dir.join("daemon.log"),
+            cache_dir: dir.join("cache"),
+            config_file: dir.join("config.toml"),
+        },
+        |_, _| {},
+    ));
+    start_recording(&mut harness.actor);
+    let (reply, mut answer) = oneshot::channel();
+    harness
+        .actor
+        .audio_request(ipc::v1::Request::AudioTest { seconds: 3 }, reply);
+    assert_eq!(
+        answer.try_recv().unwrap(),
+        Reply::Error {
+            message: "stop dictating before a test recording".to_string()
+        }
+    );
+}
