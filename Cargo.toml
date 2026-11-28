@@ -1,7 +1,27 @@
 [workspace]
 resolver = "3"
-members = ["limen-core", "limen-genai", "limen-gui", "limen-rig", "limen", "limen-vst-worker", "plugin-graph"]
-default-members = ["limen-core", "limen-genai", "limen-rig", "limen", "limen-vst-worker", "plugin-graph"]
+members = [
+  "limen-core",
+  "limen-genai",
+  "limen-gui",
+  "limen-rig",
+  "limen",
+  "limen-vst-worker",
+  "plugin-graph",
+]
+exclude = ["vendor"]
+default-members = [
+  "limen-core",
+  "limen-genai",
+  "limen-rig",
+  "limen",
+  "limen-vst-worker",
+  "plugin-graph",
+]
+
+# vst-audio-worker-sys with one fix, see vendor/vst-audio-worker-sys/LIMEN.md.
+[patch.crates-io]
+vst-audio-worker-sys = { path = "vendor/vst-audio-worker-sys" }
 
 [workspace.package]
 version = "0.1.0"
