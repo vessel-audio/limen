@@ -324,7 +324,7 @@ async fn rebind(paths: &Paths, report: &mut Report) -> Result<()> {
         Ok(
             v1::Reply::ShortcutStatus(_)
             | v1::Reply::Accepted { .. }
-            | v1::Reply::AudioPlugins { .. }
+            | v1::Reply::AudioLibrary(_)
             | v1::Reply::AudioGraph(_)
             | v1::Reply::AudioTest(_),
         ) => {
@@ -346,7 +346,7 @@ pub async fn daemon_status(paths: &Paths) -> Result<Option<ShortcutStatus>> {
         Ok(
             v1::Reply::Ok
             | v1::Reply::Accepted { .. }
-            | v1::Reply::AudioPlugins { .. }
+            | v1::Reply::AudioLibrary(_)
             | v1::Reply::AudioGraph(_)
             | v1::Reply::AudioTest(_),
         ) => {

@@ -90,7 +90,7 @@ pub(crate) fn delete_plugin_state(paths: &Paths, node: NodeId) -> Result<()> {
 
 /// Write `contents` to a temp file beside `file` and rename it into place, so
 /// a reader sees the old contents or the new, never a part.
-fn write_atomically(file: &Path, contents: &[u8]) -> Result<()> {
+pub(super) fn write_atomically(file: &Path, contents: &[u8]) -> Result<()> {
     let dir = file.parent().context("path has no parent directory")?;
     fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let temp = file.with_extension(format!("tmp{}", std::process::id()));

@@ -49,8 +49,25 @@ impl DictationActor {
                     let _ = reply.send(answer);
                 });
             }
-            Request::AudioScan => blocking(reply, move || {
-                audio.scan().map(|plugins| Reply::AudioPlugins { plugins })
+            Request::AudioLibraryGet => blocking(reply, move || {
+                audio.plugin_library().map(Reply::AudioLibrary)
+            }),
+            Request::AudioLibraryFolders { folders } => blocking(reply, move || {
+                audio.set_library_folders(folders).map(Reply::AudioLibrary)
+            }),
+            Request::AudioLibraryScan => {
+                blocking(reply, move || audio.scan_library().map(Reply::AudioLibrary))
+            }
+            Request::AudioLibraryAdd { path } => blocking(reply, move || {
+                audio.add_library_bundle(&path).map(Reply::AudioLibrary)
+            }),
+            Request::AudioLibraryRemove { path, class_id } => blocking(reply, move || {
+                audio
+                    .remove_library_plugin(&path, &class_id)
+                    .map(Reply::AudioLibrary)
+            }),
+            Request::AudioLibraryRestore => blocking(reply, move || {
+                audio.restore_library().map(Reply::AudioLibrary)
             }),
             Request::AudioGraphGet => blocking(reply, move || audio.view().map(Reply::AudioGraph)),
             Request::AudioGraphSet { graph } => {

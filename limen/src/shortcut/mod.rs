@@ -197,7 +197,7 @@ pub(crate) async fn hold(paths: &Paths, edge: HoldEdge) -> Result<()> {
         v1::Reply::Error { message } => bail!("the daemon refused: {message}"),
         v1::Reply::ShortcutStatus(_)
         | v1::Reply::Accepted { .. }
-        | v1::Reply::AudioPlugins { .. }
+        | v1::Reply::AudioLibrary(_)
         | v1::Reply::AudioGraph(_)
         | v1::Reply::AudioTest(_) => {
             bail!("the daemon answered something else")

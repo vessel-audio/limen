@@ -15,7 +15,7 @@ use crate::pages::{self, ModelForms};
 use crate::recorder::RecorderState;
 use crate::settings::{
     Accent, AppearancePreference, FontChoice, FontScale, LanguagePreference, LightweightMode,
-    NetworkForm, SettingsPage,
+    NetworkForm, PluginsForm, SettingsPage,
 };
 use crate::smooth_scroll::SmoothScroll;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -43,6 +43,9 @@ pub struct AppView {
     pub hold_focused: bool,
     pub models: ModelForms,
     pub network: NetworkForm,
+    /// The Plugins settings page, and the plugin library the routing page
+    /// adds from.
+    pub plugins: PluginsForm,
     _subscriptions: Vec<Subscription>,
     pub sidebar_mode: crate::sidebar::SidebarMode,
     /// The expanded sidebar's width, as its edge was last dragged.
@@ -76,6 +79,9 @@ pub struct AppView {
     pub providers_scroll: SmoothScroll,
     pub usage_scroll: SmoothScroll,
     pub network_scroll: SmoothScroll,
+    pub plugins_scroll: SmoothScroll,
+    /// The list of plugins on the Plugins page, scrolled inside its box.
+    pub plugins_list_scroll: SmoothScroll,
     pub routing_scroll: SmoothScroll,
     /// The Audio routing page's graph and what it is waiting for.
     pub routing: crate::routing::RoutingState,
@@ -136,6 +142,7 @@ impl AppView {
         });
         let (models, model_subscriptions) = ModelForms::new(window, cx);
         let (network, network_subscriptions) = NetworkForm::new(window, cx);
+        let (plugins, plugins_subscriptions) = PluginsForm::new(window, cx);
         let font_select = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(FontChoice::all(cx)),
@@ -193,10 +200,12 @@ impl AppView {
             hold_focused: false,
             models,
             network,
+            plugins,
             _subscriptions: subscriptions
                 .into_iter()
                 .chain(model_subscriptions)
                 .chain(network_subscriptions)
+                .chain(plugins_subscriptions)
                 .collect(),
             sidebar_mode: crate::sidebar::SidebarMode::Expanded,
             sidebar_width: crate::sidebar::DEFAULT_WIDTH,
@@ -222,6 +231,8 @@ impl AppView {
             providers_scroll: SmoothScroll::default(),
             usage_scroll: SmoothScroll::default(),
             network_scroll: SmoothScroll::default(),
+            plugins_scroll: SmoothScroll::default(),
+            plugins_list_scroll: SmoothScroll::default(),
             routing_scroll: SmoothScroll::default(),
             routing: crate::routing::RoutingState::default(),
             routing_origin: Default::default(),
@@ -348,8 +359,10 @@ impl AppView {
                 self.send_audio(next);
                 Vec::new()
             }
-            BridgeEvent::AudioScanned { id, result } => {
-                self.routing.scanned(id, result);
+            BridgeEvent::AudioLibrary { id, result } => {
+                // A folder added is scanned as soon as it is saved.
+                let next = self.plugins.library.replied(id, result);
+                self.send_audio(next);
                 Vec::new()
             }
             BridgeEvent::AudioEditor { result } => {
@@ -524,6 +537,8 @@ impl Render for AppView {
             &self.providers_scroll,
             &self.usage_scroll,
             &self.network_scroll,
+            &self.plugins_scroll,
+            &self.plugins_list_scroll,
             &self.routing_scroll,
         ] {
             scroll.step(window);
@@ -532,6 +547,7 @@ impl Render for AppView {
         pages::follow_usage(self);
         pages::follow_transcript(self, cx);
         crate::settings::follow_network(self, window, cx);
+        crate::settings::follow_plugins(self);
         crate::routing::follow(self);
         let page = match self.page {
             Page::Dictation => div()
@@ -570,6 +586,11 @@ impl Render for AppView {
                     .flex_1()
                     .min_h_0()
                     .child(crate::settings::network(self, cx)),
+                SettingsPage::Plugins => div()
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(crate::settings::plugins_page(self, cx)),
                 SettingsPage::About => div()
                     .v_flex()
                     .flex_1()

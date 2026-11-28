@@ -6,6 +6,7 @@
 mod chain;
 #[cfg(target_os = "macos")]
 mod coreaudio;
+mod library;
 #[cfg(target_os = "linux")]
 mod pipewire;
 mod playback;

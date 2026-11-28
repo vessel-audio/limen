@@ -13,8 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use plugin_graph::vst3::{
-    Channels, LoadOptions, PluginEvent, Sandbox, Vst3Control, Vst3Host, Vst3Processor,
-    default_folders,
+    Channels, LoadOptions, PluginEvent, Vst3Control, Vst3Host, Vst3Processor,
 };
 use plugin_graph::{
     CompiledGraph, GraphError, GraphSpec, NodeId, NodeKind, PluginRef, PortLayout, ProcessError,
@@ -22,11 +21,12 @@ use plugin_graph::{
 };
 
 use super::chain::{Chain, FailureHook, GRAPH_BLOCK, GRAPH_CONFIG, GRAPH_RATE};
+use super::library::Library;
 use crate::config::{
     Paths, delete_plugin_state, load_audio_graph, load_plugin_state, save_audio_graph,
     save_plugin_state,
 };
-use crate::ipc::audio::{AudioGraphView, NodeStatus, PluginEntry};
+use crate::ipc::audio::{AudioGraphView, NodeStatus};
 
 /// How long a plugin may take to process a block before it counts as failed.
 const DEADLINE: Duration = Duration::from_millis(50);
@@ -207,7 +207,9 @@ const MAX_FAILURES: u32 = 2;
 /// The routing graph's plugins, and the graphs built from them.
 pub(crate) struct PluginChains {
     pub(super) paths: Paths,
-    host: Option<Vst3Host>,
+    pub(super) host: Option<Vst3Host>,
+    /// The plugins the user can add to the graph.
+    pub(super) library: Library,
     state: Mutex<State>,
     failures: Failures,
     notify: fn(&str, &str),
@@ -233,7 +235,7 @@ fn worker() -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-const NO_WORKER: &str = "the plugin worker was not found (set LIMEN_VST_WORKER)";
+pub(super) const NO_WORKER: &str = "the plugin worker was not found (set LIMEN_VST_WORKER)";
 
 fn plugins_in(spec: &GraphSpec) -> impl Iterator<Item = (NodeId, &PluginRef)> {
     spec.nodes.iter().filter_map(|node| match &node.kind {
@@ -249,6 +251,7 @@ impl PluginChains {
     /// ends with the registry.
     pub(crate) fn new(paths: Paths, notify: fn(&str, &str)) -> Arc<Self> {
         let chains = Arc::new(Self {
+            library: Library::new(paths.clone()),
             paths,
             host: worker().map(Vst3Host::new),
             state: Mutex::new(State::default()),
@@ -671,28 +674,6 @@ impl PluginChains {
             .map_err(|error| error.to_string())
     }
 
-    /// The plugins installed on this machine. Opens every bundle in a worker
-    /// of its own, sandboxed because a plugin runs code when it is read.
-    pub(crate) fn scan(&self) -> Result<Vec<PluginEntry>, String> {
-        let host = self.host.as_ref().ok_or_else(|| NO_WORKER.to_string())?;
-        let scan = host.scan(&default_folders(), Sandbox::On);
-        for (path, error) in &scan.failures {
-            tracing::info!(path = %path.display(), %error, "plugin skipped");
-        }
-        Ok(scan
-            .plugins
-            .into_iter()
-            .map(|plugin| PluginEntry {
-                effect: plugin.is_effect(),
-                path: plugin.path.display().to_string(),
-                class_id: plugin.class_id,
-                name: plugin.name,
-                vendor: plugin.vendor,
-                category: plugin.category,
-            })
-            .collect())
-    }
-
     /// The process ids of the loaded plugins' workers, by node.
     #[cfg(test)]
     fn worker_pids(&self) -> Vec<u32> {
@@ -859,6 +840,35 @@ mod tests {
             (true, true, None)
         );
 
+        // The library finds the plugin in a folder of its own, and takes the
+        // bundle when it is added by hand; neither is how a take loads it.
+        let folder = std::env::temp_dir().join(format!("limen-real-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let name = std::path::Path::new(&bundle).file_name().unwrap();
+        std::os::unix::fs::symlink(&bundle, folder.join(name)).unwrap();
+        chains
+            .set_library_folders(vec![folder.display().to_string()])
+            .unwrap();
+        let lists = |library: crate::ipc::audio::PluginLibrary| {
+            library
+                .plugins
+                .iter()
+                .any(|entry| std::path::Path::new(&entry.path).file_name() == Some(name))
+        };
+        let found = (
+            lists(chains.scan_library().unwrap()),
+            lists(chains.add_library_bundle(&bundle).unwrap()),
+        );
+
+        // A graph that uses the plugin keeps working once it is taken off the
+        // list: nodes carry their own path.
+        for entry in chains.plugin_library().unwrap().plugins {
+            chains
+                .remove_library_plugin(&entry.path, &entry.class_id)
+                .unwrap();
+        }
+
         let (first, failures) = take(&chains, None);
         let (second, _) = take(&chains, None);
         let loud = |pcm: &[i16]| pcm.iter().any(|sample| sample.unsigned_abs() > 300);
@@ -869,13 +879,9 @@ mod tests {
                 loud(&first),
                 loud(&second),
                 failures,
-                chains
-                    .scan()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry.path == bundle),
+                found,
             ),
-            (16_000, 16_000, true, true, vec![], true)
+            (16_000, 16_000, true, true, vec![], (true, true))
         );
     }
 

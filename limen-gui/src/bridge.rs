@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::model::{Msg, Toast};
-pub use audio::AudioRequest;
+pub use audio::{AudioRequest, LibraryRequest};
 use lifecycle::{
     StartError, StartResult, is_outdated, request_with_timeout, restart, wait_for_socket_removal,
     wait_for_termination,
@@ -129,10 +129,10 @@ pub enum BridgeEvent {
         id: u64,
         result: Result<limen_core::AudioGraphView, String>,
     },
-    /// The plugins installed on the daemon's machine.
-    AudioScanned {
+    /// The plugin library, as the daemon has it after a request about it.
+    AudioLibrary {
         id: u64,
-        result: Result<Vec<limen_core::PluginEntry>, String>,
+        result: Result<limen_core::PluginLibrary, String>,
     },
     /// Whether a plugin's editor opened.
     AudioEditor {

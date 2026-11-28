@@ -35,6 +35,7 @@ mod model_support;
 mod models;
 mod navigation;
 mod network;
+mod plugins;
 mod routing;
 mod settings;
 mod shortcuts;

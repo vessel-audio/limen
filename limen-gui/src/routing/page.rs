@@ -13,10 +13,11 @@ use limen_core::{Playback, PluginEntry};
 use plugin_graph::{NodeId, NodeKind, NodeSpec, Sidechain};
 
 use super::canvas::{canvas_view, title};
-use super::state::{Notice, Plugins, Selection, TestState};
+use super::state::{Notice, Selection, TestState};
 use crate::a11y;
 use crate::app::{AppView, Page};
 use crate::bridge::{AudioRequest, BridgeCommand};
+use crate::settings::SettingsPage;
 
 /// How long a test recording lasts, in seconds.
 const TEST_SECONDS: u32 = 5;
@@ -214,8 +215,7 @@ fn header(view: &AppView, cx: &mut Context<AppView>) -> Div {
                         .label(rust_i18n::t!("routing.add_plugin").to_string())
                         .disabled(!editable)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let request = this.routing.open_palette();
-                            this.send_audio(request);
+                            this.routing.palette = true;
                             cx.notify();
                         })),
                 )
@@ -257,13 +257,11 @@ fn palette(view: &AppView, cx: &mut Context<AppView>) -> Option<Stateful<Div>> {
     let theme = cx.theme();
     let (border, muted) = (theme.border, theme.muted_foreground);
     let message = |text: String| div().text_sm().text_color(muted).child(text);
-    let rows = match &routing.plugins {
-        Plugins::NotListed | Plugins::Listing(_) => {
-            vec![message(rust_i18n::t!("routing.scanning").to_string())]
-        }
-        Plugins::Failed(error) => vec![message(error.clone())],
-        Plugins::Listed(plugins) => {
-            let effects = plugins
+    let library = &view.plugins.library;
+    let rows = match (&library.library, &library.error) {
+        (Some(library), _) => {
+            let effects = library
+                .plugins
                 .iter()
                 .enumerate()
                 .filter(|(_, plugin)| plugin.effect)
@@ -274,6 +272,8 @@ fn palette(view: &AppView, cx: &mut Context<AppView>) -> Option<Stateful<Div>> {
                 false => effects,
             }
         }
+        (None, Some(error)) => vec![message(error.clone())],
+        (None, None) => vec![message(rust_i18n::t!("routing.scanning").to_string())],
     };
     Some(
         div()
@@ -288,16 +288,31 @@ fn palette(view: &AppView, cx: &mut Context<AppView>) -> Option<Stateful<Div>> {
             .border_color(border)
             .children(rows)
             .child(
-                div().h_flex().justify_end().child(
-                    a11y::button("close-plugin-list")
-                        .ghost()
-                        .small()
-                        .label(rust_i18n::t!("routing.close").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.routing.palette = false;
-                            cx.notify();
-                        })),
-                ),
+                div()
+                    .h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        a11y::button("manage-plugins")
+                            .ghost()
+                            .small()
+                            .label(rust_i18n::t!("routing.manage_plugins").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.routing.palette = false;
+                                this.page = Page::Settings(SettingsPage::Plugins);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        a11y::button("close-plugin-list")
+                            .ghost()
+                            .small()
+                            .label(rust_i18n::t!("routing.close").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.routing.palette = false;
+                                cx.notify();
+                            })),
+                    ),
             ),
     )
 }

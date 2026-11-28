@@ -101,8 +101,8 @@ routing.title: 音频路由
 routing.hint: 在转写之前，让声音先经过插件。更改从下一次录音起生效。
 routing.add_plugin: 添加插件
 routing.add_gain: 添加增益
-routing.scanning: 正在查找插件…
-routing.no_plugins: 没有找到 VST3 效果插件
+routing.scanning: 正在读取插件列表…
+routing.no_plugins: 列表中没有效果插件。请在 设置 → 插件 中添加。
 routing.close: 关闭
 routing.input: 麦克风
 routing.output: 识别器
@@ -279,3 +279,28 @@ app_menu.zoom: 缩放
 app_menu.bring_all_to_front: 前置全部窗口
 app_menu.help: 帮助
 app_menu.limen_help: Limen 帮助
+settings.plugins: 插件
+plugins.hint: 可在音频路由中使用的 VST3 插件。只有在你扫描或添加插件时，Limen 才会读取它们，打开页面时不会。
+plugins.folders: 扫描文件夹
+plugins.folders_hint: 扫描会查找这些文件夹及其内部的子文件夹。
+plugins.no_folders: 没有文件夹。添加一个即可扫描。
+plugins.folder_placeholder: /path/to/vst3
+plugins.add_folder: 添加文件夹
+plugins.remove_folder: 不再扫描此文件夹
+plugins.browse: 浏览…
+plugins.library: 插件
+plugins.library_hint: 移除插件只会把它从这个列表中去掉，文件仍保留在你的电脑上。
+plugins.scan: 扫描文件夹
+plugins.scanning: 扫描中…
+plugins.restore: "恢复已移除的插件（%{count}）"
+plugins.none: 还没有插件。扫描文件夹，或添加一个插件。
+plugins.loading: 正在读取插件列表…
+plugins.bundle_placeholder: /path/to/Plugin.vst3
+plugins.add_bundle: 添加插件
+plugins.remove: 从列表移除
+plugins.skipped: 无法读取
+routing.manage_plugins: 管理插件
+plugins.search: 搜索插件
+plugins.count: "%{count} 个插件"
+plugins.count_of: "%{shown} / %{count} 个插件"
+plugins.no_match: 没有匹配的插件。

@@ -25,7 +25,7 @@ pub(crate) async fn reload(paths: &Paths, request: &v1::Request) -> Result<Confi
         Ok(
             v1::Reply::ShortcutStatus(_)
             | v1::Reply::Accepted { .. }
-            | v1::Reply::AudioPlugins { .. }
+            | v1::Reply::AudioLibrary(_)
             | v1::Reply::AudioGraph(_)
             | v1::Reply::AudioTest(_),
         ) => {

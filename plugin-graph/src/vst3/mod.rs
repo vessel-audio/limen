@@ -17,4 +17,4 @@ mod scan;
 pub use control::{PluginEvent, Vst3Control};
 pub use host::{Channels, LoadOptions, Vst3Error, Vst3Host};
 pub use processor::Vst3Processor;
-pub use scan::{PluginInfo, Sandbox, Scan, default_folders};
+pub use scan::{PluginInfo, Sandbox, Scan, default_folders, find_bundles};

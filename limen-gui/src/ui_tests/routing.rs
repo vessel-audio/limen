@@ -4,12 +4,12 @@
 //! the daemon's part by feeding back the replies the bridge would send.
 
 use gpui_kit::{ScrollDelta, TestAppContext, point, px};
-use limen_core::{AudioGraphView, NodeStatus, PluginEntry, TestFiles};
+use limen_core::{AudioGraphView, NodeStatus, PluginEntry, PluginLibrary, TestFiles};
 use plugin_graph::{Edge, GraphSpec, NodeKind, NodeSpec, PluginRef, Port, Sidechain};
 use rust_i18n::t;
 
 use super::{Daemon, Ui};
-use crate::bridge::{AudioRequest, BridgeCommand, BridgeEvent};
+use crate::bridge::{AudioRequest, BridgeCommand, BridgeEvent, LibraryRequest};
 
 fn wire(from: (u32, u16), to: (u32, u16)) -> Edge {
     Edge {
@@ -211,21 +211,34 @@ fn plugin(name: &str, category: &str) -> PluginEntry {
     }
 }
 
+/// Open the list of plugins to add and answer the read of the library it
+/// makes, which lists `plugins` and scans nothing; returns what it sent.
+fn open_list(ui: &mut Ui, plugins: Vec<PluginEntry>) -> Vec<BridgeCommand> {
+    ui.click("add-plugin");
+    let sent = ui.sent();
+    ui.receive(BridgeEvent::AudioLibrary {
+        id: 1,
+        result: Ok(PluginLibrary {
+            plugins,
+            ..PluginLibrary::default()
+        }),
+    });
+    sent
+}
+
 #[gpui_kit::test]
 fn a_plugin_is_added_from_the_list_of_effects_and_its_controls_ask_the_daemon(
     cx: &mut TestAppContext,
 ) {
     let mut ui = Ui::connected(cx, Daemon::default());
     open(&mut ui);
-    ui.click("add-plugin");
-    let asked = ui.sent();
-    ui.receive(BridgeEvent::AudioScanned {
-        id: 2,
-        result: Ok(vec![
+    let asked = open_list(
+        &mut ui,
+        vec![
             plugin("Synth", "Instrument|Synth"),
             plugin("Gate", "Fx|Dynamics"),
-        ]),
-    });
+        ],
+    );
     // Only effects are offered; the synth's row is not there.
     let rows = (
         ui.try_find("plugin-0").is_some(),
@@ -273,7 +286,10 @@ fn a_plugin_is_added_from_the_list_of_effects_and_its_controls_ask_the_daemon(
     assert_eq!(
         (asked, rows, graph, edit, toggled),
         (
-            vec![BridgeCommand::Audio(AudioRequest::Scan { id: 2 })],
+            vec![BridgeCommand::Audio(AudioRequest::Library {
+                id: 1,
+                request: LibraryRequest::Get
+            })],
             (false, true),
             expected,
             vec![BridgeCommand::Audio(AudioRequest::OpenEditor { node: 2 })],
@@ -377,12 +393,7 @@ fn a_selected_wire_and_a_selected_node_can_be_removed_from_the_toolbar(cx: &mut 
 fn the_sidechain_of_a_plugin_is_switched_on_and_saved(cx: &mut TestAppContext) {
     let mut ui = Ui::connected(cx, Daemon::default());
     open(&mut ui);
-    ui.click("add-plugin");
-    ui.sent();
-    ui.receive(BridgeEvent::AudioScanned {
-        id: 2,
-        result: Ok(vec![plugin("Compressor", "Fx|Dynamics")]),
-    });
+    open_list(&mut ui, vec![plugin("Compressor", "Fx|Dynamics")]);
     ui.click("plugin-0");
     let (id, graph) = saved(ui.sent());
     ui.receive(BridgeEvent::AudioGraph {
@@ -441,12 +452,7 @@ fn the_microphone_is_wired_to_a_plugins_sidechain_port_and_a_double_click_opens_
 ) {
     let mut ui = Ui::connected(cx, Daemon::default());
     open(&mut ui);
-    ui.click("add-plugin");
-    ui.sent();
-    ui.receive(BridgeEvent::AudioScanned {
-        id: 2,
-        result: Ok(vec![plugin("Compressor", "Fx|Dynamics")]),
-    });
+    open_list(&mut ui, vec![plugin("Compressor", "Fx|Dynamics")]);
     ui.click("plugin-0");
     let (id, graph) = saved(ui.sent());
     // The daemon says the plugin has a main input and a side-chain input.
@@ -472,6 +478,29 @@ fn the_microphone_is_wired_to_a_plugins_sidechain_port_and_a_double_click_opens_
         (
             Some(wire((0, 0), (2, 1))),
             vec![BridgeCommand::Audio(AudioRequest::OpenEditor { node: 2 })]
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn the_list_of_plugins_to_add_comes_from_the_library_and_points_to_where_it_is_managed(
+    cx: &mut TestAppContext,
+) {
+    let mut ui = Ui::connected(cx, Daemon::default());
+    open(&mut ui);
+    let sent = open_list(&mut ui, vec![]);
+    let empty = ui.try_find("plugin-0").is_some();
+    ui.click("manage-plugins");
+    assert_eq!(
+        (sent, empty, ui.label("current-page"), ui.sent()),
+        (
+            vec![BridgeCommand::Audio(AudioRequest::Library {
+                id: 1,
+                request: LibraryRequest::Get
+            })],
+            false,
+            t!("settings.plugins").into(),
+            vec![]
         )
     );
 }

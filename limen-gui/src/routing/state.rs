@@ -30,15 +30,6 @@ pub enum Notice {
     Daemon(String),
 }
 
-/// The installed plugins, as far as they have been listed.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Plugins {
-    NotListed,
-    Listing(u64),
-    Listed(Vec<PluginEntry>),
-    Failed(String),
-}
-
 /// The test recording.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TestState {
@@ -62,7 +53,6 @@ pub struct RoutingState {
     /// flight.
     pub graph: Option<GraphSpec>,
     saved: Option<AudioGraphView>,
-    pub plugins: Plugins,
     pub selection: Selection,
     /// An output port that was clicked and waits for an input to wire to.
     pub wiring: Option<Port>,
@@ -98,7 +88,6 @@ impl Default for RoutingState {
         Self {
             graph: None,
             saved: None,
-            plugins: Plugins::NotListed,
             selection: Selection::Nothing,
             wiring: None,
             notice: None,
@@ -226,15 +215,6 @@ impl RoutingState {
         }
     }
 
-    pub fn scanned(&mut self, id: u64, result: Result<Vec<PluginEntry>, String>) {
-        if self.plugins == Plugins::Listing(id) {
-            self.plugins = match result {
-                Ok(plugins) => Plugins::Listed(plugins),
-                Err(message) => Plugins::Failed(message),
-            };
-        }
-    }
-
     pub fn tested(&mut self, id: u64, result: Result<TestFiles, String>) {
         if self.test == TestState::Recording(id) {
             self.test = match result {
@@ -267,19 +247,6 @@ impl RoutingState {
         let id = self.next_id();
         self.in_flight = Some(id);
         Some(AudioRequest::Set { id, graph })
-    }
-
-    /// Open the list of plugins to add, listing them the first time.
-    pub fn open_palette(&mut self) -> Option<AudioRequest> {
-        self.palette = true;
-        match self.plugins {
-            Plugins::NotListed | Plugins::Failed(_) => {
-                let id = self.next_id();
-                self.plugins = Plugins::Listing(id);
-                Some(AudioRequest::Scan { id })
-            }
-            Plugins::Listing(_) | Plugins::Listed(_) => None,
-        }
     }
 
     fn add_node(&mut self, kind: NodeKind) -> Option<AudioRequest> {

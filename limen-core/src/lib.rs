@@ -41,7 +41,9 @@ pub use daemon::snapshot::{
 };
 pub use daemon::{DaemonHost, DaemonTermination, daemon_peer_pid, terminate_daemon};
 pub use dictation::{Control, DictationState, DictationView, MIN_HOLD};
-pub use ipc::audio::{AudioGraphView, NodeStatus, PluginEntry, TestFiles};
+pub use ipc::audio::{
+    AudioGraphView, NodeStatus, PluginEntry, PluginLibrary, RemovedPlugin, ScanFailure, TestFiles,
+};
 pub use ipc::v1::Delivery;
 pub use ipc::wire::{Push, WireSnapshot};
 pub use ipc::{DaemonNotRunning, SocketIdentity, request, send, subscribe, v1};

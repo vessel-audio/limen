@@ -1,14 +1,48 @@
-//! The Audio routing page's requests: the daemon's plugins and routing
-//! graph, and the test recording.
+//! The audio requests: the daemon's plugin library, the routing graph, and
+//! the test recording.
 
-use limen_core::{AudioGraphView, PluginEntry, TestFiles, request, v1};
+use limen_core::{AudioGraphView, PluginLibrary, TestFiles, request, v1};
 use plugin_graph::{GraphSpec, NodeId};
 use tokio::sync::mpsc;
 
 use super::lifecycle::is_outdated;
 use super::{BridgeEvent, Env};
 
-/// A request from the Audio routing page; `id` comes back in the reply so an
+/// What is asked of the plugin library. Only a scan, adding a bundle or
+/// restoring what was removed reads any plugin; the rest read and write the
+/// library file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryRequest {
+    /// Read the library as saved.
+    Get,
+    /// Look for plugins in these folders from now on.
+    Folders(Vec<String>),
+    /// Read the folders and added bundles again.
+    Scan,
+    /// Add the plugin bundle at this path.
+    Add(String),
+    /// Take a plugin out of the library.
+    Remove { path: String, class_id: String },
+    /// Bring back the plugins that were taken out.
+    Restore,
+}
+
+impl From<LibraryRequest> for v1::Request {
+    fn from(request: LibraryRequest) -> Self {
+        match request {
+            LibraryRequest::Get => Self::AudioLibraryGet,
+            LibraryRequest::Folders(folders) => Self::AudioLibraryFolders { folders },
+            LibraryRequest::Scan => Self::AudioLibraryScan,
+            LibraryRequest::Add(path) => Self::AudioLibraryAdd { path },
+            LibraryRequest::Remove { path, class_id } => {
+                Self::AudioLibraryRemove { path, class_id }
+            }
+            LibraryRequest::Restore => Self::AudioLibraryRestore,
+        }
+    }
+}
+
+/// A request about audio; `id` comes back in the reply so an
 /// older one cannot replace a newer one.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioRequest {
@@ -16,8 +50,8 @@ pub enum AudioRequest {
     Get { id: u64 },
     /// Save a graph, for the next take on.
     Set { id: u64, graph: GraphSpec },
-    /// List the installed plugins.
-    Scan { id: u64 },
+    /// Something about the plugin library.
+    Library { id: u64, request: LibraryRequest },
     /// Show a plugin's own editor on the daemon's display.
     OpenEditor { node: NodeId },
     /// Record the microphone for `seconds`, then process the recording.
@@ -37,9 +71,12 @@ pub(super) fn handle(env: &Env, events: &mpsc::Sender<BridgeEvent>, audio: Audio
                 id,
                 result: graph(request(&paths, &v1::Request::AudioGraphSet { graph: wanted }).await),
             },
-            AudioRequest::Scan { id } => BridgeEvent::AudioScanned {
+            AudioRequest::Library {
                 id,
-                result: plugins(request(&paths, &v1::Request::AudioScan).await),
+                request: wanted,
+            } => BridgeEvent::AudioLibrary {
+                id,
+                result: library(request(&paths, &wanted.into()).await),
             },
             AudioRequest::OpenEditor { node } => BridgeEvent::AudioEditor {
                 result: ok(request(&paths, &v1::Request::AudioEditorOpen { node }).await),
@@ -72,9 +109,9 @@ fn graph(reply: anyhow::Result<v1::Reply>) -> Result<AudioGraphView, String> {
     }
 }
 
-fn plugins(reply: anyhow::Result<v1::Reply>) -> Result<Vec<PluginEntry>, String> {
+fn library(reply: anyhow::Result<v1::Reply>) -> Result<PluginLibrary, String> {
     match reply.map_err(|error| format!("{error:#}"))? {
-        v1::Reply::AudioPlugins { plugins } => Ok(plugins),
+        v1::Reply::AudioLibrary(library) => Ok(library),
         v1::Reply::Error { message } => Err(refusal(message)),
         other => Err(format!("{UNEXPECTED}: {other:?}")),
     }

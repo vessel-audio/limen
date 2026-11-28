@@ -1,5 +1,5 @@
-//! What the audio routing requests carry: the plugins a machine has, the
-//! routing graph with the state of its nodes, and a test recording.
+//! What the audio routing requests carry: the plugin library, the routing
+//! graph with the state of its nodes, and a test recording.
 
 use plugin_graph::{GraphSpec, NodeId};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,56 @@ pub struct PluginEntry {
     pub category: String,
     /// Whether it processes audio rather than making it.
     pub effect: bool,
+}
+
+/// A plugin the user took out of the library. A scan leaves it out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovedPlugin {
+    pub path: String,
+    pub class_id: String,
+}
+
+/// A bundle the last scan could not read, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanFailure {
+    pub path: String,
+    pub error: String,
+}
+
+/// The plugins the user has set up for routing: where to look for them, the
+/// bundles picked by hand, and what was found. Nothing in it is read from
+/// the disk again until a scan is asked for.
+///
+/// Whatever a hand-written file leaves out is the default: the usual VST3
+/// folders, and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginLibrary {
+    /// Folders a scan looks in, below which plugin bundles may be nested.
+    pub folders: Vec<String>,
+    /// Bundles added one by one, which a scan reads as well.
+    pub added: Vec<String>,
+    /// Plugins taken out, which a scan does not bring back.
+    pub removed: Vec<RemovedPlugin>,
+    /// The plugins the user can put in the graph.
+    pub plugins: Vec<PluginEntry>,
+    /// Bundles the last scan could not read.
+    pub failures: Vec<ScanFailure>,
+}
+
+impl Default for PluginLibrary {
+    fn default() -> Self {
+        Self {
+            folders: plugin_graph::vst3::default_folders()
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect(),
+            added: Vec::new(),
+            removed: Vec::new(),
+            plugins: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
 }
 
 /// What a node of the saved graph looks like once its plugin is loaded.

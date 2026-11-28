@@ -129,7 +129,9 @@ fn settings_unfold_their_subpages_in_the_sidebar(cx: &mut TestAppContext) {
     );
     let general = general.bounds();
     assert_eq!(
-        (general.top() > settings.top() - px(100.), general.left()),
+        // Settings sits at the foot, so unfolding four subpages lifts it
+        // by up to four rows (38px each) and General lies below that.
+        (general.top() > settings.top() - px(130.), general.left()),
         (true, shortcuts.left()),
         "the subpage at {general:?} is not under Settings in the sidebar"
     );

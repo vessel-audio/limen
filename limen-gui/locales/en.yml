@@ -101,8 +101,8 @@ routing.title: Audio routing
 routing.hint: Route your voice through plugins before it is transcribed. Changes apply from the next recording.
 routing.add_plugin: Add plugin
 routing.add_gain: Add gain
-routing.scanning: Looking for plugins…
-routing.no_plugins: No VST3 effect plugins were found
+routing.scanning: Reading the plugin list…
+routing.no_plugins: No effect plugins in your list. Add some in Settings → Plugins.
 routing.close: Close
 routing.input: Microphone
 routing.output: Recognizer
@@ -279,3 +279,28 @@ app_menu.zoom: Zoom
 app_menu.bring_all_to_front: Bring All to Front
 app_menu.help: Help
 app_menu.limen_help: Limen Help
+settings.plugins: Plugins
+plugins.hint: The VST3 plugins you can use in Audio routing. Limen reads plugins only when you scan or add one, never when a page opens.
+plugins.folders: Scan folders
+plugins.folders_hint: A scan looks in these folders and in the folders inside them.
+plugins.no_folders: No folders. Add one to scan it.
+plugins.folder_placeholder: /path/to/vst3
+plugins.add_folder: Add folder
+plugins.remove_folder: Stop scanning this folder
+plugins.browse: Browse…
+plugins.library: Plugins
+plugins.library_hint: Removing a plugin only takes it off this list; its files stay on your computer.
+plugins.scan: Scan folders
+plugins.scanning: Scanning…
+plugins.restore: "Restore removed (%{count})"
+plugins.none: No plugins yet. Scan your folders, or add a plugin.
+plugins.loading: Reading the plugin list…
+plugins.bundle_placeholder: /path/to/Plugin.vst3
+plugins.add_bundle: Add plugin
+plugins.remove: Remove from list
+plugins.skipped: Could not be read
+routing.manage_plugins: Manage plugins
+plugins.search: Search plugins
+plugins.count: "%{count} plugins"
+plugins.count_of: "%{shown} of %{count} plugins"
+plugins.no_match: No plugin matches.

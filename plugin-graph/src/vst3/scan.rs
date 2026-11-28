@@ -65,7 +65,7 @@ pub fn default_folders() -> Vec<PathBuf> {
     }
 }
 
-fn bundles(folder: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+fn collect(folder: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
     };
@@ -81,10 +81,21 @@ fn bundles(folder: &Path, depth: usize, found: &mut Vec<PathBuf>) {
             path.is_dir(),
         ) {
             (true, _) => found.push(path),
-            (false, true) if depth > 0 => bundles(&path, depth - 1, found),
+            (false, true) if depth > 0 => collect(&path, depth - 1, found),
             (false, true) | (false, false) => {}
         }
     }
+}
+
+/// The plugin bundles under `folders`, in order, each once.
+pub fn find_bundles(folders: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    folders
+        .iter()
+        .for_each(|folder| collect(folder, DEPTH, &mut found));
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|path| seen.insert(path.clone()));
+    found
 }
 
 impl Vst3Host {
@@ -92,14 +103,15 @@ impl Vst3Host {
     /// opened in a worker of its own, so a plugin that crashes while it is
     /// read costs only its own entry.
     pub fn scan(&self, folders: &[PathBuf], sandbox: Sandbox) -> Scan {
-        let mut paths = Vec::new();
-        folders
-            .iter()
-            .for_each(|folder| bundles(folder, DEPTH, &mut paths));
+        self.scan_bundles(&find_bundles(folders), sandbox)
+    }
+
+    /// List the plugin classes in these bundles, as [`Self::scan`] does.
+    pub fn scan_bundles(&self, bundles: &[PathBuf], sandbox: Sandbox) -> Scan {
         let policy = SandboxPolicy::default();
         let mut scan = Scan::default();
-        for path in paths {
-            let descriptor = PluginDescriptor::new(&path, PluginFormat::Vst3);
+        for path in bundles {
+            let descriptor = PluginDescriptor::new(path, PluginFormat::Vst3);
             let classes = match sandbox {
                 Sandbox::Off => self.inner().scan(&descriptor),
                 Sandbox::On => self.inner().scan_sandboxed(&descriptor, &policy),
@@ -114,7 +126,7 @@ impl Vst3Host {
                         vendor: class.vendor,
                         category: class.category,
                     })),
-                Err(error) => scan.failures.push((path, error.to_string())),
+                Err(error) => scan.failures.push((path.clone(), error.to_string())),
             }
         }
         scan
